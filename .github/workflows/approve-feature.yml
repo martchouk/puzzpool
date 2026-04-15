@@ -1,0 +1,40 @@
+name: Approve feature for implementation
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  approve:
+    # Only run on issue comments (not PR comments) containing /approve
+    # and only when the issue has the needs-approval label
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '/approve')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Check label and approve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Verify the issue actually has needs-approval label
+          LABELS=$(gh issue view "${ISSUE_NUMBER}" --repo "${REPO}" --json labels -q '.labels[].name')
+          if ! echo "$LABELS" | grep -q "needs-approval"; then
+            echo "Issue does not have needs-approval label — skipping."
+            exit 0
+          fi
+
+          # Swap labels: remove needs-approval, add approved
+          gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --remove-label "needs-approval" \
+            --add-label "approved"
+
+          # Post confirmation comment
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --body "Approved by @${COMMENTER}. This feature is ready for implementation. A developer can pick it up by creating a \`feat/\` branch referencing this issue."

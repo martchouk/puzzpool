@@ -1,21 +1,17 @@
 ---
-name: Feature request
-about: Propose a new feature or improvement
-labels: enhancement, needs-triage
+name: Feature idea
+about: Share a rough idea — a user story will be written for your review before any work starts
+labels: feature-idea
 ---
 
-## Problem / motivation
+## What's the idea?
 
-<!-- What problem does this feature solve? What limitation does it address? -->
+<!-- Describe it in your own words. It can be rough — no structure required. -->
 
-## Proposed solution
+## Why would it be useful?
 
-<!-- Describe the feature you'd like. Be as specific as possible. -->
+<!-- What problem does it solve, or what would it improve? -->
 
-## Alternatives considered
+## Any extra context?
 
-<!-- What other approaches did you consider? Why is your proposal better? -->
-
-## Additional context
-
-<!-- Screenshots, mockups, related issues, external references. -->
+<!-- Screenshots, examples from other tools, links — anything that helps. -->

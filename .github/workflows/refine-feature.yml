@@ -1,0 +1,83 @@
+name: Refine feature idea into user story
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  refine:
+    if: github.event.label.name == 'feature-idea'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Call Claude API and post user story
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Build the prompt
+          PROMPT="You are a product manager helping a developer team refine rough feature ideas into actionable user stories.
+
+          A contributor has submitted the following feature idea for puzzpool — a distributed Bitcoin keyspace search pool where workers request keyspace chunks, scan them, and report results via a REST API. There is a live dashboard and an admin API.
+
+          Issue title: ${ISSUE_TITLE}
+
+          Issue body:
+          ${ISSUE_BODY}
+
+          Write a structured feature description using this exact format:
+
+          ## User story
+          As a [role], I want [goal] so that [benefit].
+
+          ## Description
+          [2-4 sentences explaining what the feature does and how it fits into puzzpool]
+
+          ## Acceptance criteria
+          - [ ] criterion 1
+          - [ ] criterion 2
+          - [ ] criterion 3
+          (add more as needed — be specific and testable)
+
+          ## Out of scope
+          [list anything explicitly NOT included in this feature to keep scope clear]
+
+          ## Open questions
+          [list any ambiguities that need the requestor's input before implementation starts — or write 'None' if clear]
+
+          Be concise and technical. Do not include any preamble or sign-off."
+
+          # Call Claude API
+          RESPONSE=$(curl -sf https://api.anthropic.com/v1/messages \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg model "claude-sonnet-4-6" \
+              --arg content "$PROMPT" \
+              '{model: $model, max_tokens: 1024, messages: [{role: "user", content: $content}]}'
+            )")
+
+          USER_STORY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+          # Build the comment
+          COMMENT="## Feature refinement
+
+          ${USER_STORY}
+
+          ---
+          *Review the above. If it captures what you had in mind, comment \`/approve\` to mark this ready for implementation. Otherwise, reply with changes and the story will be updated.*"
+
+          # Post comment
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body "${COMMENT}"
+
+          # Swap labels: remove feature-idea, add needs-approval
+          gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --remove-label "feature-idea" \
+            --add-label "needs-approval"
