@@ -51,7 +51,7 @@ jobs:
 
           # Build JSON payload with jq so all values are safely escaped
           PAYLOAD=$(jq -n \
-            --arg model "claude-sonnet-4-6" \
+            --arg model "claude-3-5-sonnet-20241022" \
             --arg system "$SYSTEM" \
             --arg user "$USER_PROMPT" \
             '{
