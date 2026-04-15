@@ -73,16 +73,7 @@ jobs:
 
           ANALYSIS=$(jq -r '.content[0].text' /tmp/claude_response.json)
 
-          cat > /tmp/comment.md <<'EOF'
-## Bug triage
-EOF
-          echo "" >> /tmp/comment.md
-          echo "$ANALYSIS" >> /tmp/comment.md
-          echo "" >> /tmp/comment.md
-          cat >> /tmp/comment.md <<'EOF'
----
-*A developer will review this analysis and propose a fix. Once the fix is implemented and deployed to test, comment `/fix-confirmed` if resolved or `/fix-rejected` if the issue persists.*
-EOF
+          printf '## Bug triage\n\n%s\n\n---\n*A developer will review this analysis and propose a fix. Once the fix is implemented and deployed to test, comment `/fix-confirmed` if resolved or `/fix-rejected` if the issue persists.*\n' "$ANALYSIS" > /tmp/comment.md
 
           gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file /tmp/comment.md
           gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "bug" --add-label "needs-fix-approval"
