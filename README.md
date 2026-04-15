@@ -6,8 +6,8 @@
 
 Distributed Bitcoin keyspace search pool. Workers request chunks of a puzzle's keyspace,
 scan them for matching private keys, and report results. A live dashboard visualises
-progress in real time using three canvas-based views: a 1D progress bar, a 2D heatmap,
-and a Hilbert curve projection.
+progress in real time: stat cards (hashrate, ETA, keys completed), three canvas-based views
+(1D progress bar, 2D heatmap, Hilbert curve projection), and live worker/score tables.
 
 **Live instance:** https://puzzle.b58.de
 
@@ -141,6 +141,12 @@ sudo certbot --nginx -d your.domain.com
 
 See [deploy/nginx.conf](deploy/nginx.conf) and [deploy/puzzpool.service](deploy/puzzpool.service)
 for annotated configuration files.
+
+### Test instance (feature branch testing)
+
+A separate test instance can run on the same server at a different subdomain and port.
+See [deploy/nginx-test.conf](deploy/nginx-test.conf) and [deploy/puzzpool-test.service](deploy/puzzpool-test.service).
+It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so production is never affected.
 
 ---
 
