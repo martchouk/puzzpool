@@ -21,17 +21,16 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           REPO: ${{ github.repository }}
         run: |
-          # Build the prompt
-          PROMPT="You are a product manager helping a developer team refine rough feature ideas into actionable user stories.
+          SYSTEM="You are a product manager helping a developer team refine rough feature ideas into actionable user stories. puzzpool is a distributed Bitcoin keyspace search pool: workers request keyspace chunks via REST API, scan them for matching private keys, and report results. There is a live canvas dashboard and an admin API."
 
-          A contributor has submitted the following feature idea for puzzpool — a distributed Bitcoin keyspace search pool where workers request keyspace chunks, scan them, and report results via a REST API. There is a live dashboard and an admin API.
+          USER_PROMPT="A contributor submitted the following feature idea.
 
-          Issue title: ${ISSUE_TITLE}
+          Title: ${ISSUE_TITLE}
 
-          Issue body:
+          Body:
           ${ISSUE_BODY}
 
-          Write a structured feature description using this exact format:
+          Write a structured feature description using this exact format — no preamble, no sign-off:
 
           ## User story
           As a [role], I want [goal] so that [benefit].
@@ -43,41 +42,56 @@ jobs:
           - [ ] criterion 1
           - [ ] criterion 2
           - [ ] criterion 3
-          (add more as needed — be specific and testable)
 
           ## Out of scope
-          [list anything explicitly NOT included in this feature to keep scope clear]
+          [list anything explicitly NOT included]
 
           ## Open questions
-          [list any ambiguities that need the requestor's input before implementation starts — or write 'None' if clear]
+          [ambiguities that need the requestor's input, or 'None']"
 
-          Be concise and technical. Do not include any preamble or sign-off."
+          # Build JSON payload with jq so all values are safely escaped
+          PAYLOAD=$(jq -n \
+            --arg model "claude-sonnet-4-6" \
+            --arg system "$SYSTEM" \
+            --arg user "$USER_PROMPT" \
+            '{
+              model: $model,
+              max_tokens: 1024,
+              system: $system,
+              messages: [{ role: "user", content: $user }]
+            }')
 
-          # Call Claude API
-          RESPONSE=$(curl -sf https://api.anthropic.com/v1/messages \
+          # Call Claude API — capture HTTP status separately for clear error messages
+          HTTP_STATUS=$(curl -s -o /tmp/claude_response.json -w "%{http_code}" \
+            https://api.anthropic.com/v1/messages \
             -H "x-api-key: ${ANTHROPIC_API_KEY}" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "$(jq -n \
-              --arg model "claude-sonnet-4-6" \
-              --arg content "$PROMPT" \
-              '{model: $model, max_tokens: 1024, messages: [{role: "user", content: $content}]}'
-            )")
+            -d "$PAYLOAD")
 
-          USER_STORY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Claude API returned HTTP $HTTP_STATUS:"
+            cat /tmp/claude_response.json
+            exit 1
+          fi
 
-          # Build the comment
-          COMMENT="## Feature refinement
+          USER_STORY=$(jq -r '.content[0].text' /tmp/claude_response.json)
 
-          ${USER_STORY}
-
+          # Post comment using a temp file to avoid shell quoting issues
+          cat > /tmp/comment.md <<'COMMENT_EOF'
+          ## Feature refinement
+          COMMENT_EOF
+          echo "" >> /tmp/comment.md
+          echo "$USER_STORY" >> /tmp/comment.md
+          echo "" >> /tmp/comment.md
+          cat >> /tmp/comment.md <<'COMMENT_EOF'
           ---
-          *Review the above. If it captures what you had in mind, comment \`/approve\` to mark this ready for implementation. Otherwise, reply with changes and the story will be updated.*"
+          *Review the above. If it captures what you had in mind, comment `/approve` to mark this ready for implementation. Otherwise, reply with changes.*
+          COMMENT_EOF
 
-          # Post comment
-          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body "${COMMENT}"
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file /tmp/comment.md
 
-          # Swap labels: remove feature-idea, add needs-approval
+          # Swap labels
           gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
             --remove-label "feature-idea" \
             --add-label "needs-approval"
