@@ -6,8 +6,8 @@
 
 Distributed Bitcoin keyspace search pool. Workers request chunks of a puzzle's keyspace,
 scan them for matching private keys, and report results. A live dashboard visualises
-progress in real time using three canvas-based views: a 1D progress bar, a 2D heatmap,
-and a Hilbert curve projection.
+progress in real time: stat cards (hashrate, ETA, keys completed), three canvas-based views
+(1D progress bar, 2D heatmap, Hilbert curve projection), and live worker/score tables.
 
 **Live instance:** https://puzzle.b58.de
 
