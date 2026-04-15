@@ -191,11 +191,6 @@
                 <div class="stat-label">Keys Found</div>
                 <div id="found-keys" class="stat-value amber">0</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">ETA</div>
-                <div id="eta-value" class="stat-value cyan">—</div>
-                <div id="eta-subtext" class="stat-subtext">at current speed</div>
-            </div>
         </div>
 
         <!-- Active Puzzle -->
@@ -629,7 +624,6 @@
                 if (data.puzzle && data.puzzle.total_keys) {
                     document.getElementById('puzzle-name').textContent = data.puzzle.name;
                     document.getElementById('frontier').textContent = `0x${data.puzzle.start_hex.replace(/^0+/, '')} … 0x${data.puzzle.end_hex.replace(/^0+/, '')}`;
-                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)}`;
                     
                     const totalP = BigInt(data.puzzle.total_keys);
                     const comp = BigInt(data.total_keys_completed);
@@ -642,8 +636,7 @@
                     }
 
                     const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
-                    document.getElementById('eta-value').textContent = eta;
-                    document.getElementById('eta-subtext').textContent = data.total_hashrate > 0 ? 'at current speed' : 'no active workers';
+                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)} | ETA: ${eta}`;
                 }
 
                 g_chunks_vis = data.chunks_vis || [];
