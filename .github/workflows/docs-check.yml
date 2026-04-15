@@ -1,0 +1,36 @@
+name: Docs check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  api-docs-in-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history to diff against base branch
+
+      - name: Fail if API routes changed without docs/api.md update
+        run: |
+          # Detect new or changed route registrations in server.js
+          git diff origin/${{ github.base_ref }}...HEAD -- server.js \
+            | grep -E '^\+(app\.(get|post|put|delete|patch)|router\.)' \
+            > /tmp/route_changes.txt || true
+
+          if [ -s /tmp/route_changes.txt ]; then
+            echo "Route changes detected in server.js:"
+            cat /tmp/route_changes.txt
+            echo ""
+            # Check that docs/api.md was also modified in this PR
+            if ! git diff origin/${{ github.base_ref }}...HEAD -- docs/api.md | grep -q '^+'; then
+              echo "ERROR: API routes changed but docs/api.md was not updated."
+              echo "Please update docs/api.md to document the new/changed routes."
+              exit 1
+            else
+              echo "OK: docs/api.md was also updated."
+            fi
+          else
+            echo "No route changes detected — docs check skipped."
+          fi

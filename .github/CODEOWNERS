@@ -1,0 +1,4 @@
+# CODEOWNERS — auto-request review from these users on every PR
+# Replace @YOUR_USERNAME with your GitHub username.
+
+* @YOUR_USERNAME

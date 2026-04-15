@@ -1,0 +1,13 @@
+# Private Claude config — never publish
+CLAUDE.md
+skills.md
+
+# Runtime / generated
+node_modules/
+pool.db
+*.db
+.env
+
+# macOS
+.DS_Store
+

@@ -1,0 +1,47 @@
+# puzzpool systemd service unit
+#
+# Install:
+#   sudo cp deploy/puzzpool.service /etc/systemd/system/puzzpool.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now puzzpool
+#
+# Manage:
+#   sudo systemctl status  puzzpool
+#   sudo systemctl restart puzzpool
+#   journalctl -u puzzpool -f          # follow logs
+
+[Unit]
+Description=puzzpool — distributed Bitcoin keyspace search pool
+After=network.target
+
+[Service]
+Type=simple
+
+# --- User / working directory ---
+# Replace 'john' with the system user that owns the repo.
+User=john
+WorkingDirectory=/home/john/git/puzzpool
+
+# --- Command ---
+ExecStart=/usr/bin/node server.js
+
+# --- Environment ---
+# Inline env vars here or point to a file with EnvironmentFile=
+Environment=NODE_ENV=production
+Environment=PORT=8888
+Environment=DB_PATH=/home/john/git/puzzpool/pool.db
+Environment=TARGET_MINUTES=5
+Environment=TIMEOUT_MINUTES=15
+# Uncomment and set to enable admin API token auth:
+# Environment=ADMIN_TOKEN=your-secret-token-here
+
+# --- Restart policy ---
+Restart=on-failure
+RestartSec=5s
+
+# --- Resource limits ---
+# Prevent the process from spawning subprocesses that escape the unit
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
