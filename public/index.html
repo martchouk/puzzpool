@@ -191,6 +191,11 @@
                 <div class="stat-label">Keys Found</div>
                 <div id="found-keys" class="stat-value amber">0</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">ETA</div>
+                <div id="eta-value" class="stat-value cyan">—</div>
+                <div id="eta-subtext" class="stat-subtext">at current speed</div>
+            </div>
         </div>
 
         <!-- Active Puzzle -->
@@ -353,6 +358,19 @@
             let s = pct.toFixed(12);
             s = s.replace(/0+$/, '').replace(/\.$/, ''); // Strip trailing zeros
             return s + " %";
+        }
+
+        function formatETA(totalKeys, keysCompleted, hashrate) {
+            if (hashrate <= 0) return '∞';
+            const remaining = BigInt(totalKeys) - BigInt(keysCompleted);
+            if (remaining <= 0n) return 'Complete';
+            const etaSec = Number(remaining) / hashrate;
+            const MINUTE = 60, HOUR = 3600, DAY = 86400, YEAR = 365.25 * DAY;
+            if (etaSec >= YEAR)   return `~${Math.round(etaSec / YEAR)} years`;
+            if (etaSec >= DAY)    return `~${Math.round(etaSec / DAY)} days`;
+            if (etaSec >= HOUR)   return `~${Math.round(etaSec / HOUR)} hours`;
+            if (etaSec >= MINUTE) return `~${Math.round(etaSec / MINUTE)} min`;
+            return '< 1 min';
         }
 
         // ── Canvas Setup ──
@@ -622,6 +640,10 @@
                         const pct = Number(pctBig) / 10**16;
                         document.getElementById('completed-keys-pct').textContent = formatPrecisePercentage(pct);
                     }
+
+                    const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
+                    document.getElementById('eta-value').textContent = eta;
+                    document.getElementById('eta-subtext').textContent = data.total_hashrate > 0 ? 'at current speed' : 'no active workers';
                 }
 
                 g_chunks_vis = data.chunks_vis || [];
