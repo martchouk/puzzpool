@@ -142,6 +142,12 @@ sudo certbot --nginx -d your.domain.com
 See [deploy/nginx.conf](deploy/nginx.conf) and [deploy/puzzpool.service](deploy/puzzpool.service)
 for annotated configuration files.
 
+### Test instance (feature branch testing)
+
+A separate test instance can run on the same server at a different subdomain and port.
+See [deploy/nginx-test.conf](deploy/nginx-test.conf) and [deploy/puzzpool-test.service](deploy/puzzpool-test.service).
+It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so production is never affected.
+
 ---
 
 ## Security

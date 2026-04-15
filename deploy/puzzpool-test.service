@@ -1,0 +1,38 @@
+# puzzpool TEST instance — systemd service unit
+#
+# Install:
+#   sudo cp deploy/puzzpool-test.service /etc/systemd/system/puzzpool-test.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now puzzpool-test
+#
+# Manage:
+#   sudo systemctl status  puzzpool-test
+#   sudo systemctl restart puzzpool-test
+#   journalctl -u puzzpool-test -f
+
+[Unit]
+Description=puzzpool TEST — feature branch test instance
+After=network.target
+
+[Service]
+Type=simple
+
+User=john
+WorkingDirectory=/home/john/git/puzzpool.test
+
+ExecStart=/usr/bin/node server.js
+
+Environment=NODE_ENV=production
+Environment=PORT=8889
+Environment=DB_PATH=/home/john/git/puzzpool.test/pool.db
+Environment=TARGET_MINUTES=5
+Environment=TIMEOUT_MINUTES=15
+# Uncomment to enable admin token auth on the test instance:
+# Environment=ADMIN_TOKEN=your-test-token-here
+
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
