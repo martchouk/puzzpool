@@ -17,14 +17,14 @@ After=network.target
 [Service]
 Type=simple
 
-User=john
-WorkingDirectory=/home/john/git/puzzpool.test
+User=jan
+WorkingDirectory=/home/jan/git/puzzpool.test
 
 ExecStart=/usr/bin/node server.js
 
 Environment=NODE_ENV=production
 Environment=PORT=8889
-Environment=DB_PATH=/home/john/git/puzzpool.test/pool.db
+Environment=DB_PATH=/home/jan/git/puzzpool.test/pool.db
 Environment=TARGET_MINUTES=5
 Environment=TIMEOUT_MINUTES=15
 # Uncomment to enable admin token auth on the test instance:

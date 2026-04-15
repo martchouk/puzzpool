@@ -18,9 +18,8 @@ After=network.target
 Type=simple
 
 # --- User / working directory ---
-# Replace 'john' with the system user that owns the repo.
-User=john
-WorkingDirectory=/home/john/git/puzzpool
+User=jan
+WorkingDirectory=/home/jan/git/puzzpool
 
 # --- Command ---
 ExecStart=/usr/bin/node server.js
@@ -29,7 +28,7 @@ ExecStart=/usr/bin/node server.js
 # Inline env vars here or point to a file with EnvironmentFile=
 Environment=NODE_ENV=production
 Environment=PORT=8888
-Environment=DB_PATH=/home/john/git/puzzpool/pool.db
+Environment=DB_PATH=/home/jan/git/puzzpool/pool.db
 Environment=TARGET_MINUTES=5
 Environment=TIMEOUT_MINUTES=15
 # Uncomment and set to enable admin API token auth:
