@@ -1,6 +1,6 @@
 # puzzpool
 
-[![CI](https://github.com/YOUR_USERNAME/puzzpool/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/puzzpool/actions/workflows/ci.yml)
+[![CI](https://github.com/martchouk/puzzpool/actions/workflows/ci.yml/badge.svg)](https://github.com/martchouk/puzzpool/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -17,7 +17,7 @@ and a Hilbert curve projection.
 
 ```bash
 # Prerequisites: Node.js >= 18
-git clone https://github.com/YOUR_USERNAME/puzzpool.git
+git clone https://github.com/martchouk/puzzpool.git
 cd puzzpool
 npm install
 node server.js
@@ -116,7 +116,7 @@ cp .env.example .env
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/puzzpool.git ~/git/puzzpool
+git clone https://github.com/martchouk/puzzpool.git ~/git/puzzpool
 cd ~/git/puzzpool && npm ci --production
 
 # 2. Configure
