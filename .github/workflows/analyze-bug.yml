@@ -1,0 +1,88 @@
+name: Analyze bug report
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  analyze:
+    if: github.event.label.name == 'bug'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Call Claude API and post analysis
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          SYSTEM="You are a senior developer reviewing bug reports for puzzpool — a distributed Bitcoin keyspace search pool. The server is Express + SQLite (better-sqlite3). Workers request keyspace chunks via REST API, scan them, and submit results. There is a vanilla JS dashboard and an admin API."
+
+          USER_PROMPT="A tester filed the following bug report.
+
+          Title: ${ISSUE_TITLE}
+
+          Body:
+          ${ISSUE_BODY}
+
+          Analyze the bug and respond using this exact format — no preamble, no sign-off:
+
+          ## Bug analysis
+          [1-3 sentences: what is likely broken and why, based on the report]
+
+          ## Likely root cause
+          [specific component or code area suspected: server.js, public/index.html, nginx config, etc.]
+
+          ## Proposed fix approach
+          [concrete description of what should be changed to fix it — specific enough for a developer to act on]
+
+          ## Verification steps
+          [how the tester should verify the fix worked — 2-4 steps]
+
+          ## Severity
+          [Critical / High / Medium / Low — with one-line justification]"
+
+          PAYLOAD=$(jq -n \
+            --arg model "claude-haiku-4-5-20251001" \
+            --arg system "$SYSTEM" \
+            --arg user "$USER_PROMPT" \
+            '{
+              model: $model,
+              max_tokens: 1024,
+              system: $system,
+              messages: [{ role: "user", content: $user }]
+            }')
+
+          HTTP_STATUS=$(curl -s -o /tmp/claude_response.json -w "%{http_code}" \
+            https://api.anthropic.com/v1/messages \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD")
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Claude API returned HTTP $HTTP_STATUS:"
+            cat /tmp/claude_response.json
+            exit 1
+          fi
+
+          ANALYSIS=$(jq -r '.content[0].text' /tmp/claude_response.json)
+
+          cat > /tmp/comment.md <<'EOF'
+## Bug triage
+EOF
+          echo "" >> /tmp/comment.md
+          echo "$ANALYSIS" >> /tmp/comment.md
+          echo "" >> /tmp/comment.md
+          cat >> /tmp/comment.md <<'EOF'
+---
+*A developer will review this analysis and propose a fix. Once the fix is implemented and deployed to test, comment `/fix-confirmed` if resolved or `/fix-rejected` if the issue persists.*
+EOF
+
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file /tmp/comment.md
+          gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --remove-label "bug" --add-label "needs-fix-approval"
