@@ -1,0 +1,50 @@
+name: Confirm or reject fix
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  confirmed:
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '/fix-confirmed')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close issue as resolved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --remove-label "fix-approved" \
+            --add-label "resolved"
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --body "Fix confirmed by @${COMMENTER}. Closing issue."
+          gh issue close "${ISSUE_NUMBER}" --repo "${REPO}"
+
+  rejected:
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '/fix-rejected')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Flag issue for rework
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --remove-label "fix-approved" \
+            --add-label "fix-rejected"
+          gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" \
+            --body "Fix rejected by @${COMMENTER}. Please describe what still fails so the developer can investigate."
+          gh issue reopen "${ISSUE_NUMBER}" --repo "${REPO}"

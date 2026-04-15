@@ -1,7 +1,7 @@
 ---
 name: Bug report
 about: Something is broken or behaving incorrectly
-labels: bug, needs-triage
+labels: bug
 ---
 
 ## Describe the bug
@@ -24,13 +24,12 @@ labels: bug, needs-triage
 
 ## Environment
 
-- Server OS:
-- Node.js version (`node --version`):
-- puzzpool version / commit:
-- Worker client (if applicable):
+- URL (prod / test):
+- Browser / client:
+- Server version / commit:
 
 ## Logs
 
 ```
-# Paste relevant server logs here (journalctl -u puzzpool -n 50)
+# Paste relevant logs here (journalctl -u puzzpool -n 50 or browser console)
 ```
