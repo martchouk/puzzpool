@@ -57,6 +57,12 @@ function createApp(db) {
 
     const app = express();
     app.use(express.json());
+    // Serve index.html with no-store so browsers always fetch the latest version.
+    // Other static assets (images, etc.) can still be cached normally.
+    app.get('/', (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        res.sendFile('public/index.html', { root: '.' });
+    });
     app.use(express.static('public'));
 
     // Optional admin token guard — enabled only when ADMIN_TOKEN env var is set.
