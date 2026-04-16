@@ -194,10 +194,14 @@ app.post('/api/v1/submit', (req, res) => {
 
 // 3. Dashboard Stats
 app.get('/api/v1/stats', (req, res) => {
-    const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get() || null;
+    // Optional ?puzzle_id=N lets the dashboard view a non-active puzzle's stats.
+    const puzzleIdParam = req.query.puzzle_id ? parseInt(req.query.puzzle_id, 10) : null;
+    const puzzle = puzzleIdParam
+        ? (db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzleIdParam) || null)
+        : (db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get() || null);
 
-    // All queries below are scoped to the active puzzle so that switching puzzles
-    // shows only that puzzle's stats, workers, scores, and findings.
+    // All queries below are scoped to the requested (or active) puzzle so that
+    // switching tabs shows only that puzzle's stats, workers, scores, and findings.
     const pid = puzzle ? puzzle.id : null;
 
     const activeWorkers = pid ? db.prepare(`

@@ -429,6 +429,7 @@
         // ── Keyspace Tabs ──
         let pendingActivateId = null;
         let _lastPuzzles = [];   // cache for optimistic re-render on activation
+        let selectedId    = null; // which tab the user is currently viewing
 
         function openActivateModal(id, name) {
             pendingActivateId = id;
@@ -448,6 +449,7 @@
                     body: JSON.stringify({ id })
                 });
                 if (res.ok) {
+                    selectedId = id; // follow the newly activated puzzle
                     renderKeyspaceTabs(_lastPuzzles.map(p =>
                         ({...p, active: p.id === id ? 1 : 0})));
                     updateDashboard(); // confirm from server
@@ -469,20 +471,25 @@
                 active: p.active === true || p.active === 1 || p.active === '1'
             }));
 
-            // Enforce exactly ONE active puzzle on the frontend.
-            // Even if the DB returns two active rows, only the first one wins here.
-            let activeIdx = normalized.findIndex(p => p.active);
-            if (activeIdx < 0) activeIdx = 0;
-            const items = normalized.map((p, i) => ({ ...p, active: i === activeIdx }));
+            // Pool-active puzzle (the one workers are actually assigned to).
+            const poolActive = normalized.find(p => p.active) || normalized[0];
+            const poolActiveId = poolActive ? poolActive.id : null;
 
-            _lastPuzzles = items;
+            _lastPuzzles = normalized;
+
+            // selectedId tracks which tab the user is viewing.
+            // Initialise to pool-active on first render; reset if that puzzle disappeared.
+            if (selectedId === null) selectedId = poolActiveId;
+            if (selectedId !== null && !normalized.find(p => p.id === selectedId)) {
+                selectedId = poolActiveId;
+            }
 
             const nav      = document.getElementById('ks-nav');
             const tabStrip = document.getElementById('ks-tab-strip');
             const togStrip = document.getElementById('ks-toggle-strip');
             const header   = document.querySelector('.header');
 
-            if (items.length <= 1) {
+            if (normalized.length <= 1) {
                 nav.style.display = 'none';
                 header.classList.remove('has-ks-tabs');
                 tabStrip.innerHTML = '';
@@ -493,36 +500,42 @@
             nav.style.display = 'block';
             header.classList.add('has-ks-tabs');
 
-            const gridCols = `repeat(${items.length}, 1fr)`;
+            const gridCols = `repeat(${normalized.length}, 1fr)`;
             tabStrip.style.gridTemplateColumns = gridCols;
             togStrip.style.gridTemplateColumns = gridCols;
 
-            tabStrip.innerHTML = items.map(p =>
-                `<div class="ks-tab${p.active ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
+            // Tab strip — selected (viewed) tab is highlighted cyan
+            tabStrip.innerHTML = normalized.map(p =>
+                `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
             ).join('');
 
-            // Every tab has a toggle: ON (checked) for active, OFF (unchecked) for inactive.
-            togStrip.innerHTML = items.map((p, i) =>
-                `<div class="ks-toggle-cell${p.active ? '' : ' ks-toggle-inactive'}"
-                      style="grid-column:${i + 1}" data-id="${p.id}">
-                    <label class="ks-toggle">
-                        <input type="checkbox"${p.active ? ' checked' : ''} disabled>
-                        <span class="ks-toggle-slider"></span>
-                    </label>
-                </div>`
-            ).join('');
+            // Toggle strip — ONE cell under the selected tab only.
+            // ON  (checked)   if the selected puzzle is also the pool-active puzzle.
+            // OFF (unchecked) if the selected puzzle is NOT the pool-active puzzle.
+            const selIdx  = normalized.findIndex(p => p.id === selectedId);
+            const isOn    = selectedId === poolActiveId;
+            const selName = normalized[selIdx] ? normalized[selIdx].name : '';
+            togStrip.innerHTML = `<div class="ks-toggle-cell${isOn ? '' : ' ks-toggle-inactive'}"
+                  style="grid-column:${selIdx + 1}" data-id="${selectedId}">
+                <label class="ks-toggle">
+                    <input type="checkbox"${isOn ? ' checked' : ''} disabled>
+                    <span class="ks-toggle-slider"></span>
+                </label>
+            </div>`;
 
-            // Inactive tab click → switch puzzle
+            // Inactive tab click → switch view (no pool activation)
             tabStrip.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
-                tab.addEventListener('click', () =>
-                    activatePuzzle(Number(tab.dataset.id), tab.textContent.trim()));
+                tab.addEventListener('click', () => {
+                    selectedId = Number(tab.dataset.id);
+                    renderKeyspaceTabs(_lastPuzzles);
+                    updateDashboard();
+                });
             });
 
-            // Inactive toggle click → switch puzzle (look up name from items)
+            // OFF toggle click → activate this puzzle in the pool
             togStrip.querySelectorAll('.ks-toggle-inactive').forEach(cell => {
-                const p = items.find(p2 => p2.id === Number(cell.dataset.id));
                 cell.addEventListener('click', () =>
-                    activatePuzzle(Number(cell.dataset.id), p ? p.name : ''));
+                    activatePuzzle(Number(cell.dataset.id), selName));
             });
         }
 
@@ -545,6 +558,7 @@
                 if (res.ok) {
                     if (token) sessionStorage.setItem('adminToken', token);
                     document.getElementById('activate-modal').style.display = 'none';
+                    selectedId = pendingActivateId; // follow the newly activated puzzle
                     renderKeyspaceTabs(_lastPuzzles.map(p =>
                         ({...p, active: p.id === pendingActivateId ? 1 : 0})));
                     pendingActivateId = null;
@@ -817,7 +831,8 @@
         // ── Fetch & Update ──
         async function updateDashboard() {
             try {
-                const res = await fetch('/api/v1/stats');
+                const url = selectedId !== null ? `/api/v1/stats?puzzle_id=${selectedId}` : '/api/v1/stats';
+                const res = await fetch(url);
                 const data = await res.json();
 
                 renderKeyspaceTabs(data.puzzles || []);
