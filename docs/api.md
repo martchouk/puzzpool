@@ -99,6 +99,12 @@ Call every 60–120 seconds while scanning a large chunk.
 
 Dashboard data — polled every 3 seconds by `index.html`.
 
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `puzzle_id` | number | *(optional)* Return stats for this puzzle ID instead of the pool-active one. Used by the dashboard when the user views a non-active tab. |
+
 **Response 200** (abbreviated)
 ```json
 {
