@@ -163,6 +163,8 @@
         #ks-toggle-strip { display: flex; gap: 3px; padding: 0.65rem 0; }
         .ks-toggle-cell { min-width: 110px; display: flex; justify-content: center; align-items: center; cursor: pointer; }
         .ks-toggle-cell[data-active] { cursor: default; }
+        /* Show toggle only under the active tab; inactive cells keep their space for alignment */
+        .ks-toggle-cell:not([data-active]) { visibility: hidden; }
 
         /* Toggle switch */
         .ks-toggle { position: relative; width: 38px; height: 20px; flex-shrink: 0; pointer-events: none; }
