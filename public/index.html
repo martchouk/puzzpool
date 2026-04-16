@@ -449,7 +449,7 @@
                 if (res.ok) {
                     renderKeyspaceTabs(_lastPuzzles.map(p =>
                         ({...p, active: p.id === id ? 1 : 0})));
-                    updateDashboard();
+                    updateDashboard(); // confirm from server
                 } else {
                     // Any error (401 = bad token, 4xx/5xx) → open modal so user can review/enter token
                     if (res.status === 401) sessionStorage.removeItem('adminToken');
@@ -461,47 +461,57 @@
         }
 
         function renderKeyspaceTabs(puzzles) {
-            _lastPuzzles = puzzles || [];
+            // Normalize active to strict boolean — guards against "0"/"1" strings,
+            // integers, or any other truthy/falsy surprise from the API.
+            const normalized = (puzzles || []).map(p => ({
+                ...p,
+                active: p.active === true || p.active === 1 || p.active === '1'
+            }));
+
+            // Enforce exactly ONE active puzzle on the frontend.
+            // Even if the DB returns two active rows, only the first one wins here.
+            let activeIdx = normalized.findIndex(p => p.active);
+            if (activeIdx < 0) activeIdx = 0;
+            const items = normalized.map((p, i) => ({ ...p, active: i === activeIdx }));
+
+            _lastPuzzles = items;
+
             const nav      = document.getElementById('ks-nav');
             const tabStrip = document.getElementById('ks-tab-strip');
             const togStrip = document.getElementById('ks-toggle-strip');
             const header   = document.querySelector('.header');
 
-            if (!puzzles || puzzles.length <= 1) {
+            if (items.length <= 1) {
                 nav.style.display = 'none';
                 header.classList.remove('has-ks-tabs');
+                tabStrip.innerHTML = '';
+                togStrip.innerHTML = '';
                 return;
             }
 
             nav.style.display = 'block';
             header.classList.add('has-ks-tabs');
 
-            // Both strips use identical grid columns → each toggle cell sits under its tab
-            const gridCols = `repeat(${puzzles.length}, 1fr)`;
+            const gridCols = `repeat(${items.length}, 1fr)`;
             tabStrip.style.gridTemplateColumns = gridCols;
             togStrip.style.gridTemplateColumns = gridCols;
 
-            // Tab strip — names only
-            tabStrip.innerHTML = puzzles.map(p =>
+            tabStrip.innerHTML = items.map(p =>
                 `<div class="ks-tab${p.active ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
             ).join('');
 
-            // Toggle strip — render ONLY the active toggle, placed in its column via grid-column.
-            // No invisible placeholder cells → it is physically impossible to show two toggles.
-            const activeIdx = puzzles.findIndex(p => p.active);
-            togStrip.innerHTML = activeIdx >= 0
-                ? `<div class="ks-toggle-cell" style="grid-column:${activeIdx + 1}">
-                       <label class="ks-toggle">
-                           <input type="checkbox" checked disabled>
-                           <span class="ks-toggle-slider"></span>
-                       </label>
-                   </div>`
-                : '';
+            // Exactly one toggle cell, placed in the active column.
+            togStrip.innerHTML = `
+                <div class="ks-toggle-cell" style="grid-column:${activeIdx + 1}">
+                    <label class="ks-toggle">
+                        <input type="checkbox" checked disabled>
+                        <span class="ks-toggle-slider"></span>
+                    </label>
+                </div>`;
 
-            // Tab click → instant switch
             tabStrip.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
                 tab.addEventListener('click', () =>
-                    activatePuzzle(parseInt(tab.dataset.id), tab.textContent.trim()));
+                    activatePuzzle(Number(tab.dataset.id), tab.textContent.trim()));
             });
         }
 
@@ -524,8 +534,6 @@
                 if (res.ok) {
                     if (token) sessionStorage.setItem('adminToken', token);
                     document.getElementById('activate-modal').style.display = 'none';
-                    // Optimistic re-render: flip active flag locally so the UI updates
-                    // instantly without waiting for the next updateDashboard round-trip.
                     renderKeyspaceTabs(_lastPuzzles.map(p =>
                         ({...p, active: p.id === pendingActivateId ? 1 : 0})));
                     pendingActivateId = null;
