@@ -249,7 +249,10 @@ app.get('/api/v1/stats', (req, res) => {
         });
     }
 
+    const allPuzzles = db.prepare("SELECT id, name, active FROM puzzles ORDER BY id ASC").all();
+
     res.json({
+        puzzles: allPuzzles,
         puzzle: puzzle ? {
             id: puzzle.id,
             name: puzzle.name,
@@ -361,6 +364,24 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
         res.json({ puzzles });
     });
 
+// 7. Admin: activate an existing puzzle by id
+app.post('/api/v1/admin/activate-puzzle', (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Missing id' });
+
+    const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+    if (!target) return res.status(404).json({ error: 'Puzzle not found' });
+
+    db.transaction(() => {
+        db.prepare("UPDATE puzzles SET active = 0").run();
+        db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
+    })();
+
+    const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+    console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
+    res.json({ ok: true, puzzle });
+});
+
     return app;
 } // end createApp()
 
@@ -406,6 +427,26 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
 
+    // Seed puzzles from KEYSPACE_<NAME>=<start_hex>:<end_hex> env vars
+    for (const [key, value] of Object.entries(process.env)) {
+        if (!key.startsWith('KEYSPACE_')) continue;
+        const name = key.slice('KEYSPACE_'.length).replace(/_/g, ' ');
+        const [startRaw, endRaw] = (value || '').split(':');
+        if (!startRaw || !endRaw || !isValidHex(startRaw) || !isValidHex(endRaw)) {
+            console.warn(`[Config] Skipping invalid keyspace ${key}=${value} — expected start_hex:end_hex`);
+            continue;
+        }
+        const startNorm = startRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+        const endNorm   = endRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+        const existing  = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
+        if (!existing) {
+            db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
+                .run(name, startNorm, endNorm);
+            console.log(`[Config] Seeded keyspace: ${name}`);
+        }
+    }
+
+    // Fall back to built-in Puzzle #71 if DB is still empty
     const puzzleCount = db.prepare("SELECT COUNT(*) as count FROM puzzles").get().count;
     if (puzzleCount === 0) {
         db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
@@ -413,6 +454,13 @@ if (require.main === module) {
                 '0400000000000000000'.padStart(64, '0'),
                 '07fffffffffffffffff'.padStart(64, '0'));
         console.log('[Init] Seeded Puzzle #71 as active puzzle.');
+    }
+
+    // Ensure exactly one puzzle is active
+    const activeCount = db.prepare("SELECT COUNT(*) as count FROM puzzles WHERE active = 1").get().count;
+    if (activeCount === 0) {
+        db.prepare("UPDATE puzzles SET active = 1 WHERE id = (SELECT MIN(id) FROM puzzles)").run();
+        console.log('[Init] No active puzzle found — activated the first one.');
     }
 
     const app = createApp(db);

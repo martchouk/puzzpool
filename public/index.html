@@ -146,6 +146,30 @@
         pre.request { color: #7ec8a0; }
         .comment { color: var(--text-muted); }
 
+        /* ── Keyspace Tabs ── */
+        .keyspace-tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        .ks-tab-btn { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; padding: 0.4rem 1rem; border-radius: var(--radius); border: 1px solid var(--border-default); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; transition: var(--transition); letter-spacing: 0.05em; }
+        .ks-tab-btn.active { border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(0,255,255,0.06); cursor: default; }
+        .ks-tab-btn:not(.active):hover { border-color: var(--border-hover); color: var(--text-primary); }
+
+        /* ── Activation Modal ── */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal { background: var(--bg-elevated); border: 1px solid var(--border-hover); border-radius: var(--radius); padding: 1.5rem; max-width: 420px; width: 90%; }
+        .modal-title { font-family: var(--font-mono); font-size: 1rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 1rem; }
+        .modal-body { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1rem; }
+        .modal-body strong { color: var(--text-primary); }
+        .modal-field { margin-bottom: 1.25rem; }
+        .modal-field label { display: block; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 0.4rem; }
+        .modal-field input { width: 100%; background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: var(--radius); padding: 0.5rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-primary); outline: none; }
+        .modal-field input:focus { border-color: var(--accent-cyan); }
+        .modal-error { font-size: 0.78rem; color: var(--accent-red); margin-bottom: 0.75rem; display: none; }
+        .modal-buttons { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .modal-btn { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600; padding: 0.5rem 1.25rem; border-radius: var(--radius); border: 1px solid; cursor: pointer; transition: var(--transition); }
+        .modal-btn-cancel { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
+        .modal-btn-cancel:hover { border-color: var(--border-hover); color: var(--text-primary); }
+        .modal-btn-confirm { background: rgba(0,255,255,0.1); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+        .modal-btn-confirm:hover { background: rgba(0,255,255,0.2); }
+
         /* ── Animations ── */
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
@@ -192,6 +216,9 @@
                 <div id="found-keys" class="stat-value amber">0</div>
             </div>
         </div>
+
+        <!-- Keyspace Tabs (hidden when only one puzzle exists) -->
+        <div class="keyspace-tabs" id="keyspace-tabs" style="display:none"></div>
 
         <!-- Active Puzzle -->
         <div class="frontier-card">
@@ -328,6 +355,27 @@
 
     </div>
 
+    <!-- Keyspace activation modal -->
+    <div class="modal-overlay" id="activate-modal" style="display:none">
+        <div class="modal">
+            <div class="modal-title">Switch keyspace?</div>
+            <div class="modal-body">
+                Activate <strong id="modal-puzzle-name"></strong>?<br>
+                Workers will receive chunks from this keyspace on their next request.
+                Active workers can still submit their current chunks.
+            </div>
+            <div class="modal-field">
+                <label>Admin token (leave empty if not configured)</label>
+                <input type="password" id="modal-token-input" placeholder="X-Admin-Token value">
+            </div>
+            <div class="modal-error" id="modal-error"></div>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>
+                <button class="modal-btn modal-btn-confirm" id="modal-confirm">Activate</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // ── Formatter Helpers ──
         function formatBigInt(s) {
@@ -354,6 +402,60 @@
             s = s.replace(/0+$/, '').replace(/\.$/, ''); // Strip trailing zeros
             return s + " %";
         }
+
+        // ── Keyspace Tabs ──
+        let pendingActivateId = null;
+
+        function renderKeyspaceTabs(puzzles) {
+            const container = document.getElementById('keyspace-tabs');
+            if (!puzzles || puzzles.length <= 1) { container.style.display = 'none'; return; }
+            container.style.display = 'flex';
+            container.innerHTML = puzzles.map(p =>
+                `<button class="ks-tab-btn${p.active ? ' active' : ''}" data-id="${p.id}">${p.name}</button>`
+            ).join('');
+            container.querySelectorAll('.ks-tab-btn:not(.active)').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    pendingActivateId = parseInt(btn.dataset.id);
+                    document.getElementById('modal-puzzle-name').textContent = btn.textContent;
+                    document.getElementById('modal-token-input').value = sessionStorage.getItem('adminToken') || '';
+                    document.getElementById('modal-error').style.display = 'none';
+                    document.getElementById('activate-modal').style.display = 'flex';
+                });
+            });
+        }
+
+        document.getElementById('modal-cancel').addEventListener('click', () => {
+            document.getElementById('activate-modal').style.display = 'none';
+            pendingActivateId = null;
+        });
+
+        document.getElementById('modal-confirm').addEventListener('click', async () => {
+            const token = document.getElementById('modal-token-input').value.trim();
+            const errEl = document.getElementById('modal-error');
+            errEl.style.display = 'none';
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['X-Admin-Token'] = token;
+            try {
+                const res = await fetch('/api/v1/admin/activate-puzzle', {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ id: pendingActivateId })
+                });
+                if (res.ok) {
+                    if (token) sessionStorage.setItem('adminToken', token);
+                    document.getElementById('activate-modal').style.display = 'none';
+                    pendingActivateId = null;
+                    updateDashboard();
+                } else {
+                    const err = await res.json();
+                    errEl.textContent = err.error || `Error ${res.status}`;
+                    errEl.style.display = 'block';
+                    if (res.status === 401) sessionStorage.removeItem('adminToken');
+                }
+            } catch (e) {
+                errEl.textContent = 'Request failed: ' + e.message;
+                errEl.style.display = 'block';
+            }
+        });
 
         function formatETA(totalKeys, keysCompleted, hashrate) {
             if (hashrate <= 0) return '∞';
@@ -614,6 +716,7 @@
                 const res = await fetch('/api/v1/stats');
                 const data = await res.json();
 
+                renderKeyspaceTabs(data.puzzles || []);
                 document.getElementById('total-hashrate').textContent = formatHashrate(data.total_hashrate);
                 document.getElementById('active-workers').textContent = data.active_workers_count;
                 document.getElementById('completed-chunks').textContent = data.completed_chunks.toLocaleString();

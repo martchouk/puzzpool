@@ -227,6 +227,54 @@ describe('POST /api/v1/admin/set-puzzle', () => {
     });
 });
 
+// ─── Admin: /api/v1/admin/activate-puzzle ────────────────────────────────────
+
+describe('POST /api/v1/admin/activate-puzzle', () => {
+    test('switches active puzzle', async () => {
+        // Create two puzzles, first active
+        db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
+            .run('P1', '0'.repeat(63) + '1', '0'.repeat(63) + '2');
+        const p2 = db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
+            .run('P2', '0'.repeat(63) + '3', '0'.repeat(63) + '4');
+
+        await request(app)
+            .post('/api/v1/admin/activate-puzzle')
+            .send({ id: p2.lastInsertRowid })
+            .expect(200);
+
+        const active = db.prepare("SELECT name FROM puzzles WHERE active = 1").get();
+        expect(active.name).toBe('P2');
+    });
+
+    test('returns 400 when id is missing', async () => {
+        await request(app)
+            .post('/api/v1/admin/activate-puzzle')
+            .send({})
+            .expect(400);
+    });
+
+    test('returns 404 for unknown id', async () => {
+        await request(app)
+            .post('/api/v1/admin/activate-puzzle')
+            .send({ id: 9999 })
+            .expect(404);
+    });
+});
+
+// ─── GET /api/v1/stats includes puzzles array ─────────────────────────────────
+
+describe('GET /api/v1/stats puzzles field', () => {
+    test('returns puzzles array with active flag', async () => {
+        seedPuzzle(db);
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.puzzles).toBeInstanceOf(Array);
+        expect(res.body.puzzles.length).toBeGreaterThan(0);
+        expect(res.body.puzzles[0]).toHaveProperty('id');
+        expect(res.body.puzzles[0]).toHaveProperty('name');
+        expect(res.body.puzzles[0]).toHaveProperty('active');
+    });
+});
+
 // ─── Admin: ADMIN_TOKEN auth ──────────────────────────────────────────────────
 
 describe('ADMIN_TOKEN middleware', () => {
