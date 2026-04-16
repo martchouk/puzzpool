@@ -25,7 +25,7 @@ WorkingDirectory=/home/jan/git/puzzpool
 ExecStart=/usr/bin/node server.js
 
 # --- Environment ---
-# Inline env vars here or point to a file with EnvironmentFile=
+EnvironmentFile=/home/jan/git/puzzpool/.env
 Environment=NODE_ENV=production
 Environment=PORT=8888
 Environment=DB_PATH=/home/jan/git/puzzpool/pool.db
