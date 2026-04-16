@@ -532,10 +532,10 @@
                 });
             });
 
-            // OFF toggle click → activate this puzzle in the pool
+            // OFF toggle click → show confirmation modal (modal confirm does the actual activation)
             togStrip.querySelectorAll('.ks-toggle-inactive').forEach(cell => {
                 cell.addEventListener('click', () =>
-                    activatePuzzle(Number(cell.dataset.id), selName));
+                    openActivateModal(Number(cell.dataset.id), selName));
             });
         }
 
