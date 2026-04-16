@@ -83,6 +83,7 @@
 
         /* ── Puzzle / frontier card ── */
         .frontier-card { background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-default); border-radius: var(--radius); padding: 1.25rem 1.5rem; margin-bottom: 1rem; }
+        .frontier-card.has-tabs { border-radius: 0 var(--radius) var(--radius) var(--radius); border-color: var(--border-hover); }
         .frontier-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 0.4rem; }
         .frontier-value { font-family: var(--font-mono); font-size: 0.95rem; color: var(--accent-amber); word-break: break-all; }
 
@@ -147,18 +148,17 @@
         .comment { color: var(--text-muted); }
 
         /* ── Keyspace Tabs ── */
-        .keyspace-tabs { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
-        .ks-tab { background: var(--bg-tertiary); border: 1px solid var(--border-default); border-radius: var(--radius); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; transition: var(--transition); min-width: 130px; }
-        .ks-tab.active { border-color: var(--accent-cyan); background: rgba(0,255,255,0.04); box-shadow: 0 0 15px var(--accent-cyan-glow); }
-        .ks-tab:not(.active) { cursor: pointer; }
-        .ks-tab:not(.active):hover { border-color: var(--border-hover); background: var(--bg-secondary); }
-        .ks-tab-name { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.05em; color: var(--text-secondary); }
-        .ks-tab.active .ks-tab-name { color: var(--accent-cyan); }
+        .keyspace-tabs { display: flex; align-items: flex-end; gap: 0; margin-bottom: -1px; position: relative; z-index: 1; flex-wrap: wrap; }
+        .ks-tab { display: flex; flex-direction: column; align-items: center; gap: 0.45rem; padding: 0.6rem 1.5rem 0.7rem; border: 1px solid var(--border-default); border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: var(--bg-secondary); cursor: pointer; transition: var(--transition); margin-right: 3px; min-width: 110px; }
+        .ks-tab.active { background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%); border-color: var(--border-hover); border-bottom: 1px solid var(--bg-secondary); padding-bottom: 0.85rem; cursor: default; }
+        .ks-tab:not(.active):hover { background: var(--bg-tertiary); border-color: var(--border-hover); }
+        .ks-tab-name { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); white-space: nowrap; }
+        .ks-tab.active .ks-tab-name { color: var(--accent-cyan); text-shadow: 0 0 8px var(--accent-cyan-glow); }
         /* Toggle switch */
-        .ks-toggle { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+        .ks-toggle { position: relative; width: 38px; height: 20px; flex-shrink: 0; }
         .ks-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
-        .ks-toggle-slider { position: absolute; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 22px; transition: var(--transition); pointer-events: none; }
-        .ks-toggle-slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px; background: var(--text-muted); border-radius: 50%; transition: var(--transition); }
+        .ks-toggle-slider { position: absolute; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 20px; transition: var(--transition); pointer-events: none; }
+        .ks-toggle-slider::before { content: ""; position: absolute; height: 12px; width: 12px; left: 3px; top: 3px; background: var(--text-muted); border-radius: 50%; transition: var(--transition); }
         .ks-toggle input:checked + .ks-toggle-slider { background: rgba(0,255,255,0.15); border-color: var(--accent-cyan); }
         .ks-toggle input:checked + .ks-toggle-slider::before { transform: translateX(18px); background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
 
@@ -418,8 +418,14 @@
 
         function renderKeyspaceTabs(puzzles) {
             const container = document.getElementById('keyspace-tabs');
-            if (!puzzles || puzzles.length <= 1) { container.style.display = 'none'; return; }
+            const frontierCard = document.querySelector('.frontier-card');
+            if (!puzzles || puzzles.length <= 1) {
+                container.style.display = 'none';
+                frontierCard.classList.remove('has-tabs');
+                return;
+            }
             container.style.display = 'flex';
+            frontierCard.classList.add('has-tabs');
             container.innerHTML = puzzles.map(p => `
                 <div class="ks-tab${p.active ? ' active' : ''}" data-id="${p.id}">
                     <span class="ks-tab-name">${p.name}</span>
