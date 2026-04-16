@@ -153,19 +153,15 @@
         /* Keyspace nav wrapper */
         #ks-nav { margin-bottom: 2rem; }
 
-        /* Tab strip — sits right below the header, tabs connect to the separator line */
-        #ks-tab-strip { display: flex; align-items: flex-end; gap: 3px; border-bottom: 1px solid var(--border-default); }
-        .ks-tab { flex: 1; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); cursor: pointer; padding: 0.5rem 1.5rem 0.6rem; border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; transition: var(--transition); white-space: nowrap; text-align: center; margin-bottom: -1px; position: relative; }
+        /* Tab strip — CSS grid so each tab column has identical width */
+        #ks-tab-strip { display: grid; /* grid-template-columns set by JS */ border-bottom: 1px solid var(--border-default); }
+        .ks-tab { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); cursor: pointer; padding: 0.5rem 1.5rem 0.6rem; border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; transition: var(--transition); white-space: nowrap; text-align: center; margin-bottom: -1px; }
         .ks-tab.active { color: var(--accent-cyan); text-shadow: 0 0 8px var(--accent-cyan-glow); border-color: var(--border-default); background: var(--bg-secondary); border-bottom: 1px solid var(--bg-secondary); cursor: default; }
         .ks-tab:not(.active):hover { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-hover); }
 
-        /* Toggle strip — separate row below the tab separator line */
-        #ks-toggle-strip { display: flex; gap: 3px; padding: 0.65rem 0; }
-        /* flex: 1 matches each cell to its tab column → toggle is always centered under its tab */
-        .ks-toggle-cell { flex: 1; display: flex; justify-content: center; align-items: center; cursor: pointer; }
-        .ks-toggle-cell[data-active] { cursor: default; }
-        /* Inactive cells: invisible, non-clickable, but still occupy space for alignment */
-        .ks-toggle-cell:not([data-active]) { visibility: hidden; pointer-events: none; }
+        /* Toggle strip — same grid as tab strip; only one cell (active) is rendered */
+        #ks-toggle-strip { display: grid; /* grid-template-columns set by JS */ padding: 0.65rem 0; }
+        .ks-toggle-cell { display: flex; justify-content: center; align-items: center; }
 
         /* Toggle switch */
         .ks-toggle { position: relative; width: 38px; height: 20px; flex-shrink: 0; pointer-events: none; }
@@ -466,10 +462,10 @@
 
         function renderKeyspaceTabs(puzzles) {
             _lastPuzzles = puzzles || [];
-            const nav       = document.getElementById('ks-nav');
-            const tabStrip  = document.getElementById('ks-tab-strip');
-            const togStrip  = document.getElementById('ks-toggle-strip');
-            const header    = document.querySelector('.header');
+            const nav      = document.getElementById('ks-nav');
+            const tabStrip = document.getElementById('ks-tab-strip');
+            const togStrip = document.getElementById('ks-toggle-strip');
+            const header   = document.querySelector('.header');
 
             if (!puzzles || puzzles.length <= 1) {
                 nav.style.display = 'none';
@@ -480,32 +476,32 @@
             nav.style.display = 'block';
             header.classList.add('has-ks-tabs');
 
-            // Tab strip — puzzle names only
+            // Both strips use identical grid columns → each toggle cell sits under its tab
+            const gridCols = `repeat(${puzzles.length}, 1fr)`;
+            tabStrip.style.gridTemplateColumns = gridCols;
+            togStrip.style.gridTemplateColumns = gridCols;
+
+            // Tab strip — names only
             tabStrip.innerHTML = puzzles.map(p =>
                 `<div class="ks-tab${p.active ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
             ).join('');
 
-            // Toggle strip — one toggle per puzzle, aligned under its tab
-            togStrip.innerHTML = puzzles.map(p =>
-                `<div class="ks-toggle-cell"${p.active ? ' data-active="1"' : ''} data-id="${p.id}">
-                    <label class="ks-toggle">
-                        <input type="checkbox"${p.active ? ' checked disabled' : ''}>
-                        <span class="ks-toggle-slider"></span>
-                    </label>
-                </div>`
-            ).join('');
+            // Toggle strip — render ONLY the active toggle, placed in its column via grid-column.
+            // No invisible placeholder cells → it is physically impossible to show two toggles.
+            const activeIdx = puzzles.findIndex(p => p.active);
+            togStrip.innerHTML = activeIdx >= 0
+                ? `<div class="ks-toggle-cell" style="grid-column:${activeIdx + 1}">
+                       <label class="ks-toggle">
+                           <input type="checkbox" checked disabled>
+                           <span class="ks-toggle-slider"></span>
+                       </label>
+                   </div>`
+                : '';
 
-            // Tab click → switch directly (no modal); falls back to modal only on 401
+            // Tab click → instant switch
             tabStrip.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
                 tab.addEventListener('click', () =>
                     activatePuzzle(parseInt(tab.dataset.id), tab.textContent.trim()));
-            });
-
-            // Toggle click → always open modal (lets user review / enter token)
-            togStrip.querySelectorAll('.ks-toggle-cell:not([data-active])').forEach(cell => {
-                const p = puzzles.find(p2 => p2.id === parseInt(cell.dataset.id));
-                cell.addEventListener('click', () =>
-                    openActivateModal(parseInt(cell.dataset.id), p ? p.name : cell.dataset.id));
             });
         }
 
