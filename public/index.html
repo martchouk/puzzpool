@@ -147,10 +147,20 @@
         .comment { color: var(--text-muted); }
 
         /* ── Keyspace Tabs ── */
-        .keyspace-tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-        .ks-tab-btn { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; padding: 0.4rem 1rem; border-radius: var(--radius); border: 1px solid var(--border-default); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; transition: var(--transition); letter-spacing: 0.05em; }
-        .ks-tab-btn.active { border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(0,255,255,0.06); cursor: default; }
-        .ks-tab-btn:not(.active):hover { border-color: var(--border-hover); color: var(--text-primary); }
+        .keyspace-tabs { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        .ks-tab { background: var(--bg-tertiary); border: 1px solid var(--border-default); border-radius: var(--radius); padding: 0.75rem 1.25rem; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; transition: var(--transition); min-width: 130px; }
+        .ks-tab.active { border-color: var(--accent-cyan); background: rgba(0,255,255,0.04); box-shadow: 0 0 15px var(--accent-cyan-glow); }
+        .ks-tab:not(.active) { cursor: pointer; }
+        .ks-tab:not(.active):hover { border-color: var(--border-hover); background: var(--bg-secondary); }
+        .ks-tab-name { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.05em; color: var(--text-secondary); }
+        .ks-tab.active .ks-tab-name { color: var(--accent-cyan); }
+        /* Toggle switch */
+        .ks-toggle { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+        .ks-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .ks-toggle-slider { position: absolute; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 22px; transition: var(--transition); pointer-events: none; }
+        .ks-toggle-slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px; background: var(--text-muted); border-radius: 50%; transition: var(--transition); }
+        .ks-toggle input:checked + .ks-toggle-slider { background: rgba(0,255,255,0.15); border-color: var(--accent-cyan); }
+        .ks-toggle input:checked + .ks-toggle-slider::before { transform: translateX(18px); background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
 
         /* ── Activation Modal ── */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 1000; }
@@ -410,13 +420,19 @@
             const container = document.getElementById('keyspace-tabs');
             if (!puzzles || puzzles.length <= 1) { container.style.display = 'none'; return; }
             container.style.display = 'flex';
-            container.innerHTML = puzzles.map(p =>
-                `<button class="ks-tab-btn${p.active ? ' active' : ''}" data-id="${p.id}">${p.name}</button>`
+            container.innerHTML = puzzles.map(p => `
+                <div class="ks-tab${p.active ? ' active' : ''}" data-id="${p.id}">
+                    <span class="ks-tab-name">${p.name}</span>
+                    <label class="ks-toggle" title="${p.active ? 'Active keyspace' : 'Click to activate'}">
+                        <input type="checkbox" ${p.active ? 'checked disabled' : ''}>
+                        <span class="ks-toggle-slider"></span>
+                    </label>
+                </div>`
             ).join('');
-            container.querySelectorAll('.ks-tab-btn:not(.active)').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    pendingActivateId = parseInt(btn.dataset.id);
-                    document.getElementById('modal-puzzle-name').textContent = btn.textContent;
+            container.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    pendingActivateId = parseInt(tab.dataset.id);
+                    document.getElementById('modal-puzzle-name').textContent = tab.querySelector('.ks-tab-name').textContent;
                     document.getElementById('modal-token-input').value = sessionStorage.getItem('adminToken') || '';
                     document.getElementById('modal-error').style.display = 'none';
                     document.getElementById('activate-modal').style.display = 'flex';
