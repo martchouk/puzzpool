@@ -160,7 +160,7 @@
         .ks-tab:not(.active):hover { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-hover); }
 
         /* Toggle strip — separate row below the tab separator line */
-        #ks-toggle-strip { display: flex; gap: 3px; padding: 0.65rem 0; border-bottom: 1px solid var(--border-default); }
+        #ks-toggle-strip { display: flex; gap: 3px; padding: 0.65rem 0; }
         .ks-toggle-cell { min-width: 110px; display: flex; justify-content: center; align-items: center; cursor: pointer; }
         .ks-toggle-cell[data-active] { cursor: default; }
 
@@ -437,6 +437,27 @@
             document.getElementById('activate-modal').style.display = 'flex';
         }
 
+        async function activatePuzzle(id, name) {
+            const token = sessionStorage.getItem('adminToken') || '';
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['X-Admin-Token'] = token;
+            try {
+                const res = await fetch('/api/v1/admin/activate-puzzle', {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ id })
+                });
+                if (res.ok) {
+                    updateDashboard();
+                } else if (res.status === 401) {
+                    // Token missing or wrong — fall back to modal so user can enter it
+                    openActivateModal(id, name);
+                }
+            } catch (e) {
+                // Network error — open modal so user can retry
+                openActivateModal(id, name);
+            }
+        }
+
         function renderKeyspaceTabs(puzzles) {
             const nav       = document.getElementById('ks-nav');
             const tabStrip  = document.getElementById('ks-tab-strip');
@@ -467,13 +488,13 @@
                 </div>`
             ).join('');
 
-            // Wire inactive tabs → modal
+            // Tab click → switch directly (no modal); falls back to modal only on 401
             tabStrip.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
                 tab.addEventListener('click', () =>
-                    openActivateModal(parseInt(tab.dataset.id), tab.textContent.trim()));
+                    activatePuzzle(parseInt(tab.dataset.id), tab.textContent.trim()));
             });
 
-            // Wire inactive toggle cells → modal
+            // Toggle click → always open modal (lets user review / enter token)
             togStrip.querySelectorAll('.ks-toggle-cell:not([data-active])').forEach(cell => {
                 const p = puzzles.find(p2 => p2.id === parseInt(cell.dataset.id));
                 cell.addEventListener('click', () =>
