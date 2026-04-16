@@ -155,16 +155,17 @@
 
         /* Tab strip — sits right below the header, tabs connect to the separator line */
         #ks-tab-strip { display: flex; align-items: flex-end; gap: 3px; border-bottom: 1px solid var(--border-default); }
-        .ks-tab { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); cursor: pointer; padding: 0.5rem 1.5rem 0.6rem; border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; transition: var(--transition); white-space: nowrap; min-width: 110px; text-align: center; margin-bottom: -1px; position: relative; }
+        .ks-tab { flex: 1; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); cursor: pointer; padding: 0.5rem 1.5rem 0.6rem; border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; transition: var(--transition); white-space: nowrap; text-align: center; margin-bottom: -1px; position: relative; }
         .ks-tab.active { color: var(--accent-cyan); text-shadow: 0 0 8px var(--accent-cyan-glow); border-color: var(--border-default); background: var(--bg-secondary); border-bottom: 1px solid var(--bg-secondary); cursor: default; }
         .ks-tab:not(.active):hover { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-hover); }
 
         /* Toggle strip — separate row below the tab separator line */
         #ks-toggle-strip { display: flex; gap: 3px; padding: 0.65rem 0; }
-        .ks-toggle-cell { min-width: 110px; display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        /* flex: 1 matches each cell to its tab column → toggle is always centered under its tab */
+        .ks-toggle-cell { flex: 1; display: flex; justify-content: center; align-items: center; cursor: pointer; }
         .ks-toggle-cell[data-active] { cursor: default; }
-        /* Show toggle only under the active tab; inactive cells keep their space for alignment */
-        .ks-toggle-cell:not([data-active]) { visibility: hidden; }
+        /* Inactive cells: invisible, non-clickable, but still occupy space for alignment */
+        .ks-toggle-cell:not([data-active]) { visibility: hidden; pointer-events: none; }
 
         /* Toggle switch */
         .ks-toggle { position: relative; width: 38px; height: 20px; flex-shrink: 0; pointer-events: none; }
@@ -430,6 +431,7 @@
 
         // ── Keyspace Tabs ──
         let pendingActivateId = null;
+        let _lastPuzzles = [];   // cache for optimistic re-render on activation
 
         function openActivateModal(id, name) {
             pendingActivateId = id;
@@ -449,6 +451,8 @@
                     body: JSON.stringify({ id })
                 });
                 if (res.ok) {
+                    renderKeyspaceTabs(_lastPuzzles.map(p =>
+                        ({...p, active: p.id === id ? 1 : 0})));
                     updateDashboard();
                 } else {
                     // Any error (401 = bad token, 4xx/5xx) → open modal so user can review/enter token
@@ -461,6 +465,7 @@
         }
 
         function renderKeyspaceTabs(puzzles) {
+            _lastPuzzles = puzzles || [];
             const nav       = document.getElementById('ks-nav');
             const tabStrip  = document.getElementById('ks-tab-strip');
             const togStrip  = document.getElementById('ks-toggle-strip');
@@ -523,6 +528,10 @@
                 if (res.ok) {
                     if (token) sessionStorage.setItem('adminToken', token);
                     document.getElementById('activate-modal').style.display = 'none';
+                    // Optimistic re-render: flip active flag locally so the UI updates
+                    // instantly without waiting for the next updateDashboard round-trip.
+                    renderKeyspaceTabs(_lastPuzzles.map(p =>
+                        ({...p, active: p.id === pendingActivateId ? 1 : 0})));
                     pendingActivateId = null;
                     updateDashboard();
                 } else {
