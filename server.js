@@ -190,21 +190,28 @@ app.post('/api/v1/submit', (req, res) => {
 app.get('/api/v1/stats', (req, res) => {
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get() || null;
 
-    const activeWorkers = db.prepare(`
-        SELECT name, hashrate, last_seen FROM workers
-        WHERE last_seen >= datetime('now', '-10 minutes')
-        ORDER BY hashrate DESC
-    `).all();
-    const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
-    const completedChunks = db.prepare(
-        "SELECT COUNT(*) as count FROM chunks WHERE status = 'completed' OR status = 'FOUND'"
-    ).get().count;
+    // All queries below are scoped to the active puzzle so that switching puzzles
+    // shows only that puzzle's stats, workers, scores, and findings.
+    const pid = puzzle ? puzzle.id : null;
 
-    const doneChunks = db.prepare(`
+    const activeWorkers = pid ? db.prepare(`
+        SELECT DISTINCT w.name, w.hashrate, w.last_seen
+        FROM workers w
+        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ?
+        WHERE w.last_seen >= datetime('now', '-10 minutes')
+        ORDER BY w.hashrate DESC
+    `).all(pid) : [];
+    const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
+
+    const completedChunks = pid ? db.prepare(
+        "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND')"
+    ).get(pid).count : 0;
+
+    const doneChunks = pid ? db.prepare(`
         SELECT worker_name, start_hex, end_hex
         FROM chunks
-        WHERE (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
-    `).all();
+        WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
+    `).all(pid) : [];
 
     let totalKeysCompleted = 0n;
     for (const c of doneChunks) {
@@ -229,10 +236,13 @@ app.get('/api/v1/stats', (req, res) => {
             return d > 0n ? 1 : d < 0n ? -1 : 0;
         });
 
-    const finders = db.prepare(`
-        SELECT worker_name, found_key, found_address, created_at
-        FROM findings ORDER BY id ASC
-    `).all();
+    const finders = pid ? db.prepare(`
+        SELECT f.worker_name, f.found_key, f.found_address, f.created_at
+        FROM findings f
+        JOIN chunks c ON c.id = f.chunk_id
+        WHERE c.puzzle_id = ?
+        ORDER BY f.id ASC
+    `).all(pid) : [];
 
     const assignedNow = puzzle
         ? db.prepare("SELECT id, worker_name FROM chunks WHERE status = 'assigned' AND puzzle_id = ?").all(puzzle.id)
