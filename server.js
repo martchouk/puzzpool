@@ -57,9 +57,34 @@ function createApp(db) {
 
     const app = express();
     app.use(express.json());
+    // Serve index.html with no-store so browsers always fetch the latest version.
+    // Other static assets (images, etc.) can still be cached normally.
+    app.get('/', (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        res.sendFile('public/index.html', { root: '.' });
+    });
     app.use(express.static('public'));
 
-    // Optional admin token guard — enabled only when ADMIN_TOKEN env var is set
+    // Optional admin token guard — enabled only when ADMIN_TOKEN env var is set.
+    // activate-puzzle is registered before this middleware so tab clicks in the
+    // dashboard can switch puzzles without a token (nginx already restricts access).
+    app.post('/api/v1/admin/activate-puzzle', (req, res) => {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: 'Missing id' });
+
+        const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        if (!target) return res.status(404).json({ error: 'Puzzle not found' });
+
+        db.transaction(() => {
+            db.prepare("UPDATE puzzles SET active = 0").run();
+            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
+        })();
+
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
+        res.json({ ok: true, puzzle });
+    });
+
     if (process.env.ADMIN_TOKEN) {
         app.use('/api/v1/admin', (req, res, next) => {
             if (req.headers['x-admin-token'] === process.env.ADMIN_TOKEN) return next();
@@ -169,23 +194,34 @@ app.post('/api/v1/submit', (req, res) => {
 
 // 3. Dashboard Stats
 app.get('/api/v1/stats', (req, res) => {
-    const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get() || null;
+    // Optional ?puzzle_id=N lets the dashboard view a non-active puzzle's stats.
+    const puzzleIdParam = req.query.puzzle_id ? parseInt(req.query.puzzle_id, 10) : null;
+    const puzzle = puzzleIdParam
+        ? (db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzleIdParam) || null)
+        : (db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get() || null);
 
-    const activeWorkers = db.prepare(`
-        SELECT name, hashrate, last_seen FROM workers
-        WHERE last_seen >= datetime('now', '-10 minutes')
-        ORDER BY hashrate DESC
-    `).all();
+    // All queries below are scoped to the requested (or active) puzzle so that
+    // switching tabs shows only that puzzle's stats, workers, scores, and findings.
+    const pid = puzzle ? puzzle.id : null;
+
+    const activeWorkers = pid ? db.prepare(`
+        SELECT DISTINCT w.name, w.hashrate, w.last_seen
+        FROM workers w
+        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ?
+        WHERE w.last_seen >= datetime('now', '-10 minutes')
+        ORDER BY w.hashrate DESC
+    `).all(pid) : [];
     const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
-    const completedChunks = db.prepare(
-        "SELECT COUNT(*) as count FROM chunks WHERE status = 'completed' OR status = 'FOUND'"
-    ).get().count;
 
-    const doneChunks = db.prepare(`
+    const completedChunks = pid ? db.prepare(
+        "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND')"
+    ).get(pid).count : 0;
+
+    const doneChunks = pid ? db.prepare(`
         SELECT worker_name, start_hex, end_hex
         FROM chunks
-        WHERE (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
-    `).all();
+        WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
+    `).all(pid) : [];
 
     let totalKeysCompleted = 0n;
     for (const c of doneChunks) {
@@ -210,10 +246,13 @@ app.get('/api/v1/stats', (req, res) => {
             return d > 0n ? 1 : d < 0n ? -1 : 0;
         });
 
-    const finders = db.prepare(`
-        SELECT worker_name, found_key, found_address, created_at
-        FROM findings ORDER BY id ASC
-    `).all();
+    const finders = pid ? db.prepare(`
+        SELECT f.worker_name, f.found_key, f.found_address, f.created_at
+        FROM findings f
+        JOIN chunks c ON c.id = f.chunk_id
+        WHERE c.puzzle_id = ?
+        ORDER BY f.id ASC
+    `).all(pid) : [];
 
     const assignedNow = puzzle
         ? db.prepare("SELECT id, worker_name FROM chunks WHERE status = 'assigned' AND puzzle_id = ?").all(puzzle.id)
@@ -249,7 +288,10 @@ app.get('/api/v1/stats', (req, res) => {
         });
     }
 
+    const allPuzzles = db.prepare("SELECT id, name, active FROM puzzles ORDER BY id ASC").all();
+
     res.json({
+        puzzles: allPuzzles,
         puzzle: puzzle ? {
             id: puzzle.id,
             name: puzzle.name,
@@ -406,6 +448,26 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
 
+    // Seed puzzles from KEYSPACE_<NAME>=<start_hex>:<end_hex> env vars
+    for (const [key, value] of Object.entries(process.env)) {
+        if (!key.startsWith('KEYSPACE_')) continue;
+        const name = key.slice('KEYSPACE_'.length).replace(/_/g, ' ');
+        const [startRaw, endRaw] = (value || '').split(':');
+        if (!startRaw || !endRaw || !isValidHex(startRaw) || !isValidHex(endRaw)) {
+            console.warn(`[Config] Skipping invalid keyspace ${key}=${value} — expected start_hex:end_hex`);
+            continue;
+        }
+        const startNorm = startRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+        const endNorm   = endRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+        const existing  = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
+        if (!existing) {
+            db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
+                .run(name, startNorm, endNorm);
+            console.log(`[Config] Seeded keyspace: ${name}`);
+        }
+    }
+
+    // Fall back to built-in Puzzle #71 if DB is still empty
     const puzzleCount = db.prepare("SELECT COUNT(*) as count FROM puzzles").get().count;
     if (puzzleCount === 0) {
         db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
@@ -413,6 +475,13 @@ if (require.main === module) {
                 '0400000000000000000'.padStart(64, '0'),
                 '07fffffffffffffffff'.padStart(64, '0'));
         console.log('[Init] Seeded Puzzle #71 as active puzzle.');
+    }
+
+    // Ensure exactly one puzzle is active
+    const activeCount = db.prepare("SELECT COUNT(*) as count FROM puzzles WHERE active = 1").get().count;
+    if (activeCount === 0) {
+        db.prepare("UPDATE puzzles SET active = 1 WHERE id = (SELECT MIN(id) FROM puzzles)").run();
+        console.log('[Init] No active puzzle found — activated the first one.');
     }
 
     const app = createApp(db);

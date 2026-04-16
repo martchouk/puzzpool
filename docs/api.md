@@ -102,6 +102,10 @@ Dashboard data — polled every 3 seconds by `index.html`.
 **Response 200** (abbreviated)
 ```json
 {
+  "puzzles": [
+    { "id": 1, "name": "Puzzle #71", "active": 1 },
+    { "id": 2, "name": "ALL BTC",    "active": 0 }
+  ],
   "puzzle": {
     "id": 1,
     "name": "Puzzle #71",
@@ -184,4 +188,35 @@ List all puzzles (active and historical).
 **Response 200**
 ```json
 { "puzzles": [ { "id": 1, "name": "Puzzle #71", "active": 1, ... } ] }
+```
+
+---
+
+### POST /api/v1/admin/activate-puzzle
+
+Switch the active puzzle. The previously active puzzle is deactivated.
+Workers already scanning chunks from the old puzzle can still submit their results.
+
+**Request**
+```json
+{ "id": 2 }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | number | yes | ID of the puzzle to activate |
+
+**Response 200**
+```json
+{ "ok": true, "puzzle": { "id": 2, "name": "ALL BTC", "active": 1, ... } }
+```
+
+**Response 400** — missing id
+```json
+{ "error": "Missing id" }
+```
+
+**Response 404** — id not found
+```json
+{ "error": "Puzzle not found" }
 ```

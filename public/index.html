@@ -146,6 +146,50 @@
         pre.request { color: #7ec8a0; }
         .comment { color: var(--text-muted); }
 
+        /* ── Keyspace Tabs ── */
+        /* Header: remove bottom spacing when keyspace nav is visible */
+        .header.has-ks-tabs { margin-bottom: 0; padding-bottom: 1rem; border-bottom: none; }
+
+        /* Keyspace nav wrapper */
+        #ks-nav { margin-bottom: 2rem; }
+
+        /* Tab strip — CSS grid so each tab column has identical width */
+        #ks-tab-strip { display: grid; /* grid-template-columns set by JS */ border-bottom: 1px solid var(--border-default); }
+        .ks-tab { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); cursor: pointer; padding: 0.5rem 1.5rem 0.6rem; border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; transition: var(--transition); white-space: nowrap; text-align: center; margin-bottom: -1px; }
+        .ks-tab.active { color: var(--accent-cyan); text-shadow: 0 0 8px var(--accent-cyan-glow); border-color: var(--border-default); background: var(--bg-secondary); border-bottom: 1px solid var(--bg-secondary); cursor: default; }
+        .ks-tab:not(.active):hover { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-hover); }
+
+        /* Toggle strip — same grid as tab strip; only one cell (active) is rendered */
+        #ks-toggle-strip { display: grid; /* grid-template-columns set by JS */ padding: 0.65rem 0; }
+        .ks-toggle-cell { display: flex; justify-content: center; align-items: center; cursor: default; }
+        .ks-toggle-cell.ks-toggle-inactive { cursor: pointer; }
+
+        /* Toggle switch */
+        .ks-toggle { position: relative; width: 38px; height: 20px; flex-shrink: 0; pointer-events: none; }
+        .ks-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .ks-toggle-slider { position: absolute; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 20px; transition: var(--transition); }
+        .ks-toggle-slider::before { content: ""; position: absolute; height: 12px; width: 12px; left: 3px; top: 3px; background: var(--text-muted); border-radius: 50%; transition: var(--transition); }
+        .ks-toggle input:checked + .ks-toggle-slider { background: rgba(0,255,255,0.15); border-color: var(--accent-cyan); }
+        .ks-toggle input:checked + .ks-toggle-slider::before { transform: translateX(18px); background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
+
+        /* ── Activation Modal ── */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal { background: var(--bg-elevated); border: 1px solid var(--border-hover); border-radius: var(--radius); padding: 1.5rem; max-width: 420px; width: 90%; }
+        .modal-title { font-family: var(--font-mono); font-size: 1rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 1rem; }
+        .modal-body { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1rem; }
+        .modal-body strong { color: var(--text-primary); }
+        .modal-field { margin-bottom: 1.25rem; }
+        .modal-field label { display: block; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 0.4rem; }
+        .modal-field input { width: 100%; background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: var(--radius); padding: 0.5rem 0.75rem; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-primary); outline: none; }
+        .modal-field input:focus { border-color: var(--accent-cyan); }
+        .modal-error { font-size: 0.78rem; color: var(--accent-red); margin-bottom: 0.75rem; display: none; }
+        .modal-buttons { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .modal-btn { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600; padding: 0.5rem 1.25rem; border-radius: var(--radius); border: 1px solid; cursor: pointer; transition: var(--transition); }
+        .modal-btn-cancel { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
+        .modal-btn-cancel:hover { border-color: var(--border-hover); color: var(--text-primary); }
+        .modal-btn-confirm { background: rgba(0,255,255,0.1); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+        .modal-btn-confirm:hover { background: rgba(0,255,255,0.2); }
+
         /* ── Animations ── */
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
@@ -166,6 +210,12 @@
         <div class="header">
             <h1>PUZZLE POOL</h1>
             <div class="status-badge"><div class="status-dot"></div>ONLINE</div>
+        </div>
+
+        <!-- Keyspace navigation: tab strip + toggle strip (hidden when ≤1 puzzle) -->
+        <div id="ks-nav" style="display:none">
+            <div id="ks-tab-strip"></div>
+            <div id="ks-toggle-strip"></div>
         </div>
 
         <!-- Stat cards (Dynamic Flex Grid) -->
@@ -328,6 +378,27 @@
 
     </div>
 
+    <!-- Keyspace activation modal -->
+    <div class="modal-overlay" id="activate-modal" style="display:none">
+        <div class="modal">
+            <div class="modal-title">Switch keyspace?</div>
+            <div class="modal-body">
+                Activate <strong id="modal-puzzle-name"></strong>?<br>
+                Workers will receive chunks from this keyspace on their next request.
+                Active workers can still submit their current chunks.
+            </div>
+            <div class="modal-field">
+                <label>Admin token (leave empty if not configured)</label>
+                <input type="password" id="modal-token-input" placeholder="X-Admin-Token value">
+            </div>
+            <div class="modal-error" id="modal-error"></div>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>
+                <button class="modal-btn modal-btn-confirm" id="modal-confirm">Activate</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // ── Formatter Helpers ──
         function formatBigInt(s) {
@@ -354,6 +425,155 @@
             s = s.replace(/0+$/, '').replace(/\.$/, ''); // Strip trailing zeros
             return s + " %";
         }
+
+        // ── Keyspace Tabs ──
+        let pendingActivateId = null;
+        let _lastPuzzles = [];   // cache for optimistic re-render on activation
+        let selectedId    = null; // which tab the user is currently viewing
+
+        function openActivateModal(id, name) {
+            pendingActivateId = id;
+            document.getElementById('modal-puzzle-name').textContent = name;
+            document.getElementById('modal-token-input').value = sessionStorage.getItem('adminToken') || '';
+            document.getElementById('modal-error').style.display = 'none';
+            document.getElementById('activate-modal').style.display = 'flex';
+        }
+
+        async function activatePuzzle(id, name) {
+            const token = sessionStorage.getItem('adminToken') || '';
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['X-Admin-Token'] = token;
+            try {
+                const res = await fetch('/api/v1/admin/activate-puzzle', {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ id })
+                });
+                if (res.ok) {
+                    selectedId = id; // follow the newly activated puzzle
+                    renderKeyspaceTabs(_lastPuzzles.map(p =>
+                        ({...p, active: p.id === id ? 1 : 0})));
+                    updateDashboard(); // confirm from server
+                } else {
+                    // Any error (401 = bad token, 4xx/5xx) → open modal so user can review/enter token
+                    if (res.status === 401) sessionStorage.removeItem('adminToken');
+                    openActivateModal(id, name);
+                }
+            } catch (e) {
+                openActivateModal(id, name);
+            }
+        }
+
+        function renderKeyspaceTabs(puzzles) {
+            // Normalize active to strict boolean — guards against "0"/"1" strings,
+            // integers, or any other truthy/falsy surprise from the API.
+            const normalized = (puzzles || []).map(p => ({
+                ...p,
+                active: p.active === true || p.active === 1 || p.active === '1'
+            }));
+
+            // Pool-active puzzle (the one workers are actually assigned to).
+            const poolActive = normalized.find(p => p.active) || normalized[0];
+            const poolActiveId = poolActive ? poolActive.id : null;
+
+            _lastPuzzles = normalized;
+
+            // selectedId tracks which tab the user is viewing.
+            // Initialise to pool-active on first render; reset if that puzzle disappeared.
+            if (selectedId === null) selectedId = poolActiveId;
+            if (selectedId !== null && !normalized.find(p => p.id === selectedId)) {
+                selectedId = poolActiveId;
+            }
+
+            const nav      = document.getElementById('ks-nav');
+            const tabStrip = document.getElementById('ks-tab-strip');
+            const togStrip = document.getElementById('ks-toggle-strip');
+            const header   = document.querySelector('.header');
+
+            if (normalized.length <= 1) {
+                nav.style.display = 'none';
+                header.classList.remove('has-ks-tabs');
+                tabStrip.innerHTML = '';
+                togStrip.innerHTML = '';
+                return;
+            }
+
+            nav.style.display = 'block';
+            header.classList.add('has-ks-tabs');
+
+            const gridCols = `repeat(${normalized.length}, 1fr)`;
+            tabStrip.style.gridTemplateColumns = gridCols;
+            togStrip.style.gridTemplateColumns = gridCols;
+
+            // Tab strip — selected (viewed) tab is highlighted cyan
+            tabStrip.innerHTML = normalized.map(p =>
+                `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
+            ).join('');
+
+            // Toggle strip — ONE cell under the selected tab only.
+            // ON  (checked)   if the selected puzzle is also the pool-active puzzle.
+            // OFF (unchecked) if the selected puzzle is NOT the pool-active puzzle.
+            const selIdx  = normalized.findIndex(p => p.id === selectedId);
+            const isOn    = selectedId === poolActiveId;
+            const selName = normalized[selIdx] ? normalized[selIdx].name : '';
+            togStrip.innerHTML = `<div class="ks-toggle-cell${isOn ? '' : ' ks-toggle-inactive'}"
+                  style="grid-column:${selIdx + 1}" data-id="${selectedId}">
+                <label class="ks-toggle">
+                    <input type="checkbox"${isOn ? ' checked' : ''} disabled>
+                    <span class="ks-toggle-slider"></span>
+                </label>
+            </div>`;
+
+            // Inactive tab click → switch view (no pool activation)
+            tabStrip.querySelectorAll('.ks-tab:not(.active)').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    selectedId = Number(tab.dataset.id);
+                    renderKeyspaceTabs(_lastPuzzles);
+                    updateDashboard();
+                });
+            });
+
+            // OFF toggle click → show confirmation modal (modal confirm does the actual activation)
+            togStrip.querySelectorAll('.ks-toggle-inactive').forEach(cell => {
+                cell.addEventListener('click', () =>
+                    openActivateModal(Number(cell.dataset.id), selName));
+            });
+        }
+
+        document.getElementById('modal-cancel').addEventListener('click', () => {
+            document.getElementById('activate-modal').style.display = 'none';
+            pendingActivateId = null;
+        });
+
+        document.getElementById('modal-confirm').addEventListener('click', async () => {
+            const token = document.getElementById('modal-token-input').value.trim();
+            const errEl = document.getElementById('modal-error');
+            errEl.style.display = 'none';
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['X-Admin-Token'] = token;
+            try {
+                const res = await fetch('/api/v1/admin/activate-puzzle', {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ id: pendingActivateId })
+                });
+                if (res.ok) {
+                    if (token) sessionStorage.setItem('adminToken', token);
+                    document.getElementById('activate-modal').style.display = 'none';
+                    selectedId = pendingActivateId; // follow the newly activated puzzle
+                    renderKeyspaceTabs(_lastPuzzles.map(p =>
+                        ({...p, active: p.id === pendingActivateId ? 1 : 0})));
+                    pendingActivateId = null;
+                    updateDashboard();
+                } else {
+                    const err = await res.json();
+                    errEl.textContent = err.error || `Error ${res.status}`;
+                    errEl.style.display = 'block';
+                    if (res.status === 401) sessionStorage.removeItem('adminToken');
+                }
+            } catch (e) {
+                errEl.textContent = 'Request failed: ' + e.message;
+                errEl.style.display = 'block';
+            }
+        });
 
         function formatETA(totalKeys, keysCompleted, hashrate) {
             if (hashrate <= 0) return '∞';
@@ -611,9 +831,11 @@
         // ── Fetch & Update ──
         async function updateDashboard() {
             try {
-                const res = await fetch('/api/v1/stats');
+                const url = selectedId !== null ? `/api/v1/stats?puzzle_id=${selectedId}` : '/api/v1/stats';
+                const res = await fetch(url);
                 const data = await res.json();
 
+                renderKeyspaceTabs(data.puzzles || []);
                 document.getElementById('total-hashrate').textContent = formatHashrate(data.total_hashrate);
                 document.getElementById('active-workers').textContent = data.active_workers_count;
                 document.getElementById('completed-chunks').textContent = data.completed_chunks.toLocaleString();
