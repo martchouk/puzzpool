@@ -448,12 +448,12 @@
                 });
                 if (res.ok) {
                     updateDashboard();
-                } else if (res.status === 401) {
-                    // Token missing or wrong — fall back to modal so user can enter it
+                } else {
+                    // Any error (401 = bad token, 4xx/5xx) → open modal so user can review/enter token
+                    if (res.status === 401) sessionStorage.removeItem('adminToken');
                     openActivateModal(id, name);
                 }
             } catch (e) {
-                // Network error — open modal so user can retry
                 openActivateModal(id, name);
             }
         }
