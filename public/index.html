@@ -433,9 +433,9 @@
             if (_stageSet) return;
             _stageSet = true;
             if (stage !== 'TEST') return;
-            // Swap favicon circle from Bitcoin orange (#F7931A) to cyan (#00ffff)
+            // Swap favicon: cyan circle + black symbol (instead of orange circle + white symbol)
             const link = document.querySelector('link[rel="icon"]');
-            if (link) link.href = link.href.replace('%23F7931A', '%2300ffff');
+            if (link) link.href = link.href.replace('%23F7931A', '%2300ffff').replace('%23FFF', '%23000');
         }
 
         // ── Keyspace Tabs ──
