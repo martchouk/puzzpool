@@ -291,6 +291,7 @@ app.get('/api/v1/stats', (req, res) => {
     const allPuzzles = db.prepare("SELECT id, name, active FROM puzzles ORDER BY id ASC").all();
 
     res.json({
+        stage: process.env.STAGE || 'PROD',
         puzzles: allPuzzles,
         puzzle: puzzle ? {
             id: puzzle.id,

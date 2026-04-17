@@ -427,6 +427,17 @@
             return s + " %";
         }
 
+        // ── Stage / Favicon ──
+        let _stageSet = false;
+        function applyStage(stage) {
+            if (_stageSet) return;
+            _stageSet = true;
+            if (stage !== 'TEST') return;
+            // Swap favicon circle from Bitcoin orange (#F7931A) to cyan (#00ffff)
+            const link = document.querySelector('link[rel="icon"]');
+            if (link) link.href = link.href.replace('%23F7931A', '%2300ffff');
+        }
+
         // ── Keyspace Tabs ──
         let pendingActivateId = null;
         let _lastPuzzles = [];   // cache for optimistic re-render on activation
@@ -839,6 +850,7 @@
                 const res = await fetch(url);
                 const data = await res.json();
 
+                applyStage(data.stage);
                 renderKeyspaceTabs(data.puzzles || []);
                 document.getElementById('total-hashrate').textContent = formatHashrate(data.total_hashrate);
                 document.getElementById('active-workers').textContent = data.active_workers_count;
