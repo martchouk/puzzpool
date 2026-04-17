@@ -248,6 +248,7 @@
             <div class="frontier-label" id="puzzle-name">Active Puzzle</div>
             <div id="frontier" class="frontier-value">Loading...</div>
             <div id="puzzle-total-keys" class="stat-subtext"></div>
+            <div id="puzzle-eta" class="stat-subtext"></div>
         </div>
 
         <!-- 1D Keyspace Bar -->
@@ -579,9 +580,12 @@
             if (hashrate <= 0) return '∞';
             const remaining = BigInt(totalKeys) - BigInt(keysCompleted);
             if (remaining <= 0n) return 'Complete';
+            // Use BigInt arithmetic to avoid float overflow on universe-scale keyspaces
+            const remainingYears = remaining / BigInt(Math.round(hashrate * 365.25 * 86400));
+            if (remainingYears > 999_999_999_999n) return '> 1 trillion years';
+            if (remainingYears > 0n) return `~${formatBigInt(remainingYears.toString())} years`;
             const etaSec = Number(remaining) / hashrate;
-            const MINUTE = 60, HOUR = 3600, DAY = 86400, YEAR = 365.25 * DAY;
-            if (etaSec >= YEAR)   return `~${Math.round(etaSec / YEAR)} years`;
+            const MINUTE = 60, HOUR = 3600, DAY = 86400;
             if (etaSec >= DAY)    return `~${Math.round(etaSec / DAY)} days`;
             if (etaSec >= HOUR)   return `~${Math.round(etaSec / HOUR)} hours`;
             if (etaSec >= MINUTE) return `~${Math.round(etaSec / MINUTE)} min`;
@@ -845,7 +849,8 @@
                 // Precision Percentage Calculation & Total Keys Update
                 if (data.puzzle && data.puzzle.total_keys) {
                     document.getElementById('puzzle-name').textContent = data.puzzle.name;
-                    document.getElementById('frontier').textContent = `0x${data.puzzle.start_hex.replace(/^0+/, '')} … 0x${data.puzzle.end_hex.replace(/^0+/, '')}`;
+                    const trimHex = h => { const s = h.replace(/^0+/, '') || '0'; return s.length > 16 ? s.slice(0, 8) + '…' + s.slice(-6) : s; };
+                    document.getElementById('frontier').textContent = `0x${trimHex(data.puzzle.start_hex)} … 0x${trimHex(data.puzzle.end_hex)}`;
                     
                     const totalP = BigInt(data.puzzle.total_keys);
                     const comp = BigInt(data.total_keys_completed);
@@ -858,7 +863,8 @@
                     }
 
                     const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
-                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)} | ETA: ${eta}`;
+                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)}`;
+                    document.getElementById('puzzle-eta').textContent = `ETA: ${eta}`;
                 }
 
                 g_chunks_vis = data.chunks_vis || [];

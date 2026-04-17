@@ -82,6 +82,7 @@ See [docs/api.md](docs/api.md) for full request/response schemas.
 | `POST` | `/api/v1/heartbeat` | Reset reclaim timer for long jobs |
 | `GET`  | `/api/v1/stats` | Dashboard data |
 | `POST` | `/api/v1/admin/set-puzzle` | Create / activate a puzzle |
+| `POST` | `/api/v1/admin/activate-puzzle` | Switch the active puzzle by ID |
 | `POST` | `/api/v1/admin/set-test-chunk` | Set verification chunk for new workers |
 | `GET`  | `/api/v1/admin/puzzles` | List all puzzles |
 
@@ -102,6 +103,7 @@ cp .env.example .env
 | `TARGET_MINUTES` | `5` | Expected time to complete one chunk |
 | `TIMEOUT_MINUTES` | `15` | Minutes before an inactive chunk is reclaimed |
 | `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
+| `KEYSPACE_<NAME>` | *(unset)* | Seed a keyspace on startup: `KEYSPACE_ALL_BTC=<start_hex>:<end_hex>`. Underscores in the variable name become spaces in the puzzle name. Multiple variables are supported. |
 
 ---
 
