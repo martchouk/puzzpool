@@ -208,7 +208,7 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>PUZZLE POOL</h1>
+            <h1>PUZZLE POOL <span id="stage-label" style="display:none;font-size:0.75rem;color:var(--accent-red);font-weight:600;letter-spacing:0.08em;">/test system/</span></h1>
             <div class="status-badge"><div class="status-dot"></div>ONLINE</div>
         </div>
 
@@ -436,6 +436,8 @@
             // Swap favicon: cyan circle + black symbol (instead of orange circle + white symbol)
             const link = document.querySelector('link[rel="icon"]');
             if (link) link.href = link.href.replace('%23F7931A', '%2300ffff').replace('%23FFF', '%23000');
+            // Show test label in header
+            document.getElementById('stage-label').style.display = 'inline';
         }
 
         // ── Keyspace Tabs ──
