@@ -176,31 +176,46 @@ See [docs/testing.md](docs/testing.md) for test scenarios and manual verificatio
 
 ---
 
-## Contributing
+## Branching strategy
 
-### Branch naming
+| Branch | Purpose |
+|--------|---------|
+| `main` | Production-ready code. Always matches what runs on prod. |
+| `dev` | Active development. Test server always tracks this branch. |
+| `feat/<topic>` | Optional isolation for large or risky changes — branch off `dev`, PR back into `dev`. |
 
-| Prefix | Use |
-|--------|-----|
-| `feat/` | New features |
-| `fix/` | Bug fixes |
-| `docs/` | Documentation only |
+```
+feat/xyz  ●──●──●
+                ↓ PR → dev
+dev       ●─────●──●──●──●
+                          ↓ PR → main (after tester approval)
+main      ●───────────────●  ← tag v1.x
+```
 
-### Workflow
+### Day-to-day workflow
 
-1. Fork the repo and create a branch from `main`
-2. Make your changes — add tests for new behaviour
-3. Run `npm test` and `npm run lint` — both must pass
-4. If you changed API routes, update `docs/api.md`
-5. Open a Pull Request — fill in the PR template checklist
-6. CI runs automatically; a maintainer will review within a few days
-7. Approved PRs are squash-merged into `main` and auto-deployed
+- **Small changes** — commit directly to `dev`; test server picks them up on next deploy
+- **Larger/risky changes** — open a `feat/` branch off `dev`, get it reviewed, merge to `dev`
+- **Ship to prod** — open a PR from `dev → main`; merge after tester confirms; tag the release
+
+### Tagging releases
+
+```bash
+git tag v1.x && git push origin v1.x
+```
+
+### Deployment
+
+| Environment | Tracks | Update command |
+|-------------|--------|----------------|
+| Test server | `dev` | `git pull origin dev` (in `update.sh`) |
+| Production  | `main` | `git pull origin main` (in `update.sh`) |
 
 ### Review process
 
 - `main` is protected — requires 1 approval and passing CI
 - The `/review-pr` Claude skill can generate a structured review draft
-- All review conversations must be resolved before merge
+- If you changed API routes, update `docs/api.md` in the same commit
 - Security issues: use GitHub's **private vulnerability reporting** (Security tab)
 
 ---
