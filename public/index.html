@@ -62,6 +62,7 @@
             margin-bottom: 2.5rem;
             padding-bottom: 1.5rem;
             border-bottom: 1px solid var(--border-default);
+            position: relative;
         }
 
         .header h1 { font-family: var(--font-mono); font-size: 1.75rem; font-weight: 700; color: var(--accent-cyan); text-shadow: 0 0 20px var(--accent-cyan-glow); letter-spacing: 0.05em; }
@@ -208,7 +209,8 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>PUZZLE POOL <span id="stage-label" style="display:none;font-size:0.75rem;color:var(--accent-red);font-weight:600;letter-spacing:0.08em;">/test system/</span></h1>
+            <h1>PUZZLE POOL</h1>
+            <span id="stage-label" style="display:none;position:absolute;left:50%;transform:translateX(-50%);font-family:var(--font-mono);font-size:1.45rem;font-weight:700;color:var(--accent-red);letter-spacing:0.05em;">/TEST SYSTEM/</span>
             <div class="status-badge"><div class="status-dot"></div>ONLINE</div>
         </div>
 
