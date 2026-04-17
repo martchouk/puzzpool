@@ -863,10 +863,7 @@
                     }
 
                     const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
-                    const totalKeysStr = data.puzzle.total_keys.length > 20
-                        ? Number(BigInt(data.puzzle.total_keys)).toExponential(4)
-                        : formatBigInt(data.puzzle.total_keys);
-                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${totalKeysStr}`;
+                    document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)}`;
                     document.getElementById('puzzle-eta').textContent = `ETA: ${eta}`;
                 }
 
