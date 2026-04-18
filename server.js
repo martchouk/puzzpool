@@ -66,25 +66,6 @@ function createApp(db) {
     app.use(express.static('public'));
 
     // Optional admin token guard — enabled only when ADMIN_TOKEN env var is set.
-    // activate-puzzle is registered before this middleware so tab clicks in the
-    // dashboard can switch puzzles without a token (nginx already restricts access).
-    app.post('/api/v1/admin/activate-puzzle', (req, res) => {
-        const { id } = req.body;
-        if (!id) return res.status(400).json({ error: 'Missing id' });
-
-        const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
-        if (!target) return res.status(404).json({ error: 'Puzzle not found' });
-
-        db.transaction(() => {
-            db.prepare("UPDATE puzzles SET active = 0").run();
-            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
-        })();
-
-        const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
-        console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
-        res.json({ ok: true, puzzle });
-    });
-
     if (process.env.ADMIN_TOKEN) {
         app.use('/api/v1/admin', (req, res, next) => {
             if (req.headers['x-admin-token'] === process.env.ADMIN_TOKEN) return next();
@@ -424,7 +405,25 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     res.json({ ok: true, test_chunk: { start_hex: startNorm, end_hex: endNorm } });
 });
 
-// 6. Admin: list all puzzles
+// 6. Admin: switch active puzzle
+    app.post('/api/v1/admin/activate-puzzle', (req, res) => {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: 'Missing id' });
+
+        const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        if (!target) return res.status(404).json({ error: 'Puzzle not found' });
+
+        db.transaction(() => {
+            db.prepare("UPDATE puzzles SET active = 0").run();
+            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
+        })();
+
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
+        res.json({ ok: true, puzzle });
+    });
+
+// 7. Admin: list all puzzles
     app.get('/api/v1/admin/puzzles', (req, res) => {
         const puzzles = db.prepare("SELECT * FROM puzzles ORDER BY id ASC").all();
         res.json({ puzzles });
