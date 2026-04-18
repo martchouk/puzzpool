@@ -131,11 +131,17 @@ app.post('/api/v1/work', (req, res) => {
             `).get(puzzle.id, puzzle.test_start_hex);
 
             if (testReclaimed) {
-                chunkId  = testReclaimed.id;
-                startHex = testReclaimed.start_hex;
-                endHex   = testReclaimed.end_hex;
-                db.prepare("UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .run(name, chunkId);
+                const assigned = db.prepare(`
+                    UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+                    WHERE id = (
+                        SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1
+                    )
+                    RETURNING *
+                `).get(name, puzzle.id, puzzle.test_start_hex);
+                if (!assigned) return res.status(503).json({ error: "No work available" });
+                chunkId  = assigned.id;
+                startHex = assigned.start_hex;
+                endHex   = assigned.end_hex;
             } else {
                 startHex = puzzle.test_start_hex;
                 endHex   = puzzle.test_end_hex;
@@ -151,17 +157,19 @@ app.post('/api/v1/work', (req, res) => {
         }
     }
 
-    // PRIORITY 2: Reissue reclaimed (timed-out) chunks
-    const reclaimed = db.prepare(
-        "SELECT * FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? LIMIT 1"
-    ).get(puzzle.id);
+    // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign
+    const reclaimed = db.prepare(`
+        UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+        WHERE id = (
+            SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? LIMIT 1
+        )
+        RETURNING *
+    `).get(name, puzzle.id);
 
     if (reclaimed) {
         chunkId  = reclaimed.id;
         startHex = reclaimed.start_hex;
         endHex   = reclaimed.end_hex;
-        db.prepare("UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .run(name, chunkId);
     } else {
         // PRIORITY 3: New random chunk
         ({ chunkId, startHex, endHex } = assignRandomChunk(name, hashrate, puzzle));
