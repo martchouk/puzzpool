@@ -66,25 +66,6 @@ function createApp(db) {
     app.use(express.static('public'));
 
     // Optional admin token guard — enabled only when ADMIN_TOKEN env var is set.
-    // activate-puzzle is registered before this middleware so tab clicks in the
-    // dashboard can switch puzzles without a token (nginx already restricts access).
-    app.post('/api/v1/admin/activate-puzzle', (req, res) => {
-        const { id } = req.body;
-        if (!id) return res.status(400).json({ error: 'Missing id' });
-
-        const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
-        if (!target) return res.status(404).json({ error: 'Puzzle not found' });
-
-        db.transaction(() => {
-            db.prepare("UPDATE puzzles SET active = 0").run();
-            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
-        })();
-
-        const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
-        console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
-        res.json({ ok: true, puzzle });
-    });
-
     if (process.env.ADMIN_TOKEN) {
         app.use('/api/v1/admin', (req, res, next) => {
             if (req.headers['x-admin-token'] === process.env.ADMIN_TOKEN) return next();
@@ -131,11 +112,17 @@ app.post('/api/v1/work', (req, res) => {
             `).get(puzzle.id, puzzle.test_start_hex);
 
             if (testReclaimed) {
-                chunkId  = testReclaimed.id;
-                startHex = testReclaimed.start_hex;
-                endHex   = testReclaimed.end_hex;
-                db.prepare("UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .run(name, chunkId);
+                const assigned = db.prepare(`
+                    UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+                    WHERE id = (
+                        SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1
+                    )
+                    RETURNING *
+                `).get(name, puzzle.id, puzzle.test_start_hex);
+                if (!assigned) return res.status(503).json({ error: "No work available" });
+                chunkId  = assigned.id;
+                startHex = assigned.start_hex;
+                endHex   = assigned.end_hex;
             } else {
                 startHex = puzzle.test_start_hex;
                 endHex   = puzzle.test_end_hex;
@@ -151,17 +138,19 @@ app.post('/api/v1/work', (req, res) => {
         }
     }
 
-    // PRIORITY 2: Reissue reclaimed (timed-out) chunks
-    const reclaimed = db.prepare(
-        "SELECT * FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? LIMIT 1"
-    ).get(puzzle.id);
+    // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign
+    const reclaimed = db.prepare(`
+        UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+        WHERE id = (
+            SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? LIMIT 1
+        )
+        RETURNING *
+    `).get(name, puzzle.id);
 
     if (reclaimed) {
         chunkId  = reclaimed.id;
         startHex = reclaimed.start_hex;
         endHex   = reclaimed.end_hex;
-        db.prepare("UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .run(name, chunkId);
     } else {
         // PRIORITY 3: New random chunk
         ({ chunkId, startHex, endHex } = assignRandomChunk(name, hashrate, puzzle));
@@ -223,9 +212,27 @@ app.get('/api/v1/stats', (req, res) => {
         WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
     `).all(pid) : [];
 
+    // Merge overlapping intervals before summing to avoid double-counting reclaimed/re-issued chunks
     let totalKeysCompleted = 0n;
-    for (const c of doneChunks) {
-        totalKeysCompleted += BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex);
+    if (doneChunks.length > 0) {
+        const sorted = [...doneChunks].sort((a, b) => {
+            const diff = BigInt('0x' + a.start_hex) - BigInt('0x' + b.start_hex);
+            return diff < 0n ? -1 : diff > 0n ? 1 : 0;
+        });
+        let mergeStart = BigInt('0x' + sorted[0].start_hex);
+        let mergeEnd   = BigInt('0x' + sorted[0].end_hex);
+        for (let i = 1; i < sorted.length; i++) {
+            const s = BigInt('0x' + sorted[i].start_hex);
+            const e = BigInt('0x' + sorted[i].end_hex);
+            if (s <= mergeEnd) {
+                if (e > mergeEnd) mergeEnd = e;
+            } else {
+                totalKeysCompleted += mergeEnd - mergeStart;
+                mergeStart = s;
+                mergeEnd   = e;
+            }
+        }
+        totalKeysCompleted += mergeEnd - mergeStart;
     }
 
     const workerStats = {};
@@ -398,7 +405,25 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     res.json({ ok: true, test_chunk: { start_hex: startNorm, end_hex: endNorm } });
 });
 
-// 6. Admin: list all puzzles
+// 6. Admin: switch active puzzle
+    app.post('/api/v1/admin/activate-puzzle', (req, res) => {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: 'Missing id' });
+
+        const target = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        if (!target) return res.status(404).json({ error: 'Puzzle not found' });
+
+        db.transaction(() => {
+            db.prepare("UPDATE puzzles SET active = 0").run();
+            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
+        })();
+
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
+        console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
+        res.json({ ok: true, puzzle });
+    });
+
+// 7. Admin: list all puzzles
     app.get('/api/v1/admin/puzzles', (req, res) => {
         const puzzles = db.prepare("SELECT * FROM puzzles ORDER BY id ASC").all();
         res.json({ puzzles });
