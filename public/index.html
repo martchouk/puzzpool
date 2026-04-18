@@ -580,8 +580,9 @@
                     pendingActivateId = null;
                     updateDashboard();
                 } else {
-                    const err = await res.json();
-                    errEl.textContent = err.error || `Error ${res.status}`;
+                    let msg = `Error ${res.status}`;
+                    try { const err = await res.json(); msg = err.error || msg; } catch (_) {}
+                    errEl.textContent = msg;
                     errEl.style.display = 'block';
                     if (res.status === 401) sessionStorage.removeItem('adminToken');
                 }
