@@ -275,6 +275,141 @@ describe('GET /api/v1/stats puzzles field', () => {
     });
 });
 
+// ─── Sharded Frontier Allocator ──────────────────────────────────────────────
+
+describe('Sharded Frontier Allocator', () => {
+    test('1. no-overlap: fresh assignments do not share any key', async () => {
+        seedPuzzle(db);
+        const chunks = [];
+        for (let i = 0; i < 3; i++) {
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1000000 });
+            if (r.status === 200) chunks.push(r.body);
+        }
+        expect(chunks.length).toBe(3);
+        for (let i = 0; i < chunks.length; i++) {
+            for (let j = i + 1; j < chunks.length; j++) {
+                const aStart = BigInt('0x' + chunks[i].start_key);
+                const aEnd   = BigInt('0x' + chunks[i].end_key);
+                const bStart = BigInt('0x' + chunks[j].start_key);
+                const bEnd   = BigInt('0x' + chunks[j].end_key);
+                expect(aStart < bEnd && bStart < aEnd).toBe(false);
+            }
+        }
+    });
+
+    test('2. sector boundary: chunk capped at sector end, next starts exactly there', async () => {
+        // hashrate=1 → chunk = 1 × 5 × 60 = 300 keys; puzzle range = 1000 → 2 chunks fit
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
+
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        expect(r1.status).toBe(200);
+        expect(r2.status).toBe(200);
+        expect(r1.body.start_key).toBe('0'.repeat(64));
+        expect(r2.body.start_key).toBe(r1.body.end_key);
+    });
+
+    test('3. exhaustion: 503 when all sectors are done', async () => {
+        // range=100 < 300 (chunk at hashrate=1) → first request covers entire sector
+        const end = (100n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
+
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 }).expect(200);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        expect(r.status).toBe(503);
+        expect(r.body.error).toMatch(/all keyspace/i);
+    });
+
+    test('4. reclaim priority: reclaimed chunk offered before fresh sector allocation', async () => {
+        seedPuzzle(db);
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
+        const reclaimedInfo = db.prepare(`
+            INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
+            VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP)
+        `).run(puzzle.id, '0'.repeat(64), (1n).toString(16).padStart(64, '0'));
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        expect(r.body.job_id).toBe(reclaimedInfo.lastInsertRowid);
+
+        // Sector frontier must not have moved — reclaim took priority
+        const sector = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ?").get(puzzle.id);
+        expect(sector.current_hex).toBe(sector.start_hex);
+    });
+
+    test('5. progress accounting: overlapping done chunks not double-counted', async () => {
+        seedPuzzle(db);
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
+        // [0, 300) and [200, 500) → merged [0, 500) = 500 keys, not 600
+        const s1 = '0'.repeat(64);
+        const e1 = (300n).toString(16).padStart(64, '0');
+        const s2 = (200n).toString(16).padStart(64, '0');
+        const e2 = (500n).toString(16).padStart(64, '0');
+        db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name) VALUES (?, ?, ?, 'completed', 'w1')")
+            .run(puzzle.id, s1, e1);
+        db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name) VALUES (?, ?, ?, 'completed', 'w2')")
+            .run(puzzle.id, s2, e2);
+
+        const stats = await request(app).get('/api/v1/stats');
+        expect(stats.body.total_keys_completed).toBe('500');
+    });
+
+    test('6. puzzle range change: creates new puzzle row, old data stays on old id', async () => {
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
+        const p1 = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
+        const p1Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p1.id).c;
+        expect(p1Sectors).toBe(1);
+
+        // Change range → new puzzle row
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x300', end_hex: '0x400' });
+        const p2 = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
+
+        expect(p2.id).not.toBe(p1.id);
+        expect(p2.start_hex).toContain('3');   // normalized 0x300
+        const p2Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p2.id).c;
+        expect(p2Sectors).toBe(1);
+        // Old row still exists and is inactive
+        const p1Row = db.prepare("SELECT * FROM puzzles WHERE id=?").get(p1.id);
+        expect(p1Row).toBeTruthy();
+        expect(p1Row.active).toBe(0);
+    });
+
+    test('7. consecutive allocations return non-overlapping sequential ranges', async () => {
+        seedPuzzle(db);
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+        expect(r1.status).toBe(200);
+        expect(r2.status).toBe(200);
+        expect(r2.body.start_key).toBe(r1.body.end_key);
+    });
+
+    test('8. stats reset: new puzzle_id shows no chunks from previous range', async () => {
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        await request(app).post('/api/v1/submit').send({ name: 'w1', job_id: r.body.job_id, status: 'done' });
+
+        // Change range → new puzzle row
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x300', end_hex: '0x400' });
+
+        const stats = await request(app).get('/api/v1/stats');
+        expect(stats.body.total_keys_completed).toBe('0');
+        expect(stats.body.completed_chunks).toBe(0);
+    });
+
+    test('9. invalid range: set-puzzle rejects end_hex <= start_hex', async () => {
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x200', end_hex: '0x200' })
+            .expect(400);
+        await request(app).post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x300', end_hex: '0x100' })
+            .expect(400);
+    });
+});
+
 // ─── Admin: ADMIN_TOKEN auth ──────────────────────────────────────────────────
 
 describe('ADMIN_TOKEN middleware', () => {

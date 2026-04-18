@@ -29,24 +29,78 @@ function randomBigIntInRange(min, max) {
     return min + (n % range);
 }
 
+// Divide puzzle keyspace into sectors with independent frontiers.
+// All intervals are half-open [start, end). numSectors clamped to [1, TARGET_SECTORS].
+function seedSectors(db, puzzleId, startHex, endHex) {
+    const TARGET_SECTORS  = 65536n;
+    const MIN_SECTOR_SIZE = 1_000_000_000n;
+
+    const start = BigInt('0x' + startHex);
+    const end   = BigInt('0x' + endHex);
+    const range = end - start;
+    if (range <= 0n) throw new Error('Puzzle range must be > 0');
+
+    let numSectors = range / MIN_SECTOR_SIZE;
+    if (numSectors < 1n)             numSectors = 1n;
+    if (numSectors > TARGET_SECTORS) numSectors = TARGET_SECTORS;
+
+    const sectorSize = range / numSectors;
+    const stmt = db.prepare(
+        "INSERT INTO sectors (puzzle_id, start_hex, end_hex, current_hex, status) VALUES (?, ?, ?, ?, 'open')"
+    );
+
+    db.transaction(() => {
+        for (let i = 0n; i < numSectors; i++) {
+            const s = start + i * sectorSize;
+            const e = (i === numSectors - 1n) ? end : s + sectorSize;
+            const sHex = s.toString(16).padStart(64, '0');
+            const eHex = e.toString(16).padStart(64, '0');
+            stmt.run(puzzleId, sHex, eHex, sHex);
+        }
+    })();
+
+    console.log(`[System] Seeded ${numSectors} sectors for puzzle ${puzzleId}`);
+}
+
 // --- App factory (accepts db for testability) ---
 
 function createApp(db) {
-    // Assign a chunk at a random position within the active puzzle range.
+    // Assign the next chunk from the sector frontier.
+    // Uses BEGIN IMMEDIATE so the write lock is acquired before the SELECT read,
+    // preventing two concurrent connections from observing the same open sector.
+    // Returns null when all sectors are exhausted (caller should respond 503).
+    // ORDER BY RANDOM() is a deliberate tradeoff — acceptable at ≤65,536 rows.
     const assignRandomChunk = db.transaction((name, hashrate, puzzle) => {
-        const stored = db.prepare("SELECT hashrate FROM workers WHERE name = ?").get(name);
-        const hashrateBig = BigInt(Math.floor(hashrate || stored?.hashrate || 1000000));
-        const chunkSize = hashrateBig * BigInt(TARGET_MINUTES * 60);
+        const sector = db.prepare(
+            "SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1"
+        ).get(puzzle.id);
+        if (!sector) return null;
 
-        const puzzleStart = BigInt('0x' + puzzle.start_hex);
-        const puzzleEnd   = BigInt('0x' + puzzle.end_hex);
+        const stored      = db.prepare("SELECT hashrate FROM workers WHERE name = ?").get(name);
+        const hashrateBig = BigInt(Math.floor(hashrate || stored?.hashrate || 1_000_000));
+        const chunkSize   = hashrateBig * BigInt(TARGET_MINUTES * 60);
 
-        const effectiveChunk = chunkSize < (puzzleEnd - puzzleStart) ? chunkSize : (puzzleEnd - puzzleStart);
-        const start = randomBigIntInRange(puzzleStart, puzzleEnd - effectiveChunk + 1n);
-        const end   = start + effectiveChunk;
+        const current   = BigInt('0x' + sector.current_hex);
+        const sectorEnd = BigInt('0x' + sector.end_hex);
+        const effective = chunkSize < (sectorEnd - current) ? chunkSize : (sectorEnd - current);
 
-        const startHex = start.toString(16).padStart(64, '0');
-        const endHex   = end.toString(16).padStart(64, '0');
+        // Defensive guard: sector should not be open with no space remaining
+        if (effective <= 0n) {
+            db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?")
+                .run(sector.id);
+            return null;
+        }
+
+        const startHex = current.toString(16).padStart(64, '0');
+        const endHex   = (current + effective).toString(16).padStart(64, '0');
+
+        if (current + effective >= sectorEnd) {
+            db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?")
+                .run(sector.id);
+        } else {
+            db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?")
+                .run(endHex, sector.id);
+        }
 
         const info = db.prepare(`
             INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
@@ -139,7 +193,8 @@ app.post('/api/v1/work', (req, res) => {
         }
     }
 
-    // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign
+    // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign.
+    // Sector frontiers are never rolled back on reclaim; chunks table is the reissue source.
     const reclaimed = db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
         WHERE id = (
@@ -153,8 +208,11 @@ app.post('/api/v1/work', (req, res) => {
         startHex = reclaimed.start_hex;
         endHex   = reclaimed.end_hex;
     } else {
-        // PRIORITY 3: New random chunk
-        ({ chunkId, startHex, endHex } = assignRandomChunk(name, hashrate, puzzle));
+        // PRIORITY 3: Fresh allocation from sector frontier (BEGIN IMMEDIATE — write lock acquired
+        // before the sector SELECT so two concurrent connections cannot pick the same sector)
+        const result = assignRandomChunk.immediate(name, hashrate, puzzle);
+        if (!result) return res.status(503).json({ error: 'All keyspace has been assigned' });
+        ({ chunkId, startHex, endHex } = result);
     }
 
     res.json({ job_id: chunkId, start_key: startHex, end_key: endHex });
@@ -213,7 +271,9 @@ app.get('/api/v1/stats', (req, res) => {
         WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
     `).all(pid) : [];
 
-    // Merge overlapping intervals before summing to avoid double-counting reclaimed/re-issued chunks
+    // Merge overlapping intervals before summing. After the sector-frontier migration,
+    // fresh allocations never overlap; merging is retained to correctly handle duplicate
+    // history rows that can arise from reclaimed chunk reissue.
     let totalKeysCompleted = 0n;
     if (doneChunks.length > 0) {
         const sorted = [...doneChunks].sort((a, b) => {
@@ -343,7 +403,9 @@ app.post('/api/v1/heartbeat', (req, res) => {
     res.json({ ok: true });
 });
 
-// 5. Admin: switch active puzzle (or create + activate a new one)
+// 5. Admin: switch active puzzle (or create + activate a new one).
+// When the range changes for an existing named puzzle, a new puzzle row is inserted
+// so that old chunk history stays attached to the old puzzle_id and /stats remains correct.
 app.post('/api/v1/admin/set-puzzle', (req, res) => {
     const { name, start_hex, end_hex } = req.body;
     if (!name || !start_hex || !end_hex) {
@@ -356,15 +418,28 @@ app.post('/api/v1/admin/set-puzzle', (req, res) => {
     const startNorm = start_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
     const endNorm   = end_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
 
+    if (BigInt('0x' + endNorm) <= BigInt('0x' + startNorm)) {
+        return res.status(400).json({ error: "end_hex must be greater than start_hex" });
+    }
+
     db.transaction(() => {
         db.prepare("UPDATE puzzles SET active = 0").run();
-        const existing = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
-        if (existing) {
-            db.prepare("UPDATE puzzles SET start_hex = ?, end_hex = ?, active = 1 WHERE id = ?")
-                .run(startNorm, endNorm, existing.id);
+        const existing = db.prepare("SELECT * FROM puzzles WHERE name = ?").get(name);
+
+        let puzzleId;
+        if (existing && existing.start_hex === startNorm && existing.end_hex === endNorm) {
+            // Same range — reactivate; seed sectors only if missing (idempotent on restart)
+            db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(existing.id);
+            puzzleId = existing.id;
+            const count = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id = ?").get(puzzleId).c;
+            if (count === 0) seedSectors(db, puzzleId, startNorm, endNorm);
         } else {
-            db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
-                .run(name, startNorm, endNorm);
+            // New puzzle or changed range — create a new row so old chunk history is preserved
+            const info = db.prepare(
+                "INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)"
+            ).run(name, startNorm, endNorm);
+            puzzleId = info.lastInsertRowid;
+            seedSectors(db, puzzleId, startNorm, endNorm);
         }
     })();
 
@@ -373,7 +448,7 @@ app.post('/api/v1/admin/set-puzzle', (req, res) => {
     res.json({ ok: true, puzzle });
 });
 
-// 5. Admin: set (or clear) a test chunk on the active puzzle
+// 5b. Admin: set (or clear) a test chunk on the active puzzle
 // POST /api/v1/admin/set-test-chunk
 // Body: { start_hex, end_hex }  — set a test chunk
 //       { start_hex: null }     — clear the test chunk
@@ -463,6 +538,17 @@ if (require.main === module) {
         found_address TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
+      CREATE TABLE IF NOT EXISTS sectors (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        puzzle_id   INTEGER NOT NULL,
+        start_hex   TEXT NOT NULL,
+        end_hex     TEXT NOT NULL,
+        current_hex TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'open'
+      );
+      CREATE INDEX IF NOT EXISTS idx_sectors_puzzle_status ON sectors (puzzle_id, status);
+      CREATE INDEX IF NOT EXISTS idx_sectors_puzzle_id     ON sectors (puzzle_id, id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sectors_unique_span ON sectors (puzzle_id, start_hex, end_hex);
       CREATE TABLE IF NOT EXISTS findings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chunk_id INTEGER NOT NULL,
@@ -489,20 +575,24 @@ if (require.main === module) {
         const endNorm   = endRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
         const existing  = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
         if (!existing) {
-            db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
+            const info = db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
                 .run(name, startNorm, endNorm);
             console.log(`[Config] Seeded keyspace: ${name}`);
+            seedSectors(db, info.lastInsertRowid, startNorm, endNorm);
         }
     }
 
     // Fall back to built-in Puzzle #71 if DB is still empty
     const puzzleCount = db.prepare("SELECT COUNT(*) as count FROM puzzles").get().count;
     if (puzzleCount === 0) {
-        db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
+        const info = db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
             .run('Puzzle #71',
                 '0400000000000000000'.padStart(64, '0'),
                 '07fffffffffffffffff'.padStart(64, '0'));
         console.log('[Init] Seeded Puzzle #71 as active puzzle.');
+        seedSectors(db, info.lastInsertRowid,
+            '0400000000000000000'.padStart(64, '0'),
+            '07fffffffffffffffff'.padStart(64, '0'));
     }
 
     // Ensure exactly one puzzle is active
@@ -510,6 +600,15 @@ if (require.main === module) {
     if (activeCount === 0) {
         db.prepare("UPDATE puzzles SET active = 1 WHERE id = (SELECT MIN(id) FROM puzzles)").run();
         console.log('[Init] No active puzzle found — activated the first one.');
+    }
+
+    // Seed sectors for any existing puzzle that doesn't have them yet (migration path)
+    const unsectored = db.prepare(`
+        SELECT p.id, p.start_hex, p.end_hex FROM puzzles p
+        WHERE NOT EXISTS (SELECT 1 FROM sectors s WHERE s.puzzle_id = p.id)
+    `).all();
+    for (const p of unsectored) {
+        seedSectors(db, p.id, p.start_hex, p.end_hex);
     }
 
     const app = createApp(db);
@@ -533,4 +632,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createApp, isValidHex, randomBigIntInRange };
+module.exports = { createApp, isValidHex, randomBigIntInRange, seedSectors };

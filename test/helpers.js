@@ -1,6 +1,7 @@
 'use strict';
 
 const Database = require('better-sqlite3');
+const { seedSectors } = require('../server');
 
 /**
  * Create an in-memory SQLite database with the full puzzpool schema.
@@ -36,6 +37,15 @@ function createTestDb() {
             found_key TEXT,
             found_address TEXT
         );
+        CREATE TABLE sectors (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            puzzle_id   INTEGER NOT NULL,
+            start_hex   TEXT NOT NULL,
+            end_hex     TEXT NOT NULL,
+            current_hex TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'open'
+        );
+        CREATE UNIQUE INDEX idx_sectors_unique_span ON sectors (puzzle_id, start_hex, end_hex);
         CREATE TABLE findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chunk_id INTEGER NOT NULL,
@@ -50,15 +60,19 @@ function createTestDb() {
 }
 
 /**
- * Seed an active puzzle and return its row.
+ * Seed an active puzzle with sectors and return its row.
+ * Uses a range < MIN_SECTOR_SIZE (1B keys) so exactly 1 sector is created — fast for tests.
  */
 function seedPuzzle(db, opts = {}) {
     const name  = opts.name      || 'Test Puzzle';
-    const start = opts.start_hex || '0000000000000000000000000000000000000000000000000400000000000000';
-    const end   = opts.end_hex   || '0000000000000000000000000000000000000000000000007fffffffffffffff';
-    db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
+    const start = opts.start_hex || '0'.repeat(64);
+    // 0x3b9aca00 = 1,000,000,000 → range / MIN_SECTOR_SIZE = 1 sector
+    const end   = opts.end_hex   || '000000000000000000000000000000000000000000000000000000003b9aca00';
+    const info  = db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 1)")
         .run(name, start, end);
-    return db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
+    const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(info.lastInsertRowid);
+    seedSectors(db, puzzle.id, start, end);
+    return puzzle;
 }
 
 module.exports = { createTestDb, seedPuzzle };
