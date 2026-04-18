@@ -593,8 +593,10 @@
 
         function formatETA(totalKeys, keysCompleted, hashrate) {
             if (hashrate <= 0) return '∞';
-            const remaining = BigInt(totalKeys) - BigInt(keysCompleted);
-            if (remaining <= 0n) return 'Complete';
+            const remaining = BigInt(totalKeys) - BigInt(keysCompleted) > 0n
+                ? BigInt(totalKeys) - BigInt(keysCompleted)
+                : 0n;
+            if (remaining === 0n) return 'Complete';
             // Use BigInt arithmetic to avoid float overflow on universe-scale keyspaces
             const remainingYears = remaining / BigInt(Math.round(hashrate * 365.25 * 86400));
             if (remainingYears > 999_999_999_999n) return '> 1 trillion years';

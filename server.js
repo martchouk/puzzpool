@@ -223,9 +223,27 @@ app.get('/api/v1/stats', (req, res) => {
         WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
     `).all(pid) : [];
 
+    // Merge overlapping intervals before summing to avoid double-counting reclaimed/re-issued chunks
     let totalKeysCompleted = 0n;
-    for (const c of doneChunks) {
-        totalKeysCompleted += BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex);
+    if (doneChunks.length > 0) {
+        const sorted = [...doneChunks].sort((a, b) => {
+            const diff = BigInt('0x' + a.start_hex) - BigInt('0x' + b.start_hex);
+            return diff < 0n ? -1 : diff > 0n ? 1 : 0;
+        });
+        let mergeStart = BigInt('0x' + sorted[0].start_hex);
+        let mergeEnd   = BigInt('0x' + sorted[0].end_hex);
+        for (let i = 1; i < sorted.length; i++) {
+            const s = BigInt('0x' + sorted[i].start_hex);
+            const e = BigInt('0x' + sorted[i].end_hex);
+            if (s <= mergeEnd) {
+                if (e > mergeEnd) mergeEnd = e;
+            } else {
+                totalKeysCompleted += mergeEnd - mergeStart;
+                mergeStart = s;
+                mergeEnd   = e;
+            }
+        }
+        totalKeysCompleted += mergeEnd - mergeStart;
     }
 
     const workerStats = {};
