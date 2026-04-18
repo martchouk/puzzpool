@@ -11,7 +11,8 @@ const TIMEOUT_MINUTES = parseInt(process.env.TIMEOUT_MINUTES || '15',   10);
 
 // --- Pure helpers (no db dependency) ---
 
-// Validate that a string is a non-empty hex string (0x prefix optional)
+// Validate that a string is a non-empty hex string (0x prefix optional, any case).
+// Callers must normalize (strip 0x, lowercase, padStart) before any DB write or comparison.
 function isValidHex(s) {
     if (typeof s !== 'string' || s.length === 0) return false;
     return /^(0x)?[0-9a-fA-F]+$/.test(s);
@@ -461,6 +462,7 @@ if (require.main === module) {
         found_key TEXT,
         found_address TEXT
       );
+      CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
       CREATE TABLE IF NOT EXISTS findings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chunk_id INTEGER NOT NULL,

@@ -28,6 +28,12 @@ Request the next keyspace chunk to scan.
 { "job_id": 42, "start_key": "000...0600000000000000000", "end_key": "000...06000002bf20000000" }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `job_id` | number | Chunk identifier — required for `/submit` and `/heartbeat` |
+| `start_key` | string | First key to scan (inclusive) |
+| `end_key` | string | Scan boundary (exclusive) — scan the half-open range `[start_key, end_key)` |
+
 **Response 503** — no active puzzle configured
 ```json
 { "error": "No active puzzle configured" }
