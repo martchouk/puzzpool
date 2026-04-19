@@ -543,13 +543,10 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
         }
         endNorm = end_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
     } else {
-        // Auto-resolve end_hex: use the matching sector's end if start_hex is a sector
-        // boundary, otherwise fall back to start + GPU_BATCH_KEYS.
-        const sector = db.prepare(
-            "SELECT end_hex FROM sectors WHERE puzzle_id = ? AND start_hex = ?"
-        ).get(puzzle.id, startNorm);
-        const te = sector ? BigInt('0x' + sector.end_hex) : ts + GPU_BATCH_KEYS;
-        endNorm = te.toString(16).padStart(64, '0');
+        // Auto-resolve end_hex: exactly one GPU batch so the client neither undershoots
+        // nor overshoots the job boundary. Sector end is intentionally NOT used — a
+        // sector covers trillions of keys, far more than one worker should scan for a test.
+        endNorm = (ts + GPU_BATCH_KEYS).toString(16).padStart(64, '0');
     }
 
     const te = BigInt('0x' + endNorm);
