@@ -539,12 +539,9 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     if (te <= ts) {
         return res.status(400).json({ error: "end_hex must be greater than start_hex" });
     }
-    // Test chunks must lie OUTSIDE the active puzzle range so the sector allocator
-    // can never hand out the same keys as a fresh production chunk.
-    const overlaps = ts < pe && ps < te;
-    if (overlaps) {
-        return res.status(400).json({ error: "Test chunk must not overlap the active puzzle range" });
-    }
+    // Test chunks may overlap the puzzle range — that is the normal case (e.g. mid-keyspace
+    // verification). The sector allocator may later re-issue the same tiny range as a normal
+    // chunk; re-scanning a few million keys is harmless.
 
     db.prepare("UPDATE puzzles SET test_start_hex = ?, test_end_hex = ? WHERE id = ?")
         .run(startNorm, endNorm, puzzle.id);
