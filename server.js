@@ -82,7 +82,9 @@ function createApp(db) {
     const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0)");
     // Both taken/reclaim queries match on start_hex + end_hex + is_test = 1 so a different
     // test chunk with the same start but different end cannot interfere.
-    const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status IN ('assigned', 'completed', 'FOUND') LIMIT 1");
+    // Only 'assigned' counts as taken — completed/FOUND rows do not block reissue, so admins
+    // can rerun the same test range without manual DB cleanup.
+    const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'assigned' LIMIT 1");
     const stmtTestChunkReclaim = db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
         WHERE id = (SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'reclaimed' LIMIT 1)
@@ -134,10 +136,8 @@ function createApp(db) {
     // Test chunk claiming — IMMEDIATE transaction to prevent two concurrent requests
     // from both passing the "not yet taken" check before either inserts.
     // is_test = 1 is set on insert so these rows are excluded from puzzle stats.
-    // Completed/FOUND test chunks count as permanently taken; admins who want to rerun
-    // a test should call set-test-chunk again (even with the same range) — the next
-    // /work request will issue a fresh insert because the old row has a different end_hex
-    // or the taken check won't match a re-set range.
+    // Only an 'assigned' row blocks reissue; completed/FOUND rows do not, so the admin
+    // can rerun the exact same test range without any DB cleanup.
     const claimTestChunk = db.transaction((name, puzzle) => {
         const taken = stmtTestChunkTaken.get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex);
         if (taken) return null;
@@ -171,7 +171,8 @@ app.post('/api/v1/work', (req, res) => {
     const { name, hashrate } = req.body;
     if (!name) return res.status(400).json({ error: "Missing name" });
 
-    // Upsert worker — store normalized hashrate so /stats sorting and totals are safe
+    // Upsert worker — normalize before storing. Number() loses precision above 2^53 but
+    // that range (~9 PH/s) is well beyond realistic hardware; acceptable tradeoff.
     const hashrateNum = Number(normalizeHashrate(hashrate));
     db.prepare(`
         INSERT INTO workers (name, hashrate, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -228,6 +229,8 @@ app.post('/api/v1/submit', (req, res) => {
         console.log(`\n🚨🚨🚨 ${msg}`);
         fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
 
+        // findings rows are not marked is_test; test vs production is distinguished by
+        // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
         db.prepare("INSERT INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
             .run(job_id, name, found_key, found_address || null);
 
@@ -581,12 +584,12 @@ if (require.main === module) {
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
-    // is_test defaults to 0 for all pre-existing rows. Best-effort backfill: mark any chunk
-    // whose range exactly matches the puzzle's current test_start_hex/test_end_hex as is_test=1.
-    // Chunks from previously-used test ranges that no longer match cannot be recovered
-    // automatically — manual cleanup is required for those rows if they cause stats noise.
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly
+    // matches the puzzle's current test_start_hex/test_end_hex as is_test=1. Chunks from
+    // previously-used test ranges that no longer match cannot be recovered automatically;
+    // manual cleanup is required for those rows if they cause stats noise.
     try {
-        db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run();
         db.prepare(`
             UPDATE chunks SET is_test = 1
             WHERE is_test = 0
