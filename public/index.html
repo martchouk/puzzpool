@@ -334,7 +334,7 @@
                     <pre>{
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
   "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
-  "end_key":   "0x...1c"  <span class="comment">// inclusive range end   (hex)</span>
+  "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex) — scan [start_key, end_key)</span>
 }</pre>
                 </div>
             </div>
@@ -347,8 +347,8 @@
                     <pre class="request">{
   "name":    "rig-01", <span class="comment">// must match name used in /work</span>
   "job_id":  42,       <span class="comment">// job_id returned by /work</span>
-  "status":  "done",   <span class="comment">// "done" | "found"</span>
-  "found_address": ""  <span class="comment">// only when status == "found"</span>
+  "status":  "done",   <span class="comment">// "done" | "FOUND"</span>
+  "found_address": ""  <span class="comment">// only when status == "FOUND"</span>
 }</pre>
                 </div>
                 <div class="api-panel">
@@ -907,7 +907,7 @@
                 else stbody.innerHTML = data.scores.map((s, i) => `<tr>
                     <td class="td-rank">#${i+1}</td>
                     <td class="td-name">${s.worker_name}</td>
-                    <td class="td-chunks">${Number(s.total_keys).toLocaleString()}</td>
+                    <td class="td-chunks">${formatBigInt(s.total_keys)}</td>
                     <td class="td-chunks">${s.completed_chunks.toLocaleString()}</td>
                 </tr>`).join('');
 
