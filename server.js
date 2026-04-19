@@ -75,11 +75,22 @@ function seedSectors(db, puzzleId, startHex, endHex) {
 
 function createApp(db) {
     // Prepared statements hoisted here so they are compiled once, not on every request.
-    const stmtOpenSector    = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
-    const stmtWorkerHash    = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
-    const stmtSectorDone    = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
-    const stmtSectorAdvance = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
-    const stmtInsertChunk   = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP)");
+    const stmtOpenSector      = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
+    const stmtWorkerHash      = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
+    const stmtSectorDone      = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
+    const stmtSectorAdvance   = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
+    const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0)");
+    const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status IN ('assigned', 'completed', 'FOUND') LIMIT 1");
+    const stmtTestChunkReclaim = db.prepare(`
+        UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+        WHERE id = (SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1)
+        RETURNING *
+    `);
+    const stmtTestChunkInsert = db.prepare(`
+        INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test)
+        VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 1)
+        RETURNING *
+    `);
 
     // Fresh allocation from sector frontier.
     // BEGIN IMMEDIATE acquires the write lock before the SELECT so two concurrent
@@ -120,29 +131,13 @@ function createApp(db) {
 
     // Test chunk claiming — IMMEDIATE transaction to prevent two concurrent requests
     // from both passing the "not yet taken" check before either inserts.
+    // is_test = 1 is set on insert so these rows are excluded from puzzle stats.
     const claimTestChunk = db.transaction((name, puzzle) => {
-        const taken = db.prepare(`
-            SELECT id FROM chunks
-            WHERE puzzle_id = ? AND start_hex = ?
-              AND status IN ('assigned', 'completed', 'FOUND')
-            LIMIT 1
-        `).get(puzzle.id, puzzle.test_start_hex);
+        const taken = stmtTestChunkTaken.get(puzzle.id, puzzle.test_start_hex);
         if (taken) return null;
-
-        const reclaimed = db.prepare(`
-            UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
-            WHERE id = (
-                SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1
-            )
-            RETURNING *
-        `).get(name, puzzle.id, puzzle.test_start_hex);
+        const reclaimed = stmtTestChunkReclaim.get(name, puzzle.id, puzzle.test_start_hex);
         if (reclaimed) return reclaimed;
-
-        return db.prepare(`
-            INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
-            VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP)
-            RETURNING *
-        `).get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex, name);
+        return stmtTestChunkInsert.get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex, name);
     });
 
     const app = express();
@@ -261,13 +256,13 @@ app.get('/api/v1/stats', (req, res) => {
     const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
-        "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND')"
+        "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND is_test = 0"
     ).get(pid).count : 0;
 
     const doneChunks = pid ? db.prepare(`
         SELECT worker_name, start_hex, end_hex
         FROM chunks
-        WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL
+        WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL AND is_test = 0
     `).all(pid) : [];
 
     // Merge overlapping intervals before summing. After the sector-frontier migration,
@@ -339,7 +334,7 @@ app.get('/api/v1/stats', (req, res) => {
         const pRange = pEnd - pStart;
         const rawChunks = db.prepare(`
             SELECT id, status, worker_name, start_hex, end_hex
-            FROM chunks WHERE puzzle_id = ?
+            FROM chunks WHERE puzzle_id = ? AND is_test = 0
             ORDER BY id ASC
         `).all(puzzle.id);
         chunks_vis = rawChunks.map(c => {
@@ -552,7 +547,8 @@ if (require.main === module) {
         worker_name TEXT,
         assigned_at DATETIME,
         found_key TEXT,
-        found_address TEXT
+        found_address TEXT,
+        is_test INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
       CREATE TABLE IF NOT EXISTS sectors (
@@ -578,6 +574,7 @@ if (require.main === module) {
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks  ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
 
     // Seed puzzles from KEYSPACE_<NAME>=<start_hex>:<end_hex> env vars
     for (const [key, value] of Object.entries(process.env)) {

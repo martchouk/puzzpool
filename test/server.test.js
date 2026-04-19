@@ -408,6 +408,35 @@ describe('Sharded Frontier Allocator', () => {
             .send({ name: 'P1', start_hex: '0x300', end_hex: '0x100' })
             .expect(400);
     });
+
+    test('10. test chunks excluded from stats: completed_chunks, total_keys_completed, scores', async () => {
+        // Puzzle range: [0x0, 0x3b9aca00). Test chunk just above the puzzle range.
+        seedPuzzle(db);
+        const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
+
+        // Set test chunk outside puzzle range
+        const testStart = '000000000000000000000000000000000000000000000000000000003b9aca00';
+        const testEnd   = '000000000000000000000000000000000000000000000000000000003b9acb00';
+        await request(app).post('/api/v1/admin/set-test-chunk')
+            .send({ start_hex: testStart, end_hex: testEnd })
+            .expect(200);
+
+        // Worker receives test chunk first
+        const work = await request(app).post('/api/v1/work').send({ name: 'tester', hashrate: 1e9 }).expect(200);
+        expect(work.body.start_key).toBe(testStart);
+
+        // Submit it as done
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'tester', job_id: work.body.job_id, status: 'done' })
+            .expect(200);
+
+        // Stats must not reflect the test chunk
+        const stats = await request(app).get('/api/v1/stats').expect(200);
+        expect(stats.body.completed_chunks).toBe(0);
+        expect(stats.body.total_keys_completed).toBe('0');
+        expect(stats.body.scores).toHaveLength(0);
+        expect(stats.body.chunks_vis).toHaveLength(0);
+    });
 });
 
 // ─── Admin: ADMIN_TOKEN auth ──────────────────────────────────────────────────
