@@ -523,6 +523,40 @@ describe('Sharded Frontier Allocator', () => {
         expect(chunk.status).toBe('FOUND');
     });
 
+    test('13. multiple findings in one submit — all recorded, BINGO fires per new finding', async () => {
+        seedPuzzle(db);
+        const work = await request(app).post('/api/v1/work')
+            .send({ name: 'worker', hashrate: 1e6 }).expect(200);
+        const jobId = work.body.job_id;
+
+        const res = await request(app).post('/api/v1/submit').send({
+            name: 'worker',
+            job_id: jobId,
+            status: 'FOUND',
+            found_key:     'aaaa'.padStart(64, '0'),
+            found_address: '1AddressA',
+            findings: [
+                { found_key: 'bbbb'.padStart(64, '0'), found_address: '1AddressB' },
+                { found_key: 'cccc'.padStart(64, '0'), found_address: '1AddressC' },
+                { found_key: 'aaaa'.padStart(64, '0'), found_address: '1AddressA' }, // duplicate — ignored
+            ],
+        }).expect(200);
+        expect(res.body.accepted).toBe(true);
+
+        const rows = db.prepare("SELECT found_key FROM findings WHERE chunk_id = ? ORDER BY found_key").all(jobId);
+        expect(rows).toHaveLength(3);
+        expect(rows.map(r => r.found_key)).toEqual([
+            'aaaa'.padStart(64, '0'),
+            'bbbb'.padStart(64, '0'),
+            'cccc'.padStart(64, '0'),
+        ]);
+
+        // Chunk finalized with primary key
+        const chunk = db.prepare("SELECT status, found_key FROM chunks WHERE id = ?").get(jobId);
+        expect(chunk.status).toBe('FOUND');
+        expect(chunk.found_key).toBe('aaaa'.padStart(64, '0'));
+    });
+
     test('12. FOUND rejected from worker with no provenance after reclaim', async () => {
         seedPuzzle(db);
         const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);

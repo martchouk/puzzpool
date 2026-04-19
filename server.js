@@ -229,23 +229,41 @@ app.post('/api/v1/work', (req, res) => {
 
 // 2. Submit Results
 app.post('/api/v1/submit', (req, res) => {
-    const { name, job_id, status, found_key, found_address } = req.body;
+    const { name, job_id, status, found_key, found_address, findings: extraFindings } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
     if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
 
     if (status === "FOUND") {
+        // Build deduplicated list of all findings. Primary found_key/found_address comes
+        // first; optional findings[] array appends additional hits from the same chunk.
+        // Dedup by found_key so a client that sends the primary key again in the array
+        // doesn't produce duplicate DB writes.
+        if (extraFindings !== undefined && !Array.isArray(extraFindings)) {
+            return res.status(400).json({ error: 'findings must be an array' });
+        }
+        const seen = new Set();
+        const allFindings = [];
+        for (const f of [{ found_key, found_address }, ...(extraFindings || [])]) {
+            if (!f.found_key) return res.status(400).json({ error: 'each entry in findings must have found_key' });
+            if (!seen.has(f.found_key)) {
+                seen.add(f.found_key);
+                allFindings.push(f);
+            }
+        }
+
         // Update chunk first (status guard prevents invalid transitions from non-assigned rows).
         // Only write BINGO log and findings if the chunk was actually ours to update.
+        const primary = allFindings[0];
         const info = db.prepare(
             "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ? AND status = 'assigned'"
-        ).run(found_key, found_address || null, job_id, name);
+        ).run(primary.found_key, primary.found_address || null, job_id, name);
 
         if (!info.changes) {
             // Idempotency: if this exact finding is already recorded (e.g. client retry
             // after chunk was finalized by the first attempt), accept silently.
             const alreadyRecorded = db.prepare(
                 "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
-            ).get(job_id, name, found_key);
+            ).get(job_id, name, primary.found_key);
             if (alreadyRecorded) return res.json({ accepted: true });
 
             // Late FOUND: chunk was reclaimed/reassigned before submission. Accept only if
@@ -262,8 +280,8 @@ app.post('/api/v1/submit', (req, res) => {
             // create a second accepted winner.
             db.prepare(
                 "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
-            ).run(name, found_key, found_address || null, job_id);
-            console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
+            ).run(name, primary.found_key, primary.found_address || null, job_id);
+            console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${primary.found_key}`);
         }
 
         // INSERT OR IGNORE + unique index on (chunk_id, worker_name, found_key) makes
@@ -271,13 +289,14 @@ app.post('/api/v1/submit', (req, res) => {
         // only written when the insert actually claimed the row.
         // findings rows are not marked is_test; test vs production is distinguished by
         // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
-        const findingInfo = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
-            .run(job_id, name, found_key, found_address || null);
-
-        if (findingInfo.changes) {
-            const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
-            console.log(`\n🚨🚨🚨 ${msg}`);
-            fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+        for (const f of allFindings) {
+            const findingInfo = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
+                .run(job_id, name, f.found_key, f.found_address || null);
+            if (findingInfo.changes) {
+                const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${f.found_key} | ADDR: ${f.found_address || 'Unknown'}\n`;
+                console.log(`\n🚨🚨🚨 ${msg}`);
+                fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+            }
         }
     } else {
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
