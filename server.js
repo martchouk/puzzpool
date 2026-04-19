@@ -238,7 +238,16 @@ app.post('/api/v1/submit', (req, res) => {
             "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ? AND status = 'assigned'"
         ).run(found_key, found_address || null, job_id, name);
 
-        if (!info.changes) return res.json({ accepted: false });
+        if (!info.changes) {
+            // Late FOUND: chunk was reclaimed/reassigned before submission. Accept if this
+            // worker was the previous legitimate assignee so the key is never lost.
+            const wasPrev = db.prepare(
+                "SELECT id FROM chunks WHERE id = ? AND prev_worker_name = ?"
+            ).get(job_id, name);
+            if (!wasPrev) return res.json({ accepted: false });
+            // Chunk now belongs to another worker — log the key but leave chunk status alone.
+            console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
+        }
 
         const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
         console.log(`\n🚨🚨🚨 ${msg}`);
@@ -578,6 +587,7 @@ if (require.main === module) {
         end_hex TEXT,
         status TEXT,
         worker_name TEXT,
+        prev_worker_name TEXT,
         assigned_at DATETIME,
         found_key TEXT,
         found_address TEXT,
@@ -607,7 +617,8 @@ if (require.main === module) {
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test         INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
     // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly
     // matches the puzzle's current test_start_hex/test_end_hex as is_test=1. Chunks from
     // previously-used test ranges that no longer match cannot be recovered automatically;
@@ -688,7 +699,7 @@ if (require.main === module) {
     setInterval(() => {
         const info = db.prepare(`
             UPDATE chunks
-            SET status = 'reclaimed', worker_name = NULL
+            SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL
             WHERE status = 'assigned'
             AND assigned_at < datetime('now', '-${TIMEOUT_MINUTES} minutes')
         `).run();

@@ -33,6 +33,7 @@ function createTestDb() {
             end_hex TEXT,
             status TEXT,
             worker_name TEXT,
+            prev_worker_name TEXT,
             assigned_at DATETIME,
             found_key TEXT,
             found_address TEXT,

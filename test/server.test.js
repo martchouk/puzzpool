@@ -437,6 +437,47 @@ describe('Sharded Frontier Allocator', () => {
         expect(stats.body.scores).toHaveLength(0);
         expect(stats.body.chunks_vis).toHaveLength(0);
     });
+
+    test('11. late FOUND from previous assignee is accepted after reclaim', async () => {
+        seedPuzzle(db);
+        // Worker A gets a chunk
+        const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
+        const jobId = work.body.job_id;
+
+        // Simulate reclaim by directly updating the DB (background task not running in tests)
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?")
+            .run(jobId);
+
+        // Worker A submits FOUND late (chunk no longer assigned to them)
+        const res = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' })
+            .expect(200);
+        expect(res.body.accepted).toBe(true);
+
+        // Finding should be recorded
+        const finding = db.prepare("SELECT * FROM findings WHERE chunk_id = ?").get(jobId);
+        expect(finding).toBeTruthy();
+        expect(finding.found_key).toBe('deadbeef'.padStart(64, '0'));
+    });
+
+    test('12. FOUND rejected from worker with no provenance after reclaim', async () => {
+        seedPuzzle(db);
+        const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
+        const jobId = work.body.job_id;
+
+        // Reclaim without any connection to workerB
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?")
+            .run(jobId);
+
+        // Unrelated worker tries to submit FOUND
+        const res = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerB', job_id: jobId, status: 'FOUND', found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' })
+            .expect(200);
+        expect(res.body.accepted).toBe(false);
+
+        const finding = db.prepare("SELECT * FROM findings WHERE chunk_id = ?").get(jobId);
+        expect(finding).toBeUndefined();
+    });
 });
 
 // ─── Admin: ADMIN_TOKEN auth ──────────────────────────────────────────────────
