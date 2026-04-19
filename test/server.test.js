@@ -460,30 +460,28 @@ describe('Sharded Frontier Allocator', () => {
         expect(finding.found_key).toBe('deadbeef'.padStart(64, '0'));
     });
 
-    test('11b. late FOUND rejected after chunk already finalized (no duplicate winners)', async () => {
+    test('11b. late FOUND finalizes chunk even when currently assigned to another worker', async () => {
         seedPuzzle(db);
-        // Worker A gets chunk, is reclaimed
         const workA = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
         const jobId = workA.body.job_id;
+        // Reclaim and reassign to Worker B
         db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(jobId);
+        await request(app).post('/api/v1/work').send({ name: 'workerB', hashrate: 1e9 }).expect(200);
 
-        // Worker B gets the same chunk (reissued) and submits FOUND first
-        const workB = await request(app).post('/api/v1/work').send({ name: 'workerB', hashrate: 1e9 }).expect(200);
-        expect(workB.body.job_id).toBe(jobId);
-        await request(app).post('/api/v1/submit')
-            .send({ name: 'workerB', job_id: jobId, status: 'FOUND', found_key: 'aabb'.padStart(64, '0'), found_address: '1Winner' })
-            .expect(200);
-
-        // Worker A submits late FOUND — must be rejected since chunk is already FOUND
+        // Worker A submits late FOUND while B holds it
         const late = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'ccdd'.padStart(64, '0'), found_address: '1Late' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'aabb'.padStart(64, '0'), found_address: '1A' })
             .expect(200);
-        expect(late.body.accepted).toBe(false);
+        expect(late.body.accepted).toBe(true);
 
-        // Only one finding recorded (Worker B's)
-        const findings = db.prepare("SELECT * FROM findings WHERE chunk_id = ?").all(jobId);
-        expect(findings).toHaveLength(1);
-        expect(findings[0].worker_name).toBe('workerB');
+        // Chunk must be finalized — Worker B cannot now submit completed or FOUND
+        const chunk = db.prepare("SELECT status FROM chunks WHERE id = ?").get(jobId);
+        expect(chunk.status).toBe('FOUND');
+
+        const bSubmit = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerB', job_id: jobId, status: 'done' })
+            .expect(200);
+        expect(bSubmit.body.accepted).toBe(false);
     });
 
     test('11c. late FOUND is idempotent — retries do not duplicate findings', async () => {

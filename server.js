@@ -254,13 +254,13 @@ app.post('/api/v1/submit', (req, res) => {
             ).get(job_id, name);
             if (!latePrev) return res.json({ accepted: false });
 
-            if (latePrev.status === 'reclaimed') {
-                // Chunk belongs to nobody — claim it as FOUND so it leaves circulation.
-                db.prepare(
-                    "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
-                ).run(name, found_key, found_address || null, job_id);
-            }
-            // If status is 'assigned' the chunk belongs to another worker — leave it alone.
+            // Finalize the chunk in all cases — whether currently assigned to someone else
+            // or reclaimed. An accepted late FOUND must not remain mutable; leaving it
+            // assigned would let the current holder later overwrite it with completed or
+            // create a second accepted winner.
+            db.prepare(
+                "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
+            ).run(name, found_key, found_address || null, job_id);
             console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
         }
 
