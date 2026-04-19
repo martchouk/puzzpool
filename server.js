@@ -710,7 +710,11 @@ if (require.main === module) {
 
     const app = createApp(db);
 
-    // Background reclaim task
+    // Background reclaim task.
+    // NOTE: prev_worker_name retains only the most recent prior assignee. If the same
+    // chunk is reclaimed and reassigned multiple times, only the latest previous owner
+    // can be verified for a late FOUND. Full provenance would require an assignment
+    // history table; that is a known limitation of this single-slot design.
     setInterval(() => {
         const info = db.prepare(`
             UPDATE chunks
