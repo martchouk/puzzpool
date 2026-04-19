@@ -506,9 +506,15 @@ app.post('/api/v1/admin/set-puzzle', (req, res) => {
     res.json({ ok: true, puzzle });
 });
 
+// GPU batch size: N_THREADS * STEPS_PER_BATCH = 255*4096 * 4096 = 4,278,190,080 keys.
+// Used as the default test chunk size when end_hex is omitted.
+const GPU_BATCH_KEYS = 4_278_190_080n;
+
 // 5b. Admin: set (or clear) a test chunk on the active puzzle
 // POST /api/v1/admin/set-test-chunk
-// Body: { start_hex, end_hex }  — set a test chunk
+// Body: { start_hex, end_hex }  — set a test chunk spanning [start_hex, end_hex)
+//       { start_hex }           — end_hex auto-resolved: sector end if start matches a
+//                                 sector boundary, otherwise start + GPU_BATCH_KEYS
 //       { start_hex: null }     — clear the test chunk
 app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
@@ -523,19 +529,30 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
         return res.json({ ok: true, test_chunk: null });
     }
 
-    if (!end_hex) return res.status(400).json({ error: "Missing end_hex" });
-    if (!isValidHex(start_hex) || !isValidHex(end_hex)) {
-        return res.status(400).json({ error: "start_hex and end_hex must be valid hex strings" });
+    if (!isValidHex(start_hex)) {
+        return res.status(400).json({ error: "start_hex must be a valid hex string" });
     }
 
     const startNorm = start_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
-    const endNorm   = end_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
-
     const ts = BigInt('0x' + startNorm);
-    const te = BigInt('0x' + endNorm);
-    const ps = BigInt('0x' + puzzle.start_hex);
-    const pe = BigInt('0x' + puzzle.end_hex);
 
+    let endNorm;
+    if (end_hex) {
+        if (!isValidHex(end_hex)) {
+            return res.status(400).json({ error: "end_hex must be a valid hex string" });
+        }
+        endNorm = end_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+    } else {
+        // Auto-resolve end_hex: use the matching sector's end if start_hex is a sector
+        // boundary, otherwise fall back to start + GPU_BATCH_KEYS.
+        const sector = db.prepare(
+            "SELECT end_hex FROM sectors WHERE puzzle_id = ? AND start_hex = ?"
+        ).get(puzzle.id, startNorm);
+        const te = sector ? BigInt('0x' + sector.end_hex) : ts + GPU_BATCH_KEYS;
+        endNorm = te.toString(16).padStart(64, '0');
+    }
+
+    const te = BigInt('0x' + endNorm);
     if (te <= ts) {
         return res.status(400).json({ error: "end_hex must be greater than start_hex" });
     }
