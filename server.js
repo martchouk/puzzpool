@@ -231,6 +231,7 @@ app.post('/api/v1/work', (req, res) => {
 app.post('/api/v1/submit', (req, res) => {
     const { name, job_id, status, found_key, found_address } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
+    if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
 
     if (status === "FOUND") {
         // Update chunk first (status guard prevents invalid transitions from non-assigned rows).
@@ -240,12 +241,12 @@ app.post('/api/v1/submit', (req, res) => {
         ).run(found_key, found_address || null, job_id, name);
 
         if (!info.changes) {
-            // Idempotency: if this exact finding was already recorded (e.g. client retry),
-            // accept silently without writing anything again.
-            const already = db.prepare(
+            // Idempotency: if this exact finding is already recorded (e.g. client retry
+            // after chunk was finalized by the first attempt), accept silently.
+            const alreadyRecorded = db.prepare(
                 "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
             ).get(job_id, name, found_key);
-            if (already) return res.json({ accepted: true });
+            if (alreadyRecorded) return res.json({ accepted: true });
 
             // Late FOUND: chunk was reclaimed/reassigned before submission. Accept only if
             // this worker was the previous legitimate assignee and the chunk is still
@@ -265,14 +266,19 @@ app.post('/api/v1/submit', (req, res) => {
             console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
         }
 
-        const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
-        console.log(`\n🚨🚨🚨 ${msg}`);
-        fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
-
+        // INSERT OR IGNORE + unique index on (chunk_id, worker_name, found_key) makes
+        // dedup atomic — concurrent retries cannot both insert, and the BINGO log is
+        // only written when the insert actually claimed the row.
         // findings rows are not marked is_test; test vs production is distinguished by
         // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
-        db.prepare("INSERT INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
+        const findingInfo = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
             .run(job_id, name, found_key, found_address || null);
+
+        if (findingInfo.changes) {
+            const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
+            console.log(`\n🚨🚨🚨 ${msg}`);
+            fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+        }
     } else {
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
             .run(job_id, name);
@@ -629,12 +635,14 @@ if (require.main === module) {
         found_address TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key);
     `);
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test         INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
+    try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly
     // matches the puzzle's current test_start_hex/test_end_hex as is_test=1. Chunks from
     // previously-used test ranges that no longer match cannot be recovered automatically;

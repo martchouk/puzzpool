@@ -56,6 +56,7 @@ function createTestDb() {
             found_address TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE UNIQUE INDEX idx_findings_dedup ON findings (chunk_id, worker_name, found_key);
     `);
 
     return db;
