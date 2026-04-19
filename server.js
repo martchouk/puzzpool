@@ -243,9 +243,10 @@ app.post('/api/v1/work', (req, res) => {
 
 // 2. Submit Results
 app.post('/api/v1/submit', (req, res) => {
-    const { name, job_id, status, found_key, found_address } = req.body;
+    const { name, job_id, status, found_key, found_address, findings: extraFindings } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
     if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
+    if (extraFindings !== undefined && !Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
 
     if (status === "FOUND") {
         // Update chunk first (status guard prevents invalid transitions from non-assigned rows).
@@ -285,13 +286,20 @@ app.post('/api/v1/submit', (req, res) => {
         // only written when the insert actually claimed the row.
         // findings rows are not marked is_test; test vs production is distinguished by
         // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
-        const findingInfo = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
-            .run(job_id, name, found_key, found_address || null);
-
-        if (findingInfo.changes) {
-            const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
-            console.log(`\n🚨🚨🚨 ${msg}`);
-            fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+        const stmtInsertFinding = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)");
+        const allFindings = [{ found_key, found_address }];
+        if (Array.isArray(extraFindings)) {
+            for (const f of extraFindings) {
+                if (f.found_key && f.found_key !== found_key) allFindings.push(f);
+            }
+        }
+        for (const f of allFindings) {
+            const findingInfo = stmtInsertFinding.run(job_id, name, f.found_key, f.found_address || null);
+            if (findingInfo.changes) {
+                const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${f.found_key} | ADDR: ${f.found_address || 'Unknown'}\n`;
+                console.log(`\n🚨🚨🚨 ${msg}`);
+                fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+            }
         }
     } else {
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
