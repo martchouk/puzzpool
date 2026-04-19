@@ -239,16 +239,28 @@ app.post('/api/v1/submit', (req, res) => {
         ).run(found_key, found_address || null, job_id, name);
 
         if (!info.changes) {
-            // Late FOUND: chunk was reclaimed/reassigned before submission. Accept if this
-            // worker was the previous legitimate assignee so the key is never lost.
-            // Only accept late FOUND while the chunk is still in-progress (assigned to
-            // someone else or reclaimed). Reject if already finalized (FOUND/completed)
-            // to prevent duplicate accepted winners on the same chunk.
-            const wasPrev = db.prepare(
-                "SELECT id FROM chunks WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')"
+            // Idempotency: if this exact finding was already recorded (e.g. client retry),
+            // accept silently without writing anything again.
+            const already = db.prepare(
+                "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
+            ).get(job_id, name, found_key);
+            if (already) return res.json({ accepted: true });
+
+            // Late FOUND: chunk was reclaimed/reassigned before submission. Accept only if
+            // this worker was the previous legitimate assignee and the chunk is still
+            // in-progress (not yet finalized), to prevent duplicate accepted winners.
+            const latePrev = db.prepare(
+                "SELECT id, status FROM chunks WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')"
             ).get(job_id, name);
-            if (!wasPrev) return res.json({ accepted: false });
-            // Chunk now belongs to another worker — log the key but leave chunk status alone.
+            if (!latePrev) return res.json({ accepted: false });
+
+            if (latePrev.status === 'reclaimed') {
+                // Chunk belongs to nobody — claim it as FOUND so it leaves circulation.
+                db.prepare(
+                    "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
+                ).run(name, found_key, found_address || null, job_id);
+            }
+            // If status is 'assigned' the chunk belongs to another worker — leave it alone.
             console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
         }
 

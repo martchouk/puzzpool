@@ -486,6 +486,46 @@ describe('Sharded Frontier Allocator', () => {
         expect(findings[0].worker_name).toBe('workerB');
     });
 
+    test('11c. late FOUND is idempotent — retries do not duplicate findings', async () => {
+        seedPuzzle(db);
+        const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
+        const jobId = work.body.job_id;
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(jobId);
+
+        const key = 'cafe'.padStart(64, '0');
+        // First late FOUND
+        const r1 = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: key, found_address: '1A' })
+            .expect(200);
+        expect(r1.body.accepted).toBe(true);
+
+        // Retry — same request
+        const r2 = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: key, found_address: '1A' })
+            .expect(200);
+        expect(r2.body.accepted).toBe(true);
+
+        // Only one findings row
+        const findings = db.prepare("SELECT * FROM findings WHERE chunk_id = ?").all(jobId);
+        expect(findings).toHaveLength(1);
+    });
+
+    test('11d. late FOUND on reclaimed chunk transitions it to FOUND (removes from pool)', async () => {
+        seedPuzzle(db);
+        const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
+        const jobId = work.body.job_id;
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(jobId);
+
+        const res = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'beef'.padStart(64, '0'), found_address: '1B' })
+            .expect(200);
+        expect(res.body.accepted).toBe(true);
+
+        // Chunk must be FOUND now, not reclaimed
+        const chunk = db.prepare("SELECT status FROM chunks WHERE id = ?").get(jobId);
+        expect(chunk.status).toBe('FOUND');
+    });
+
     test('12. FOUND rejected from worker with no provenance after reclaim', async () => {
         seedPuzzle(db);
         const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
