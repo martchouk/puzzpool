@@ -410,13 +410,12 @@ describe('Sharded Frontier Allocator', () => {
     });
 
     test('10. test chunks excluded from stats: completed_chunks, total_keys_completed, scores', async () => {
-        // Puzzle range: [0x0, 0x3b9aca00). Test chunk just above the puzzle range.
+        // Puzzle range: [0x0, 0x3b9aca00). Test chunk inside the puzzle range (mid-keyspace).
         seedPuzzle(db);
-        const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
 
-        // Set test chunk outside puzzle range
-        const testStart = '000000000000000000000000000000000000000000000000000000003b9aca00';
-        const testEnd   = '000000000000000000000000000000000000000000000000000000003b9acb00';
+        // Set test chunk inside puzzle range — normal production setup
+        const testStart = '000000000000000000000000000000000000000000000000000000001dcde500';
+        const testEnd   = '000000000000000000000000000000000000000000000000000000001dcde600';
         await request(app).post('/api/v1/admin/set-test-chunk')
             .send({ start_hex: testStart, end_hex: testEnd })
             .expect(200);
