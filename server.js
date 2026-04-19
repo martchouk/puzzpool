@@ -241,8 +241,11 @@ app.post('/api/v1/submit', (req, res) => {
         if (!info.changes) {
             // Late FOUND: chunk was reclaimed/reassigned before submission. Accept if this
             // worker was the previous legitimate assignee so the key is never lost.
+            // Only accept late FOUND while the chunk is still in-progress (assigned to
+            // someone else or reclaimed). Reject if already finalized (FOUND/completed)
+            // to prevent duplicate accepted winners on the same chunk.
             const wasPrev = db.prepare(
-                "SELECT id FROM chunks WHERE id = ? AND prev_worker_name = ?"
+                "SELECT id FROM chunks WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')"
             ).get(job_id, name);
             if (!wasPrev) return res.json({ accepted: false });
             // Chunk now belongs to another worker — log the key but leave chunk status alone.

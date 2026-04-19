@@ -460,6 +460,32 @@ describe('Sharded Frontier Allocator', () => {
         expect(finding.found_key).toBe('deadbeef'.padStart(64, '0'));
     });
 
+    test('11b. late FOUND rejected after chunk already finalized (no duplicate winners)', async () => {
+        seedPuzzle(db);
+        // Worker A gets chunk, is reclaimed
+        const workA = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
+        const jobId = workA.body.job_id;
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(jobId);
+
+        // Worker B gets the same chunk (reissued) and submits FOUND first
+        const workB = await request(app).post('/api/v1/work').send({ name: 'workerB', hashrate: 1e9 }).expect(200);
+        expect(workB.body.job_id).toBe(jobId);
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'workerB', job_id: jobId, status: 'FOUND', found_key: 'aabb'.padStart(64, '0'), found_address: '1Winner' })
+            .expect(200);
+
+        // Worker A submits late FOUND — must be rejected since chunk is already FOUND
+        const late = await request(app).post('/api/v1/submit')
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'ccdd'.padStart(64, '0'), found_address: '1Late' })
+            .expect(200);
+        expect(late.body.accepted).toBe(false);
+
+        // Only one finding recorded (Worker B's)
+        const findings = db.prepare("SELECT * FROM findings WHERE chunk_id = ?").all(jobId);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].worker_name).toBe('workerB');
+    });
+
     test('12. FOUND rejected from worker with no provenance after reclaim', async () => {
         seedPuzzle(db);
         const work = await request(app).post('/api/v1/work').send({ name: 'workerA', hashrate: 1e9 }).expect(200);
