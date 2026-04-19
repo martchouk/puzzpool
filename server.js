@@ -18,6 +18,7 @@ function isValidHex(s) {
     return /^(0x)?[0-9a-fA-F]+$/.test(s);
 }
 
+// Exported for consumers that need arbitrary-range random sampling.
 // Generate a uniformly random BigInt in [min, max) with negligible bias.
 function randomBigIntInRange(min, max) {
     const range = max - min;
@@ -27,6 +28,14 @@ function randomBigIntInRange(min, max) {
     const bytes = crypto.randomBytes(byteLen);
     const n = BigInt('0x' + bytes.toString('hex'));
     return min + (n % range);
+}
+
+// Coerce any client-supplied hashrate to a safe positive BigInt.
+// Returns BigInt(fallback) for NaN, Infinity, negative, zero, or non-numeric input.
+function normalizeHashrate(input, fallback = 1_000_000) {
+    const n = Number(input);
+    if (!Number.isFinite(n) || n <= 0) return BigInt(fallback);
+    return BigInt(Math.max(1, Math.floor(n)));
 }
 
 // Divide puzzle keyspace into sectors with independent frontiers.
@@ -65,49 +74,75 @@ function seedSectors(db, puzzleId, startHex, endHex) {
 // --- App factory (accepts db for testability) ---
 
 function createApp(db) {
-    // Assign the next chunk from the sector frontier.
-    // Uses BEGIN IMMEDIATE so the write lock is acquired before the SELECT read,
-    // preventing two concurrent connections from observing the same open sector.
-    // Returns null when all sectors are exhausted (caller should respond 503).
-    // ORDER BY RANDOM() is a deliberate tradeoff — acceptable at ≤65,536 rows.
-    const assignRandomChunk = db.transaction((name, hashrate, puzzle) => {
-        const sector = db.prepare(
-            "SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1"
-        ).get(puzzle.id);
-        if (!sector) return null;
+    // Prepared statements hoisted here so they are compiled once, not on every request.
+    const stmtOpenSector    = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
+    const stmtWorkerHash    = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
+    const stmtSectorDone    = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
+    const stmtSectorAdvance = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
+    const stmtInsertChunk   = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP)");
 
-        const stored      = db.prepare("SELECT hashrate FROM workers WHERE name = ?").get(name);
-        const hashrateBig = BigInt(Math.floor(hashrate || stored?.hashrate || 1_000_000));
+    // Fresh allocation from sector frontier.
+    // BEGIN IMMEDIATE acquires the write lock before the SELECT so two concurrent
+    // connections cannot observe the same open sector. ORDER BY RANDOM() over
+    // ≤65,536 rows is a deliberate tradeoff. Returns null only when all sectors
+    // are exhausted; stale open sectors (effective=0) are cleaned up and retried.
+    const assignRandomChunk = db.transaction((name, hashrate, puzzle) => {
+        const hashrateBig = normalizeHashrate(hashrate || stmtWorkerHash.get(name)?.hashrate);
         const chunkSize   = hashrateBig * BigInt(TARGET_MINUTES * 60);
 
-        const current   = BigInt('0x' + sector.current_hex);
-        const sectorEnd = BigInt('0x' + sector.end_hex);
-        const effective = chunkSize < (sectorEnd - current) ? chunkSize : (sectorEnd - current);
+        for (;;) {
+            const sector = stmtOpenSector.get(puzzle.id);
+            if (!sector) return null;
 
-        // Defensive guard: sector should not be open with no space remaining
-        if (effective <= 0n) {
-            db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?")
-                .run(sector.id);
-            return null;
+            const current   = BigInt('0x' + sector.current_hex);
+            const sectorEnd = BigInt('0x' + sector.end_hex);
+            const effective = chunkSize < (sectorEnd - current) ? chunkSize : (sectorEnd - current);
+
+            if (effective <= 0n) {
+                // Stale open sector — clean up and try another
+                stmtSectorDone.run(sector.id);
+                continue;
+            }
+
+            const startHex = current.toString(16).padStart(64, '0');
+            const endHex   = (current + effective).toString(16).padStart(64, '0');
+
+            if (current + effective >= sectorEnd) {
+                stmtSectorDone.run(sector.id);
+            } else {
+                stmtSectorAdvance.run(endHex, sector.id);
+            }
+
+            const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name);
+            return { chunkId: info.lastInsertRowid, startHex, endHex };
         }
+    });
 
-        const startHex = current.toString(16).padStart(64, '0');
-        const endHex   = (current + effective).toString(16).padStart(64, '0');
+    // Test chunk claiming — IMMEDIATE transaction to prevent two concurrent requests
+    // from both passing the "not yet taken" check before either inserts.
+    const claimTestChunk = db.transaction((name, puzzle) => {
+        const taken = db.prepare(`
+            SELECT id FROM chunks
+            WHERE puzzle_id = ? AND start_hex = ?
+              AND status IN ('assigned', 'completed', 'FOUND')
+            LIMIT 1
+        `).get(puzzle.id, puzzle.test_start_hex);
+        if (taken) return null;
 
-        if (current + effective >= sectorEnd) {
-            db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?")
-                .run(sector.id);
-        } else {
-            db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?")
-                .run(endHex, sector.id);
-        }
+        const reclaimed = db.prepare(`
+            UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+            WHERE id = (
+                SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1
+            )
+            RETURNING *
+        `).get(name, puzzle.id, puzzle.test_start_hex);
+        if (reclaimed) return reclaimed;
 
-        const info = db.prepare(`
+        return db.prepare(`
             INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
             VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP)
-        `).run(puzzle.id, startHex, endHex, name);
-
-        return { chunkId: info.lastInsertRowid, startHex, endHex };
+            RETURNING *
+        `).get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex, name);
     });
 
     const app = express();
@@ -147,49 +182,12 @@ app.post('/api/v1/work', (req, res) => {
 
     let chunkId, startHex, endHex;
 
-    // PRIORITY 1: Test chunk — assign it to the very first requester if not yet taken.
-    // "Not yet taken" means no chunk row with this exact start_hex exists in
-    // assigned/completed/FOUND state. Reclaimed test chunks are reissued normally below.
+    // PRIORITY 1: Test chunk — atomic IMMEDIATE claim; only one worker ever receives it.
     if (puzzle.test_start_hex && puzzle.test_end_hex) {
-        const testTaken = db.prepare(`
-            SELECT id FROM chunks
-            WHERE puzzle_id = ? AND start_hex = ?
-              AND status IN ('assigned', 'completed', 'FOUND')
-            LIMIT 1
-        `).get(puzzle.id, puzzle.test_start_hex);
-
-        if (!testTaken) {
-            // Check if it was previously reclaimed — reuse that row rather than inserting a new one
-            const testReclaimed = db.prepare(`
-                SELECT * FROM chunks
-                WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed'
-                LIMIT 1
-            `).get(puzzle.id, puzzle.test_start_hex);
-
-            if (testReclaimed) {
-                const assigned = db.prepare(`
-                    UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
-                    WHERE id = (
-                        SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1
-                    )
-                    RETURNING *
-                `).get(name, puzzle.id, puzzle.test_start_hex);
-                if (!assigned) return res.status(503).json({ error: "No work available" });
-                chunkId  = assigned.id;
-                startHex = assigned.start_hex;
-                endHex   = assigned.end_hex;
-            } else {
-                startHex = puzzle.test_start_hex;
-                endHex   = puzzle.test_end_hex;
-                const info = db.prepare(`
-                    INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
-                    VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP)
-                `).run(puzzle.id, startHex, endHex, name);
-                chunkId = info.lastInsertRowid;
-            }
-
-            console.log(`[Test] Assigned test chunk #${chunkId} to ${name}`);
-            return res.json({ job_id: chunkId, start_key: startHex, end_key: endHex });
+        const claimed = claimTestChunk.immediate(name, puzzle);
+        if (claimed) {
+            console.log(`[Test] Assigned test chunk #${claimed.id} to ${name}`);
+            return res.json({ job_id: claimed.id, start_key: claimed.start_hex, end_key: claimed.end_hex });
         }
     }
 
@@ -459,7 +457,6 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     const { start_hex, end_hex } = req.body;
 
     if (!start_hex) {
-        // Clear
         db.prepare("UPDATE puzzles SET test_start_hex = NULL, test_end_hex = NULL WHERE id = ?")
             .run(puzzle.id);
         console.log(`[Admin] Test chunk cleared for puzzle ${puzzle.name}`);
@@ -473,6 +470,18 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
 
     const startNorm = start_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
     const endNorm   = end_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+
+    const ts = BigInt('0x' + startNorm);
+    const te = BigInt('0x' + endNorm);
+    const ps = BigInt('0x' + puzzle.start_hex);
+    const pe = BigInt('0x' + puzzle.end_hex);
+
+    if (te <= ts) {
+        return res.status(400).json({ error: "end_hex must be greater than start_hex" });
+    }
+    if (ts < ps || te > pe) {
+        return res.status(400).json({ error: "Test chunk must lie within active puzzle range" });
+    }
 
     db.prepare("UPDATE puzzles SET test_start_hex = ?, test_end_hex = ? WHERE id = ?")
         .run(startNorm, endNorm, puzzle.id);
@@ -493,6 +502,10 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
             db.prepare("UPDATE puzzles SET active = 0").run();
             db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(id);
         })();
+
+        // Seed sectors lazily if this puzzle has none (e.g. imported rows, pre-migration data)
+        const sectorCount = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id = ?").get(id).c;
+        if (sectorCount === 0) seedSectors(db, target.id, target.start_hex, target.end_hex);
 
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id);
         console.log(`[Admin] Active puzzle switched to: ${puzzle.name}`);
@@ -573,6 +586,10 @@ if (require.main === module) {
         }
         const startNorm = startRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
         const endNorm   = endRaw.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
+        if (BigInt('0x' + endNorm) <= BigInt('0x' + startNorm)) {
+            console.warn(`[Config] Skipping ${key} — end_hex must be greater than start_hex`);
+            continue;
+        }
         const existing  = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
         if (!existing) {
             const info = db.prepare("INSERT INTO puzzles (name, start_hex, end_hex, active) VALUES (?, ?, ?, 0)")
@@ -595,11 +612,14 @@ if (require.main === module) {
             '07fffffffffffffffff'.padStart(64, '0'));
     }
 
-    // Ensure exactly one puzzle is active
+    // Ensure exactly one puzzle is active (normalize both zero and multiple active)
     const activeCount = db.prepare("SELECT COUNT(*) as count FROM puzzles WHERE active = 1").get().count;
     if (activeCount === 0) {
         db.prepare("UPDATE puzzles SET active = 1 WHERE id = (SELECT MIN(id) FROM puzzles)").run();
         console.log('[Init] No active puzzle found — activated the first one.');
+    } else if (activeCount > 1) {
+        db.prepare("UPDATE puzzles SET active = 0 WHERE id != (SELECT MAX(id) FROM puzzles WHERE active = 1)").run();
+        console.log('[Init] Multiple active puzzles found — deactivated all but the latest.');
     }
 
     // Seed sectors for any existing puzzle that doesn't have them yet (migration path)
@@ -632,4 +652,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createApp, isValidHex, randomBigIntInRange, seedSectors };
+module.exports = { createApp, isValidHex, randomBigIntInRange, normalizeHashrate, seedSectors };
