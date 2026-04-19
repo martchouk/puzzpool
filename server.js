@@ -183,6 +183,13 @@ app.post('/api/v1/work', (req, res) => {
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
     if (!puzzle) return res.status(503).json({ error: "No active puzzle configured" });
 
+    // Idempotency: if the worker already holds an assigned production chunk, return it.
+    // Enforces at-most-one-chunk-per-worker and prevents pool starvation from greedy clients.
+    const existing = db.prepare(
+        "SELECT id, start_hex, end_hex FROM chunks WHERE worker_name = ? AND puzzle_id = ? AND status = 'assigned' AND is_test = 0 LIMIT 1"
+    ).get(name, puzzle.id);
+    if (existing) return res.json({ job_id: existing.id, start_key: existing.start_hex, end_key: existing.end_hex });
+
     let chunkId, startHex, endHex;
 
     // PRIORITY 1: Test chunk — atomic IMMEDIATE claim; only one worker ever receives it.
@@ -225,6 +232,13 @@ app.post('/api/v1/submit', (req, res) => {
     const { name, job_id, status, found_key, found_address } = req.body;
 
     if (status === "FOUND") {
+        // Update chunk first; only write side-effects (log, findings) if ownership confirmed.
+        const info = db.prepare(
+            "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ?"
+        ).run(found_key, found_address || null, job_id, name);
+
+        if (!info.changes) return res.json({ accepted: false });
+
         const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${found_key} | ADDR: ${found_address || 'Unknown'}\n`;
         console.log(`\n🚨🚨🚨 ${msg}`);
         fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
@@ -233,12 +247,19 @@ app.post('/api/v1/submit', (req, res) => {
         // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
         db.prepare("INSERT INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)")
             .run(job_id, name, found_key, found_address || null);
-
-        db.prepare("UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ?")
-            .run(found_key, found_address || null, job_id, name);
     } else {
-        db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ?")
+        const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ?")
             .run(job_id, name);
+        if (!info.changes) return res.json({ accepted: false });
+    }
+
+    // Auto-clear test chunk config after a successful submission so the test is one-shot.
+    // The admin must call set-test-chunk again to issue another test.
+    const chunk = db.prepare("SELECT is_test, puzzle_id FROM chunks WHERE id = ?").get(job_id);
+    if (chunk?.is_test) {
+        db.prepare("UPDATE puzzles SET test_start_hex = NULL, test_end_hex = NULL WHERE id = ?")
+            .run(chunk.puzzle_id);
+        console.log(`[Test] Test chunk #${job_id} completed — test config cleared from puzzle ${chunk.puzzle_id}`);
     }
 
     res.json({ accepted: true });
