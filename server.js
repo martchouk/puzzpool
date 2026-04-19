@@ -230,6 +230,7 @@ app.post('/api/v1/work', (req, res) => {
 // 2. Submit Results
 app.post('/api/v1/submit', (req, res) => {
     const { name, job_id, status, found_key, found_address } = req.body;
+    if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
 
     if (status === "FOUND") {
         // Update chunk first (status guard prevents invalid transitions from non-assigned rows).

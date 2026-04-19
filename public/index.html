@@ -335,7 +335,8 @@
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
   "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
   "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex) — scan [start_key, end_key)</span>
-}</pre>
+}
+<span class="comment">// If this worker already has an assigned chunk, the same job is returned again.</span></pre>
                 </div>
             </div>
         </div>
@@ -345,10 +346,11 @@
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request">{
-  "name":    "rig-01", <span class="comment">// must match name used in /work</span>
-  "job_id":  42,       <span class="comment">// job_id returned by /work</span>
-  "status":  "done",   <span class="comment">// "done" | "FOUND"</span>
-  "found_address": ""  <span class="comment">// only when status == "FOUND"</span>
+  "name":          "rig-01",   <span class="comment">// must match name used in /work</span>
+  "job_id":        42,         <span class="comment">// job_id returned by /work</span>
+  "status":        "done",     <span class="comment">// "done" or "FOUND" (case-sensitive; anything else is rejected)</span>
+  "found_key":     "0x...",    <span class="comment">// required when status == "FOUND"</span>
+  "found_address": "bc1..."    <span class="comment">// optional when status == "FOUND"</span>
 }</pre>
                 </div>
                 <div class="api-panel">
