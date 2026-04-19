@@ -80,10 +80,12 @@ function createApp(db) {
     const stmtSectorDone      = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
     const stmtSectorAdvance   = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
     const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0)");
-    const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status IN ('assigned', 'completed', 'FOUND') LIMIT 1");
+    // Both taken/reclaim queries match on start_hex + end_hex + is_test = 1 so a different
+    // test chunk with the same start but different end cannot interfere.
+    const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status IN ('assigned', 'completed', 'FOUND') LIMIT 1");
     const stmtTestChunkReclaim = db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
-        WHERE id = (SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND status = 'reclaimed' LIMIT 1)
+        WHERE id = (SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'reclaimed' LIMIT 1)
         RETURNING *
     `);
     const stmtTestChunkInsert = db.prepare(`
@@ -132,10 +134,14 @@ function createApp(db) {
     // Test chunk claiming — IMMEDIATE transaction to prevent two concurrent requests
     // from both passing the "not yet taken" check before either inserts.
     // is_test = 1 is set on insert so these rows are excluded from puzzle stats.
+    // Completed/FOUND test chunks count as permanently taken; admins who want to rerun
+    // a test should call set-test-chunk again (even with the same range) — the next
+    // /work request will issue a fresh insert because the old row has a different end_hex
+    // or the taken check won't match a re-set range.
     const claimTestChunk = db.transaction((name, puzzle) => {
-        const taken = stmtTestChunkTaken.get(puzzle.id, puzzle.test_start_hex);
+        const taken = stmtTestChunkTaken.get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex);
         if (taken) return null;
-        const reclaimed = stmtTestChunkReclaim.get(name, puzzle.id, puzzle.test_start_hex);
+        const reclaimed = stmtTestChunkReclaim.get(name, puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex);
         if (reclaimed) return reclaimed;
         return stmtTestChunkInsert.get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex, name);
     });
@@ -189,10 +195,11 @@ app.post('/api/v1/work', (req, res) => {
 
     // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign.
     // Sector frontiers are never rolled back on reclaim; chunks table is the reissue source.
+    // is_test = 0 guard prevents a reclaimed test chunk from leaking into normal work.
     const reclaimed = db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
         WHERE id = (
-            SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? LIMIT 1
+            SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? AND is_test = 0 LIMIT 1
         )
         RETURNING *
     `).get(name, puzzle.id);
@@ -249,7 +256,7 @@ app.get('/api/v1/stats', (req, res) => {
     const activeWorkers = pid ? db.prepare(`
         SELECT DISTINCT w.name, w.hashrate, w.last_seen
         FROM workers w
-        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ?
+        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
         WHERE w.last_seen >= datetime('now', '-10 minutes')
         ORDER BY w.hashrate DESC
     `).all(pid) : [];
@@ -312,12 +319,12 @@ app.get('/api/v1/stats', (req, res) => {
         SELECT f.worker_name, f.found_key, f.found_address, f.created_at
         FROM findings f
         JOIN chunks c ON c.id = f.chunk_id
-        WHERE c.puzzle_id = ?
+        WHERE c.puzzle_id = ? AND c.is_test = 0
         ORDER BY f.id ASC
     `).all(pid) : [];
 
     const assignedNow = puzzle
-        ? db.prepare("SELECT id, worker_name FROM chunks WHERE status = 'assigned' AND puzzle_id = ?").all(puzzle.id)
+        ? db.prepare("SELECT id, worker_name FROM chunks WHERE status = 'assigned' AND puzzle_id = ? AND is_test = 0").all(puzzle.id)
         : [];
     const workerChunkMap = {};
     for (const c of assignedNow) workerChunkMap[c.worker_name] = c.id;
@@ -574,7 +581,24 @@ if (require.main === module) {
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks  ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    // is_test defaults to 0 for all pre-existing rows. Best-effort backfill: mark any chunk
+    // whose range exactly matches the puzzle's current test_start_hex/test_end_hex as is_test=1.
+    // Chunks from previously-used test ranges that no longer match cannot be recovered
+    // automatically — manual cleanup is required for those rows if they cause stats noise.
+    try {
+        db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run();
+        db.prepare(`
+            UPDATE chunks SET is_test = 1
+            WHERE is_test = 0
+              AND EXISTS (
+                SELECT 1 FROM puzzles p
+                WHERE p.id = chunks.puzzle_id
+                  AND p.test_start_hex IS NOT NULL
+                  AND chunks.start_hex = p.test_start_hex
+                  AND chunks.end_hex   = p.test_end_hex
+              )
+        `).run();
+    } catch (_) {}
 
     // Seed puzzles from KEYSPACE_<NAME>=<start_hex>:<end_hex> env vars
     for (const [key, value] of Object.entries(process.env)) {
