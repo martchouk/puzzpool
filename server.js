@@ -170,11 +170,12 @@ app.post('/api/v1/work', (req, res) => {
     const { name, hashrate } = req.body;
     if (!name) return res.status(400).json({ error: "Missing name" });
 
-    // Upsert worker
+    // Upsert worker — store normalized hashrate so /stats sorting and totals are safe
+    const hashrateNum = Number(normalizeHashrate(hashrate));
     db.prepare(`
         INSERT INTO workers (name, hashrate, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP
-    `).run(name, hashrate || 0);
+    `).run(name, hashrateNum);
 
     // Fetch active puzzle
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
@@ -479,8 +480,11 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     if (te <= ts) {
         return res.status(400).json({ error: "end_hex must be greater than start_hex" });
     }
-    if (ts < ps || te > pe) {
-        return res.status(400).json({ error: "Test chunk must lie within active puzzle range" });
+    // Test chunks must lie OUTSIDE the active puzzle range so the sector allocator
+    // can never hand out the same keys as a fresh production chunk.
+    const overlaps = ts < pe && ps < te;
+    if (overlaps) {
+        return res.status(400).json({ error: "Test chunk must not overlap the active puzzle range" });
     }
 
     db.prepare("UPDATE puzzles SET test_start_hex = ?, test_end_hex = ? WHERE id = ?")
