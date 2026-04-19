@@ -345,19 +345,24 @@
             <div class="api-body">
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
-                    <pre class="request">{
-  "name":          "rig-01",   <span class="comment">// must match name used in /work</span>
-  "job_id":        42,         <span class="comment">// job_id returned by /work</span>
-  "status":        "done",     <span class="comment">// "done" or "FOUND" (case-sensitive; anything else is rejected)</span>
-  "found_key":     "0x...",    <span class="comment">// required when status == "FOUND"</span>
-  "found_address": "bc1..."    <span class="comment">// optional when status == "FOUND"</span>
+                    <pre class="request"><span class="comment">// Chunk completed normally:</span>
+{ "name": "rig-01", "job_id": 42, "status": "done" }
+
+<span class="comment">// Key found (status is case-sensitive; anything else returns 400):</span>
+{
+  "name":          "rig-01",
+  "job_id":        42,
+  "status":        "FOUND",
+  "found_key":     "0x...",  <span class="comment">// required</span>
+  "found_address": "bc1..."  <span class="comment">// optional</span>
 }</pre>
                 </div>
                 <div class="api-panel">
                     <div class="api-panel-label">Response</div>
                     <pre>{
-  "accepted": true  <span class="comment">// false if job_id unknown / already closed; 400 if status or found_key invalid</span>
-}</pre>
+  "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
+}
+<span class="comment">// 400 if status is invalid or found_key is missing for FOUND</span></pre>
                 </div>
             </div>
         </div>

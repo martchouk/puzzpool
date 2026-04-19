@@ -642,6 +642,7 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test         INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
+    // Migration path for DBs created before idx_findings_dedup was added.
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly
     // matches the puzzle's current test_start_hex/test_end_hex as is_test=1. Chunks from
