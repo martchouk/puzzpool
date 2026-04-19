@@ -76,6 +76,8 @@ function seedSectors(db, puzzleId, startHex, endHex) {
 function createApp(db) {
     // Prepared statements hoisted here so they are compiled once, not on every request.
     const stmtOpenSector      = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
+    const stmtOpenSectorAt    = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY id ASC LIMIT 1 OFFSET ?");
+    const stmtChunkCount      = db.prepare("SELECT COUNT(*) as cnt FROM chunks WHERE puzzle_id = ? AND is_test = 0");
     const stmtWorkerHash      = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
     const stmtSectorDone      = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
     const stmtSectorAdvance   = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
@@ -96,6 +98,10 @@ function createApp(db) {
         RETURNING *
     `);
 
+    // Index of the mid-keyspace sector handed to the very first worker when no test
+    // chunk is configured. Matches the shard #32768 used by set-test-chunk.
+    const MIDPOINT_SECTOR = 32768;
+
     // Fresh allocation from sector frontier.
     // BEGIN IMMEDIATE acquires the write lock before the SELECT so two concurrent
     // connections cannot observe the same open sector. ORDER BY RANDOM() over
@@ -105,8 +111,16 @@ function createApp(db) {
         const hashrateBig = normalizeHashrate(hashrate || stmtWorkerHash.get(name)?.hashrate);
         const chunkSize   = hashrateBig * BigInt(TARGET_MINUTES * 60);
 
+        // On the very first work request for this puzzle, target sector #32768 so
+        // the mid-keyspace chunk is issued first — the worker can verify end-to-end
+        // by finding a known address there. Falls back to random if the puzzle has
+        // fewer than 32769 sectors.
+        const isFirst = stmtChunkCount.get(puzzle.id).cnt === 0;
+
         for (;;) {
-            const sector = stmtOpenSector.get(puzzle.id);
+            const sector = isFirst
+                ? (stmtOpenSectorAt.get(puzzle.id, MIDPOINT_SECTOR) || stmtOpenSector.get(puzzle.id))
+                : stmtOpenSector.get(puzzle.id);
             if (!sector) return null;
 
             const current   = BigInt('0x' + sector.current_hex);

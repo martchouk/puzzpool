@@ -278,6 +278,19 @@ describe('GET /api/v1/stats puzzles field', () => {
 // ─── Sharded Frontier Allocator ──────────────────────────────────────────────
 
 describe('Sharded Frontier Allocator', () => {
+    test('0. first work request without test chunk targets sector #32768', async () => {
+        // Puzzle with exactly 65536 sectors (range = 65536 × MIN_SECTOR_SIZE = 65536 × 1B)
+        const end = (65536n * 1_000_000_000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { name: 'Large', end_hex: end });
+
+        const res = await request(app).post('/api/v1/work')
+            .send({ name: 'w1', hashrate: 1e6 }).expect(200);
+
+        // Sector #32768 start = 32768 × 1,000,000,000
+        const expected = (32768n * 1_000_000_000n).toString(16).padStart(64, '0');
+        expect(res.body.start_key).toBe(expected);
+    }, 15000);
+
     test('1. no-overlap: fresh assignments do not share any key', async () => {
         seedPuzzle(db);
         const chunks = [];
