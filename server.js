@@ -82,8 +82,8 @@ function createApp(db) {
     const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0)");
     // Both taken/reclaim queries match on start_hex + end_hex + is_test = 1 so a different
     // test chunk with the same start but different end cannot interfere.
-    // Only 'assigned' counts as taken — completed/FOUND rows do not block reissue, so admins
-    // can rerun the same test range without manual DB cleanup.
+    // Only 'assigned' blocks reissue. After a successful submit the test config is
+    // auto-cleared, so a rerun requires the admin to call set-test-chunk again.
     const stmtTestChunkTaken  = db.prepare("SELECT id FROM chunks WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'assigned' LIMIT 1");
     const stmtTestChunkReclaim = db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
@@ -136,8 +136,8 @@ function createApp(db) {
     // Test chunk claiming — IMMEDIATE transaction to prevent two concurrent requests
     // from both passing the "not yet taken" check before either inserts.
     // is_test = 1 is set on insert so these rows are excluded from puzzle stats.
-    // Only an 'assigned' row blocks reissue; completed/FOUND rows do not, so the admin
-    // can rerun the exact same test range without any DB cleanup.
+    // Reissue is blocked only while status = 'assigned'; after completion the test
+    // config is auto-cleared so a rerun requires the admin to call set-test-chunk again.
     const claimTestChunk = db.transaction((name, puzzle) => {
         const taken = stmtTestChunkTaken.get(puzzle.id, puzzle.test_start_hex, puzzle.test_end_hex);
         if (taken) return null;
@@ -259,9 +259,9 @@ app.post('/api/v1/submit', (req, res) => {
     // arrives is not accidentally erased.
     const chunk = db.prepare("SELECT is_test, puzzle_id, start_hex, end_hex FROM chunks WHERE id = ?").get(job_id);
     if (chunk?.is_test) {
-        db.prepare("UPDATE puzzles SET test_start_hex = NULL, test_end_hex = NULL WHERE id = ? AND test_start_hex = ? AND test_end_hex = ?")
+        const cleared = db.prepare("UPDATE puzzles SET test_start_hex = NULL, test_end_hex = NULL WHERE id = ? AND test_start_hex = ? AND test_end_hex = ?")
             .run(chunk.puzzle_id, chunk.start_hex, chunk.end_hex);
-        console.log(`[Test] Test chunk #${job_id} completed — test config cleared from puzzle ${chunk.puzzle_id}`);
+        if (cleared.changes) console.log(`[Test] Test chunk #${job_id} completed — test config cleared from puzzle ${chunk.puzzle_id}`);
     }
 
     res.json({ accepted: true });
