@@ -928,7 +928,7 @@
                     <td class="td-finder">${f.worker_name}</td>
                     <td class="td-addr">${f.found_address || 'Unknown'}</td>
                     <td>${f.shard ?? '—'}</td>
-                    <td>${f.chunk_id ?? '—'}</td>
+                    <td>${f.chunk ?? '—'}</td>
                 </tr>`).join('');
 
             } catch (e) { console.error(e); }

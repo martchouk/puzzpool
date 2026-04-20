@@ -414,8 +414,10 @@ app.get('/api/v1/stats', (req, res) => {
 
     const finders = pid ? db.prepare(`
         SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-               c.id AS chunk_id,
-               (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id) AS shard
+               c.id AS chunk,
+               CASE WHEN c.sector_id IS NULL THEN NULL
+                    ELSE (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
+               END AS shard
         FROM findings f
         JOIN chunks c ON c.id = f.chunk_id
         WHERE c.puzzle_id = ? AND c.is_test = 0

@@ -192,9 +192,9 @@ describe('GET /api/v1/stats', () => {
             .send({ name: 'w1', job_id, status: 'FOUND', found_key: '0'.repeat(64), found_address: '1Test' });
         const stats = await request(app).get('/api/v1/stats');
         const finder = stats.body.finders[0];
-        expect(typeof finder.chunk_id).toBe('number');
+        expect(typeof finder.chunk).toBe('number');
         expect(typeof finder.shard).toBe('number');
-        expect(finder.chunk_id).toBe(job_id);
+        expect(finder.chunk).toBe(job_id);
     });
 
     test('total_keys_completed reflects submitted chunks', async () => {
