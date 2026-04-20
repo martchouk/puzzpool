@@ -38,10 +38,11 @@ function normalizeHashrate(input, fallback = 1_000_000) {
     return BigInt(Math.max(1, Math.floor(n)));
 }
 
+const TARGET_SECTORS = 65536n;  // max sectors per puzzle; tune and benchmark before raising
+
 // Divide puzzle keyspace into sectors with independent frontiers.
 // All intervals are half-open [start, end). numSectors clamped to [1, TARGET_SECTORS].
 function seedSectors(db, puzzleId, startHex, endHex) {
-    const TARGET_SECTORS  = 65536n;
     const MIN_SECTOR_SIZE = 1_000_000_000n;
 
     const start = BigInt('0x' + startHex);
@@ -98,9 +99,9 @@ function createApp(db) {
         RETURNING *
     `);
 
-    // Index of the mid-keyspace sector handed to the very first worker when no test
-    // chunk is configured.
-    const MIDPOINT_SECTOR = 32768;
+    // 0-based offset of the mid-keyspace sector for the first work request.
+    // Derived from TARGET_SECTORS so it stays correct if the sector count is tuned.
+    const MIDPOINT_SECTOR = Number(TARGET_SECTORS / 2n);
 
     // Fresh allocation from sector frontier.
     // BEGIN IMMEDIATE acquires the write lock before the SELECT so two concurrent
