@@ -8,6 +8,7 @@ const PORT            = parseInt(process.env.PORT           || '8888', 10);
 const DB_PATH         = process.env.DB_PATH                 || 'pool.db';
 const TARGET_MINUTES  = parseInt(process.env.TARGET_MINUTES  || '5',    10);
 const TIMEOUT_MINUTES = parseInt(process.env.TIMEOUT_MINUTES || '15',   10);
+const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 10));
 
 // --- Pure helpers (no db dependency) ---
 
@@ -38,7 +39,6 @@ function normalizeHashrate(input, fallback = 1_000_000) {
     return BigInt(Math.max(1, Math.floor(n)));
 }
 
-const TARGET_SECTORS = 65536n;  // max sectors per puzzle; tune and benchmark before raising
 
 // Divide puzzle keyspace into sectors with independent frontiers.
 // All intervals are half-open [start, end). numSectors clamped to [1, TARGET_SECTORS].
