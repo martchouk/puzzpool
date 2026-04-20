@@ -246,7 +246,13 @@ app.post('/api/v1/submit', (req, res) => {
     const { name, job_id, status, found_key, found_address, findings: extraFindings } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
     if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
-    if (extraFindings !== undefined && !Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
+    if (extraFindings !== undefined) {
+        if (!Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
+        for (const f of extraFindings) {
+            if (!f || typeof f !== 'object' || Array.isArray(f)) return res.status(400).json({ error: 'each finding must be a plain object' });
+            if (f.found_key !== undefined && !isValidHex(f.found_key)) return res.status(400).json({ error: 'each found_key must be a valid hex string' });
+        }
+    }
 
     if (status === "FOUND") {
         // Build the full finding set up front, before any DB work.
@@ -577,6 +583,10 @@ app.post('/api/v1/admin/set-test-chunk', (req, res) => {
         // Auto-resolve end_hex: exactly one GPU batch so the client neither undershoots
         // nor overshoots the job boundary. Sector end is intentionally NOT used — a
         // sector covers trillions of keys, far more than one worker should scan for a test.
+        const MAX_256 = (1n << 256n) - 1n;
+        if (ts + GPU_BATCH_KEYS > MAX_256) {
+            return res.status(400).json({ error: 'auto-resolved end_hex exceeds 256-bit range' });
+        }
         endNorm = (ts + GPU_BATCH_KEYS).toString(16).padStart(64, '0');
     }
 
