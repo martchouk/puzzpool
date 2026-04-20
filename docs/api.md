@@ -67,7 +67,7 @@ Report completion of a chunk, or a key discovery.
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
 | `found_key` | string | when FOUND | Private key (hex) |
-| `found_address` | string | no | Bitcoin address if known |
+| `found_address` | string | no | Bitcoin address or hash160 hex (40-char) if known; clients loading binary `.h160` files may submit the hash160 hex directly |
 
 **Response 200**
 ```json
