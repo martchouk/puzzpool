@@ -82,7 +82,7 @@ function createApp(db) {
     const stmtWorkerHash      = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
     const stmtSectorDone      = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
     const stmtSectorAdvance   = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
-    const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0)");
+    const stmtInsertChunk     = db.prepare("INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test, sector_id) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, ?)");
     // Both taken/reclaim queries match on start_hex + end_hex + is_test = 1 so a different
     // test chunk with the same start but different end cannot interfere.
     // Only 'assigned' blocks reissue. After a successful submit the test config is
@@ -143,7 +143,7 @@ function createApp(db) {
                 stmtSectorAdvance.run(endHex, sector.id);
             }
 
-            const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name);
+            const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, sector.id);
             return { chunkId: info.lastInsertRowid, startHex, endHex };
         }
     });
@@ -413,7 +413,9 @@ app.get('/api/v1/stats', (req, res) => {
         });
 
     const finders = pid ? db.prepare(`
-        SELECT f.worker_name, f.found_key, f.found_address, f.created_at
+        SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
+               c.id AS chunk_id,
+               (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id) AS shard
         FROM findings f
         JOIN chunks c ON c.id = f.chunk_id
         WHERE c.puzzle_id = ? AND c.is_test = 0
@@ -667,7 +669,8 @@ if (require.main === module) {
         assigned_at DATETIME,
         found_key TEXT,
         found_address TEXT,
-        is_test INTEGER NOT NULL DEFAULT 0
+        is_test INTEGER NOT NULL DEFAULT 0,
+        sector_id INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
       CREATE TABLE IF NOT EXISTS sectors (
@@ -696,6 +699,7 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex   TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test         INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN sector_id        INTEGER").run(); } catch (_) {}
     // Migration path for DBs created before idx_findings_dedup was added.
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly

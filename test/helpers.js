@@ -37,7 +37,8 @@ function createTestDb() {
             assigned_at DATETIME,
             found_key TEXT,
             found_address TEXT,
-            is_test INTEGER NOT NULL DEFAULT 0
+            is_test INTEGER NOT NULL DEFAULT 0,
+            sector_id INTEGER
         );
         CREATE TABLE sectors (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

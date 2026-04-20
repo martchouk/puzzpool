@@ -136,7 +136,9 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
-  "finders": [],
+  "finders": [
+    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_id": 42, "shard": 32768 }
+  ],
   "chunks_vis": [
     { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
   ]

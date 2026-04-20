@@ -184,6 +184,19 @@ describe('GET /api/v1/stats', () => {
         expect(typeof res.body.total_keys_completed).toBe('string');
     });
 
+    test('finders entry includes chunk_id and shard', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const { job_id } = r.body;
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'w1', job_id, status: 'FOUND', found_key: '0'.repeat(64), found_address: '1Test' });
+        const stats = await request(app).get('/api/v1/stats');
+        const finder = stats.body.finders[0];
+        expect(typeof finder.chunk_id).toBe('number');
+        expect(typeof finder.shard).toBe('number');
+        expect(finder.chunk_id).toBe(job_id);
+    });
+
     test('total_keys_completed reflects submitted chunks', async () => {
         seedPuzzle(db);
         const r = await request(app)
