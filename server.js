@@ -99,7 +99,7 @@ function createApp(db) {
     `);
 
     // Index of the mid-keyspace sector handed to the very first worker when no test
-    // chunk is configured. Matches the shard #32768 used by set-test-chunk.
+    // chunk is configured.
     const MIDPOINT_SECTOR = 32768;
 
     // Fresh allocation from sector frontier.
@@ -249,57 +249,67 @@ app.post('/api/v1/submit', (req, res) => {
     if (extraFindings !== undefined && !Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
 
     if (status === "FOUND") {
-        // Update chunk first (status guard prevents invalid transitions from non-assigned rows).
-        // Only write BINGO log and findings if the chunk was actually ours to update.
-        const info = db.prepare(
-            "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ? AND status = 'assigned'"
-        ).run(found_key, found_address || null, job_id, name);
-
-        if (!info.changes) {
-            // Idempotency: if this exact finding is already recorded (e.g. client retry
-            // after chunk was finalized by the first attempt), accept silently.
-            const alreadyRecorded = db.prepare(
-                "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
-            ).get(job_id, name, found_key);
-            if (alreadyRecorded) return res.json({ accepted: true });
-
-            // Late FOUND: chunk was reclaimed/reassigned before submission. Accept only if
-            // this worker was the previous legitimate assignee and the chunk is still
-            // in-progress (not yet finalized), to prevent duplicate accepted winners.
-            const latePrev = db.prepare(
-                "SELECT id, status FROM chunks WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')"
-            ).get(job_id, name);
-            if (!latePrev) return res.json({ accepted: false });
-
-            // Finalize the chunk in all cases — whether currently assigned to someone else
-            // or reclaimed. An accepted late FOUND must not remain mutable; leaving it
-            // assigned would let the current holder later overwrite it with completed or
-            // create a second accepted winner.
-            db.prepare(
-                "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
-            ).run(name, found_key, found_address || null, job_id);
-            console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
-        }
-
-        // INSERT OR IGNORE + unique index on (chunk_id, worker_name, found_key) makes
-        // dedup atomic — concurrent retries cannot both insert, and the BINGO log is
-        // only written when the insert actually claimed the row.
-        // findings rows are not marked is_test; test vs production is distinguished by
-        // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
-        const stmtInsertFinding = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)");
+        // Build the full finding set up front, before any DB work.
         const allFindings = [{ found_key, found_address }];
         if (Array.isArray(extraFindings)) {
             for (const f of extraFindings) {
                 if (f.found_key && f.found_key !== found_key) allFindings.push(f);
             }
         }
-        for (const f of allFindings) {
-            const findingInfo = stmtInsertFinding.run(job_id, name, f.found_key, f.found_address || null);
-            if (findingInfo.changes) {
-                const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${f.found_key} | ADDR: ${f.found_address || 'Unknown'}\n`;
-                console.log(`\n🚨🚨🚨 ${msg}`);
-                fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+
+        // Wrap chunk finalization + all findings inserts in one transaction so a
+        // crash between them cannot leave partial state. File logging happens after,
+        // keyed on which INSERT OR IGNORE rows actually changed.
+        // findings rows are not marked is_test; test vs production is distinguished by
+        // joining to chunks.is_test. /stats already filters with AND c.is_test = 0.
+        const stmtInsertFinding = db.prepare("INSERT OR IGNORE INTO findings (chunk_id, worker_name, found_key, found_address) VALUES (?, ?, ?, ?)");
+        const result = db.transaction(() => {
+            // Status guard prevents invalid transitions from non-assigned rows.
+            const info = db.prepare(
+                "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ? AND status = 'assigned'"
+            ).run(found_key, found_address || null, job_id, name);
+
+            let isLate = false;
+            if (!info.changes) {
+                // Chunk not updated — either already finalized or not owned.
+                const alreadyRecorded = db.prepare(
+                    "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
+                ).get(job_id, name, found_key);
+
+                if (!alreadyRecorded) {
+                    // Late FOUND: accept only if this worker was the previous legitimate
+                    // assignee and the chunk is still in-progress (not yet finalized).
+                    const latePrev = db.prepare(
+                        "SELECT id, status FROM chunks WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')"
+                    ).get(job_id, name);
+                    if (!latePrev) return { accepted: false, inserted: [], isLate: false };
+
+                    // Finalize — leaving it assigned would allow a second accepted winner.
+                    db.prepare(
+                        "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
+                    ).run(name, found_key, found_address || null, job_id);
+                    isLate = true;
+                }
+                // alreadyRecorded: primary finding exists — still process all findings so
+                // a retry that crashed mid-loop completes the set (INSERT OR IGNORE is safe).
             }
+
+            const inserted = [];
+            for (const f of allFindings) {
+                const r = stmtInsertFinding.run(job_id, name, f.found_key, f.found_address || null);
+                if (r.changes) inserted.push(f);
+            }
+            return { accepted: true, inserted, isLate };
+        })();
+
+        if (!result.accepted) return res.json({ accepted: false });
+        if (result.isLate) console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
+
+        // Log outside the transaction (file I/O cannot be atomic with SQLite).
+        for (const f of result.inserted) {
+            const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${f.found_key} | ADDR: ${f.found_address || 'Unknown'}\n`;
+            console.log(`\n🚨🚨🚨 ${msg}`);
+            fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
         }
     } else {
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
@@ -535,8 +545,7 @@ const GPU_BATCH_KEYS = 4_278_190_080n;
 // 5b. Admin: set (or clear) a test chunk on the active puzzle
 // POST /api/v1/admin/set-test-chunk
 // Body: { start_hex, end_hex }  — set a test chunk spanning [start_hex, end_hex)
-//       { start_hex }           — end_hex auto-resolved: sector end if start matches a
-//                                 sector boundary, otherwise start + GPU_BATCH_KEYS
+//       { start_hex }           — end_hex defaults to start_hex + GPU_BATCH_KEYS
 //       { start_hex: null }     — clear the test chunk
 app.post('/api/v1/admin/set-test-chunk', (req, res) => {
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
