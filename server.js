@@ -13,10 +13,13 @@ const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 
 // --- Pure helpers (no db dependency) ---
 
 // Validate that a string is a non-empty hex string (0x prefix optional, any case).
-// Callers must normalize (strip 0x, lowercase, padStart) before any DB write or comparison.
 function isValidHex(s) {
     if (typeof s !== 'string' || s.length === 0) return false;
     return /^(0x)?[0-9a-fA-F]+$/.test(s);
+}
+// Normalize hex: strip optional 0x/0X prefix, lowercase. Must be called after isValidHex passes.
+function normalizeHex(s) {
+    return s.replace(/^0x/i, '').toLowerCase();
 }
 
 // Exported for consumers that need arbitrary-range random sampling.
@@ -258,9 +261,10 @@ app.post('/api/v1/submit', (req, res) => {
             if (!isValidHex(f.found_key))
                 return res.status(400).json({ error: 'each found_key must be a valid hex string' });
         }
-        // Deduplicate by found_key, preserving order.
+        // Normalize and deduplicate by found_key, preserving order.
+        const normalized = findings.map(f => ({ ...f, found_key: normalizeHex(f.found_key) }));
         const seen = new Set();
-        const allFindings = findings.filter(f => seen.has(f.found_key) ? false : (seen.add(f.found_key), true));
+        const allFindings = normalized.filter(f => seen.has(f.found_key) ? false : (seen.add(f.found_key), true));
         const primaryKey  = allFindings[0].found_key;
         const primaryAddr = allFindings[0].found_address || null;
 
@@ -413,7 +417,7 @@ app.get('/api/v1/stats', (req, res) => {
 
     const finders = pid ? db.prepare(`
         SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-               c.id AS chunk_global,
+               CASE WHEN c.sector_id IS NULL THEN NULL ELSE c.id END AS chunk_global,
                CASE WHEN c.sector_id IS NULL THEN NULL
                     ELSE (SELECT COUNT(*) FROM chunks c2 WHERE c2.sector_id = c.sector_id AND c2.id < c.id)
                END AS chunk,

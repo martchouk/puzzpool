@@ -67,7 +67,7 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
-| `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string) and optionally `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
+| `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string, `0x` prefix optional) and may optionally include `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**
 ```json
