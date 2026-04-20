@@ -304,7 +304,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Chunk Global</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Chunk Global</th><th>Datetime</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -933,13 +933,14 @@
 
                 // Finders
                 const ftbody = document.getElementById('finder-list');
-                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(5, 'No keys found yet');
+                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(6, 'No keys found yet');
                 else ftbody.innerHTML = data.finders.map(f => `<tr>
                     <td class="td-finder">${f.worker_name}</td>
                     <td class="td-addr">${f.found_address || 'Unknown'}</td>
                     <td class="td-key">${f.shard ?? '—'}</td>
                     <td class="td-key">${f.chunk ?? '—'}</td>
                     <td class="td-key">${f.chunk_global ?? '—'}</td>
+                    <td class="td-time">${fmtUtc(f.created_at)}</td>
                 </tr>`).join('');
 
             } catch (e) { console.error(e); }
