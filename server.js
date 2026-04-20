@@ -246,6 +246,7 @@ app.post('/api/v1/submit', (req, res) => {
     const { name, job_id, status, found_key, found_address, findings: extraFindings } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
     if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
+    if (status === "FOUND" && !isValidHex(found_key)) return res.status(400).json({ error: 'found_key must be a valid hex string' });
     if (extraFindings !== undefined) {
         if (!Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
         for (const f of extraFindings) {
