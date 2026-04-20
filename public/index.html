@@ -437,6 +437,14 @@
             return s + " %";
         }
 
+        // ── Timestamp formatting ──
+        // SQLite CURRENT_TIMESTAMP is UTC; append 'Z' so Date treats it as UTC,
+        // then render in the browser's local timezone.
+        function fmtUtc(s) {
+            if (!s) return '—';
+            return new Date(s + 'Z').toLocaleString();
+        }
+
         // ── Stage / Favicon ──
         let _stageSet = false;
         function applyStage(stage) {
@@ -906,7 +914,7 @@
                     <td class="td-name">${w.name}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-time">${w.last_seen}</td>
+                    <td class="td-time">${fmtUtc(w.last_seen)}</td>
                 </tr>`).join('');
 
                 // Scores
