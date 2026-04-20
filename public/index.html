@@ -353,8 +353,11 @@
   "name":          "rig-01",
   "job_id":        42,
   "status":        "FOUND",
-  "found_key":     "0x...",  <span class="comment">// required</span>
-  "found_address": "bc1..."  <span class="comment">// optional</span>
+  "found_key":     "0x...",  <span class="comment">// required; hex string</span>
+  "found_address": "bc1...", <span class="comment">// optional; address or 40-char hash160 hex</span>
+  "extraFindings": [         <span class="comment">// optional; additional keys found in same chunk</span>
+    { "found_key": "0x...", "found_address": "bc1..." }
+  ]
 }</pre>
                 </div>
                 <div class="api-panel">
@@ -362,7 +365,7 @@
                     <pre>{
   "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
 }
-<span class="comment">// 400 if status is invalid or found_key is missing for FOUND</span></pre>
+<span class="comment">// 400 if status is invalid, found_key is missing/non-hex, or extraFindings is malformed</span></pre>
                 </div>
             </div>
         </div>
