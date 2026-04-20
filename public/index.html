@@ -925,9 +925,9 @@
                 else ftbody.innerHTML = data.finders.map(f => `<tr>
                     <td class="td-finder">${f.worker_name}</td>
                     <td class="td-addr">${f.found_address || 'Unknown'}</td>
-                    <td>${f.shard ?? '—'}</td>
-                    <td>${f.chunk ?? '—'}</td>
-                    <td>${f.chunk_global ?? '—'}</td>
+                    <td class="td-key">${f.shard ?? '—'}</td>
+                    <td class="td-key">${f.chunk ?? '—'}</td>
+                    <td class="td-key">${f.chunk_global ?? '—'}</td>
                 </tr>`).join('');
 
             } catch (e) { console.error(e); }
