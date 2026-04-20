@@ -17,9 +17,10 @@ function isValidHex(s) {
     if (typeof s !== 'string' || s.length === 0) return false;
     return /^(0x)?[0-9a-fA-F]+$/.test(s);
 }
-// Normalize hex: strip optional 0x/0X prefix, lowercase. Must be called after isValidHex passes.
+// Normalize hex to canonical 64-char zero-padded lowercase form.
+// Strips optional 0x prefix, handles leading zeros. Must be called after isValidHex passes.
 function normalizeHex(s) {
-    return s.replace(/^0x/i, '').toLowerCase();
+    return BigInt('0x' + s.replace(/^0x/i, '')).toString(16).padStart(64, '0');
 }
 
 // Exported for consumers that need arbitrary-range random sampling.
