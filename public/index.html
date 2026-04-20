@@ -304,7 +304,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Chunk Global</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -350,12 +350,10 @@
 
 <span class="comment">// Key found (status is case-sensitive; anything else returns 400):</span>
 {
-  "name":          "rig-01",
-  "job_id":        42,
-  "status":        "FOUND",
-  "found_key":     "0x...",  <span class="comment">// required; hex string</span>
-  "found_address": "bc1...", <span class="comment">// optional; address or 40-char hash160 hex</span>
-  "extraFindings": [         <span class="comment">// optional; additional keys found in same chunk</span>
+  "name":     "rig-01",
+  "job_id":   42,
+  "status":   "FOUND",
+  "findings": [              <span class="comment">// required; all found keys (at least one)</span>
     { "found_key": "0x...", "found_address": "bc1..." }
   ]
 }</pre>
@@ -365,7 +363,7 @@
                     <pre>{
   "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
 }
-<span class="comment">// 400 if status is invalid, found_key is missing/non-hex, or extraFindings is malformed</span></pre>
+<span class="comment">// 400 if status is invalid, findings is missing/empty, or any found_key is not valid hex</span></pre>
                 </div>
             </div>
         </div>
@@ -923,12 +921,13 @@
 
                 // Finders
                 const ftbody = document.getElementById('finder-list');
-                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(4, 'No keys found yet');
+                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(5, 'No keys found yet');
                 else ftbody.innerHTML = data.finders.map(f => `<tr>
                     <td class="td-finder">${f.worker_name}</td>
                     <td class="td-addr">${f.found_address || 'Unknown'}</td>
                     <td>${f.shard ?? '—'}</td>
                     <td>${f.chunk ?? '—'}</td>
+                    <td>${f.chunk_global ?? '—'}</td>
                 </tr>`).join('');
 
             } catch (e) { console.error(e); }

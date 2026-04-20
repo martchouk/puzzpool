@@ -112,10 +112,10 @@ function createApp(db) {
         const hashrateBig = normalizeHashrate(hashrate || stmtWorkerHash.get(name)?.hashrate);
         const chunkSize   = hashrateBig * BigInt(TARGET_MINUTES * 60);
 
-        // On the very first work request for this puzzle, target sector #32768 so
-        // the mid-keyspace chunk is issued first — the worker can verify end-to-end
-        // by finding a known address there. Falls back to random if the puzzle has
-        // fewer than 32769 sectors.
+        // On the very first work request for this puzzle, target sector MIDPOINT_SECTOR
+        // (TARGET_SECTORS / 2) so the mid-keyspace chunk is issued first — the worker
+        // can verify end-to-end by finding a known address there. Falls back to random
+        // if the puzzle has fewer sectors than MIDPOINT_SECTOR.
         const isFirst = stmtChunkCount.get(puzzle.id).cnt === 0;
 
         for (;;) {
@@ -244,26 +244,25 @@ app.post('/api/v1/work', (req, res) => {
 
 // 2. Submit Results
 app.post('/api/v1/submit', (req, res) => {
-    const { name, job_id, status, found_key, found_address, findings: extraFindings } = req.body;
+    const { name, job_id, status, findings } = req.body;
     if (status !== "done" && status !== "FOUND") return res.status(400).json({ error: 'status must be "done" or "FOUND"' });
-    if (status === "FOUND" && !found_key) return res.status(400).json({ error: 'found_key is required when status is "FOUND"' });
-    if (status === "FOUND" && !isValidHex(found_key)) return res.status(400).json({ error: 'found_key must be a valid hex string' });
-    if (extraFindings !== undefined) {
-        if (!Array.isArray(extraFindings)) return res.status(400).json({ error: 'findings must be an array' });
-        for (const f of extraFindings) {
-            if (!f || typeof f !== 'object' || Array.isArray(f)) return res.status(400).json({ error: 'each finding must be a plain object' });
-            if (f.found_key !== undefined && !isValidHex(f.found_key)) return res.status(400).json({ error: 'each found_key must be a valid hex string' });
-        }
-    }
 
     if (status === "FOUND") {
-        // Build the full finding set up front, before any DB work.
-        const allFindings = [{ found_key, found_address }];
-        if (Array.isArray(extraFindings)) {
-            for (const f of extraFindings) {
-                if (f.found_key && f.found_key !== found_key) allFindings.push(f);
-            }
+        if (!Array.isArray(findings) || findings.length === 0)
+            return res.status(400).json({ error: 'findings must be a non-empty array' });
+        for (const f of findings) {
+            if (!f || typeof f !== 'object' || Array.isArray(f))
+                return res.status(400).json({ error: 'each finding must be a plain object' });
+            if (!f.found_key)
+                return res.status(400).json({ error: 'each finding must include found_key' });
+            if (!isValidHex(f.found_key))
+                return res.status(400).json({ error: 'each found_key must be a valid hex string' });
         }
+        // Deduplicate by found_key, preserving order.
+        const seen = new Set();
+        const allFindings = findings.filter(f => seen.has(f.found_key) ? false : (seen.add(f.found_key), true));
+        const primaryKey  = allFindings[0].found_key;
+        const primaryAddr = allFindings[0].found_address || null;
 
         // Wrap chunk finalization + all findings inserts in one transaction so a
         // crash between them cannot leave partial state. File logging happens after,
@@ -275,14 +274,14 @@ app.post('/api/v1/submit', (req, res) => {
             // Status guard prevents invalid transitions from non-assigned rows.
             const info = db.prepare(
                 "UPDATE chunks SET status = 'FOUND', found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ? AND worker_name = ? AND status = 'assigned'"
-            ).run(found_key, found_address || null, job_id, name);
+            ).run(primaryKey, primaryAddr, job_id, name);
 
             let isLate = false;
             if (!info.changes) {
                 // Chunk not updated — either already finalized or not owned.
                 const alreadyRecorded = db.prepare(
                     "SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?"
-                ).get(job_id, name, found_key);
+                ).get(job_id, name, primaryKey);
 
                 if (!alreadyRecorded) {
                     // Late FOUND: accept only if this worker was the previous legitimate
@@ -295,7 +294,7 @@ app.post('/api/v1/submit', (req, res) => {
                     // Finalize — leaving it assigned would allow a second accepted winner.
                     db.prepare(
                         "UPDATE chunks SET status = 'FOUND', worker_name = ?, found_key = COALESCE(found_key, ?), found_address = COALESCE(found_address, ?) WHERE id = ?"
-                    ).run(name, found_key, found_address || null, job_id);
+                    ).run(name, primaryKey, primaryAddr, job_id);
                     isLate = true;
                 }
                 // alreadyRecorded: primary finding exists — still process all findings so
@@ -311,7 +310,7 @@ app.post('/api/v1/submit', (req, res) => {
         })();
 
         if (!result.accepted) return res.json({ accepted: false });
-        if (result.isLate) console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${found_key}`);
+        if (result.isLate) console.log(`[Late FOUND] Job: ${job_id} | Worker: ${name} (prev assignee) | KEY: ${primaryKey}`);
 
         // Log outside the transaction (file I/O cannot be atomic with SQLite).
         for (const f of result.inserted) {
@@ -414,7 +413,10 @@ app.get('/api/v1/stats', (req, res) => {
 
     const finders = pid ? db.prepare(`
         SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-               c.id AS chunk,
+               c.id AS chunk_global,
+               CASE WHEN c.sector_id IS NULL THEN NULL
+                    ELSE (SELECT COUNT(*) FROM chunks c2 WHERE c2.sector_id = c.sector_id AND c2.id < c.id)
+               END AS chunk,
                CASE WHEN c.sector_id IS NULL THEN NULL
                     ELSE (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
                END AS shard

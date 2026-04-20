@@ -114,11 +114,8 @@ describe('POST /api/v1/submit', () => {
     test('marks chunk FOUND and inserts findings row', async () => {
         await request(app)
             .post('/api/v1/submit')
-            .send({
-                name: 'w1', job_id: jobId, status: 'FOUND',
-                found_key: '0'.repeat(64),
-                found_address: '1TestAddress',
-            })
+            .send({ name: 'w1', job_id: jobId, status: 'FOUND',
+                findings: [{ found_key: '0'.repeat(64), found_address: '1TestAddress' }] })
             .expect(200);
         const chunk = db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId);
         expect(chunk.status).toBe('FOUND');
@@ -184,17 +181,20 @@ describe('GET /api/v1/stats', () => {
         expect(typeof res.body.total_keys_completed).toBe('string');
     });
 
-    test('finders entry includes chunk_id and shard', async () => {
+    test('finders entry includes shard, chunk, and chunk_global', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const { job_id } = r.body;
         await request(app).post('/api/v1/submit')
-            .send({ name: 'w1', job_id, status: 'FOUND', found_key: '0'.repeat(64), found_address: '1Test' });
+            .send({ name: 'w1', job_id, status: 'FOUND', findings: [{ found_key: '0'.repeat(64), found_address: '1Test' }] });
         const stats = await request(app).get('/api/v1/stats');
         const finder = stats.body.finders[0];
+        expect(typeof finder.chunk_global).toBe('number');
         expect(typeof finder.chunk).toBe('number');
         expect(typeof finder.shard).toBe('number');
-        expect(finder.chunk).toBe(job_id);
+        expect(finder.chunk_global).toBe(job_id);
+        expect(finder.chunk).toBe(0);   // first chunk in its sector
+        expect(finder.shard).toBe(0);   // first sector
     });
 
     test('total_keys_completed reflects submitted chunks', async () => {
@@ -475,7 +475,7 @@ describe('Sharded Frontier Allocator', () => {
 
         // Worker A submits FOUND late (chunk no longer assigned to them)
         const res = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', findings: [{ found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' }] })
             .expect(200);
         expect(res.body.accepted).toBe(true);
 
@@ -495,7 +495,7 @@ describe('Sharded Frontier Allocator', () => {
 
         // Worker A submits late FOUND while B holds it
         const late = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'aabb'.padStart(64, '0'), found_address: '1A' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', findings: [{ found_key: 'aabb'.padStart(64, '0'), found_address: '1A' }] })
             .expect(200);
         expect(late.body.accepted).toBe(true);
 
@@ -518,13 +518,13 @@ describe('Sharded Frontier Allocator', () => {
         const key = 'cafe'.padStart(64, '0');
         // First late FOUND
         const r1 = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: key, found_address: '1A' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', findings: [{ found_key: key, found_address: '1A' }] })
             .expect(200);
         expect(r1.body.accepted).toBe(true);
 
         // Retry — same request
         const r2 = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: key, found_address: '1A' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', findings: [{ found_key: key, found_address: '1A' }] })
             .expect(200);
         expect(r2.body.accepted).toBe(true);
 
@@ -540,7 +540,7 @@ describe('Sharded Frontier Allocator', () => {
         db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(jobId);
 
         const res = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', found_key: 'beef'.padStart(64, '0'), found_address: '1B' })
+            .send({ name: 'workerA', job_id: jobId, status: 'FOUND', findings: [{ found_key: 'beef'.padStart(64, '0'), found_address: '1B' }] })
             .expect(200);
         expect(res.body.accepted).toBe(true);
 
@@ -560,7 +560,7 @@ describe('Sharded Frontier Allocator', () => {
 
         // Unrelated worker tries to submit FOUND
         const res = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerB', job_id: jobId, status: 'FOUND', found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' })
+            .send({ name: 'workerB', job_id: jobId, status: 'FOUND', findings: [{ found_key: 'deadbeef'.padStart(64, '0'), found_address: '1Test' }] })
             .expect(200);
         expect(res.body.accepted).toBe(false);
 

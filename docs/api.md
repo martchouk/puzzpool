@@ -56,8 +56,9 @@ Report completion of a chunk, or a key discovery.
   "name": "worker-hostname",
   "job_id": 42,
   "status": "FOUND",
-  "found_key": "0000...0600000000000000001",
-  "found_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf"
+  "findings": [
+    { "found_key": "0000...0600000000000000001", "found_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf" }
+  ]
 }
 ```
 
@@ -66,8 +67,7 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
-| `found_key` | string | when FOUND | Private key (hex) |
-| `found_address` | string | no | Bitcoin address or hash160 hex (40-char) if known; clients loading binary `.h160` files may submit the hash160 hex directly |
+| `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string) and optionally `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**
 ```json
@@ -137,7 +137,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
   "finders": [
-    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk": 42, "shard": 32768 }
+    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "shard": 32768, "chunk": 3, "chunk_global": 42 }
   ],
   "chunks_vis": [
     { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
