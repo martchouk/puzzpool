@@ -12,10 +12,9 @@ const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 
 
 // --- Pure helpers (no db dependency) ---
 
-// Validate that a string is a non-empty hex string (0x prefix optional, any case).
+// Validate that a string is a 1–64 hex char key (0x prefix optional, any case).
 function isValidHex(s) {
-    if (typeof s !== 'string' || s.length === 0) return false;
-    return /^(0x)?[0-9a-fA-F]+$/.test(s);
+    return typeof s === 'string' && /^(0x)?[0-9a-fA-F]{1,64}$/.test(s);
 }
 // Normalize hex to canonical 64-char zero-padded lowercase form.
 // Strips optional 0x prefix, handles leading zeros. Must be called after isValidHex passes.
