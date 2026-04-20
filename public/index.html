@@ -443,9 +443,9 @@
             if (_stageSet) return;
             _stageSet = true;
             if (stage !== 'TEST') return;
-            // Swap favicon: cyan circle + black symbol (instead of orange circle + white symbol)
+            // Swap favicon: red circle + white symbol, matching the /TEST SYSTEM/ label color
             const link = document.querySelector('link[rel="icon"]');
-            if (link) link.href = link.href.replace('%23F7931A', '%2300ffff').replace('%23FFF', '%23000');
+            if (link) link.href = link.href.replace('%23F7931A', '%23ff3366');
             // Show test label in header
             document.getElementById('stage-label').style.display = 'inline';
         }
