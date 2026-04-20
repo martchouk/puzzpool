@@ -304,7 +304,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Chunk Global</th><th>Datetime</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -334,8 +334,9 @@
                     <pre>{
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
   "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
-  "end_key":   "0x...1c"  <span class="comment">// inclusive range end   (hex)</span>
-}</pre>
+  "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex) — scan [start_key, end_key)</span>
+}
+<span class="comment">// If this worker already has an assigned chunk, the same job is returned again.</span></pre>
                 </div>
             </div>
         </div>
@@ -344,18 +345,25 @@
             <div class="api-body">
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
-                    <pre class="request">{
-  "name":    "rig-01", <span class="comment">// must match name used in /work</span>
-  "job_id":  42,       <span class="comment">// job_id returned by /work</span>
-  "status":  "done",   <span class="comment">// "done" | "found"</span>
-  "found_address": ""  <span class="comment">// only when status == "found"</span>
+                    <pre class="request"><span class="comment">// Chunk completed normally:</span>
+{ "name": "rig-01", "job_id": 42, "status": "done" }
+
+<span class="comment">// Key found (status is case-sensitive; anything else returns 400):</span>
+{
+  "name":     "rig-01",
+  "job_id":   42,
+  "status":   "FOUND",
+  "findings": [              <span class="comment">// required; all found keys (at least one)</span>
+    { "found_key": "0x...", "found_address": "bc1..." }  <span class="comment">// found_address optional</span>
+  ]
 }</pre>
                 </div>
                 <div class="api-panel">
                     <div class="api-panel-label">Response</div>
                     <pre>{
-  "accepted": true  <span class="comment">// false if job_id unknown / already closed</span>
-}</pre>
+  "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
+}
+<span class="comment">// 400 if status is invalid, findings is missing/empty, or any found_key is not valid hex</span></pre>
                 </div>
             </div>
         </div>
@@ -429,15 +437,27 @@
             return s + " %";
         }
 
+        // ── Timestamp formatting ──
+        // SQLite CURRENT_TIMESTAMP is UTC; append 'Z' so Date treats it as UTC,
+        // then render in the browser's local timezone.
+        function fmtUtc(s) {
+            if (!s) return '—';
+            return new Date(s + 'Z').toLocaleString('de-DE', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+            });
+        }
+
         // ── Stage / Favicon ──
         let _stageSet = false;
         function applyStage(stage) {
             if (_stageSet) return;
             _stageSet = true;
             if (stage !== 'TEST') return;
-            // Swap favicon: cyan circle + black symbol (instead of orange circle + white symbol)
+            // Swap favicon: red circle + white symbol, matching the /TEST SYSTEM/ label color
             const link = document.querySelector('link[rel="icon"]');
-            if (link) link.href = link.href.replace('%23F7931A', '%2300ffff').replace('%23FFF', '%23000');
+            if (link) link.href = link.href.replace('%23F7931A', '%23ff3366');
             // Show test label in header
             document.getElementById('stage-label').style.display = 'inline';
         }
@@ -898,7 +918,7 @@
                     <td class="td-name">${w.name}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-time">${w.last_seen}</td>
+                    <td class="td-time">${fmtUtc(w.last_seen)}</td>
                 </tr>`).join('');
 
                 // Scores
@@ -907,16 +927,20 @@
                 else stbody.innerHTML = data.scores.map((s, i) => `<tr>
                     <td class="td-rank">#${i+1}</td>
                     <td class="td-name">${s.worker_name}</td>
-                    <td class="td-chunks">${Number(s.total_keys).toLocaleString()}</td>
+                    <td class="td-chunks">${formatBigInt(s.total_keys)}</td>
                     <td class="td-chunks">${s.completed_chunks.toLocaleString()}</td>
                 </tr>`).join('');
 
                 // Finders
                 const ftbody = document.getElementById('finder-list');
-                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(2, 'No keys found yet');
+                if (data.finders.length === 0) ftbody.innerHTML = emptyRow(6, 'No keys found yet');
                 else ftbody.innerHTML = data.finders.map(f => `<tr>
                     <td class="td-finder">${f.worker_name}</td>
                     <td class="td-addr">${f.found_address || 'Unknown'}</td>
+                    <td class="td-key">${f.shard ?? '—'}</td>
+                    <td class="td-key">${f.chunk ?? '—'}</td>
+                    <td class="td-key">${f.chunk_global ?? '—'}</td>
+                    <td class="td-time">${fmtUtc(f.created_at)}</td>
                 </tr>`).join('');
 
             } catch (e) { console.error(e); }
