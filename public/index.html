@@ -907,11 +907,13 @@ or any found_key is not valid hex</span></pre>
 
                     const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
                     const a = s => `<span style="color:var(--accent-amber)">${s}</span>`;
+                    const c = s => `<span style="color:var(--accent-cyan)">${s}</span>`;
+                    const g = s => `<span style="color:var(--accent-green)">${s}</span>`;
                     document.getElementById('puzzle-total-keys').innerHTML = `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
                     if (data.shards && data.shards.total > 0) {
                         const sh = data.shards;
                         document.getElementById('puzzle-shards').innerHTML =
-                            `Shards total: ${a(sh.total.toLocaleString())} · started: ${a(sh.started.toLocaleString())} · completed: ${a(sh.completed.toLocaleString())}`;
+                            `Shards total: ${a(sh.total.toLocaleString())} · started: ${c(sh.started.toLocaleString())} · completed: ${g(sh.completed.toLocaleString())}`;
                     } else {
                         document.getElementById('puzzle-shards').textContent = '';
                     }
