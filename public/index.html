@@ -235,12 +235,6 @@
                 <div id="completed-chunks" class="stat-value green">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Shards</div>
-                <div id="shards-started" class="stat-value cyan">—</div>
-                <div id="shards-completed" class="stat-value cyan">—</div>
-                <div id="shards-total" class="stat-subtext">—</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Keys Completed</div>
                 <div id="completed-keys" class="stat-value cyan">—</div>
                 <div id="completed-keys-pct" class="stat-subtext">—</div>
@@ -341,7 +335,8 @@
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
   "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
   "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex)</span>
-} <span class="comment">// scan [start_key, end_key)</span>
+}
+<span class="comment">// scan [start_key, end_key)</span>
 <span class="comment">// If the worker has an assigned chunk, the same job is returned.</span></pre>
                 </div>
             </div>
