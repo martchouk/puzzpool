@@ -36,7 +36,7 @@ function randomBigIntInRange(min, max) {
 
 // Coerce any client-supplied hashrate to a safe positive BigInt.
 // Returns BigInt(fallback) for NaN, Infinity, negative, zero, or non-numeric input.
-function normalizeHashrate(input, fallback = 1_000_000) {
+function normalizeHashrate(input, fallback = 1000000) {
     const n = Number(input);
     if (!Number.isFinite(n) || n <= 0) return BigInt(fallback);
     return BigInt(Math.max(1, Math.floor(n)));
@@ -46,7 +46,7 @@ function normalizeHashrate(input, fallback = 1_000_000) {
 // Divide puzzle keyspace into sectors with independent frontiers.
 // All intervals are half-open [start, end). numSectors clamped to [1, TARGET_SECTORS].
 function seedSectors(db, puzzleId, startHex, endHex) {
-    const MIN_SECTOR_SIZE = 1_000_000_000n;
+    const MIN_SECTOR_SIZE = 1000000000n;
 
     const start = BigInt('0x' + startHex);
     const end   = BigInt('0x' + endHex);
@@ -563,7 +563,7 @@ app.post('/api/v1/admin/set-puzzle', (req, res) => {
 
 // GPU batch size: N_THREADS * STEPS_PER_BATCH = 255*4096 * 4096 = 4,278,190,080 keys.
 // Used as the default test chunk size when end_hex is omitted.
-const GPU_BATCH_KEYS = 4_278_190_080n;
+const GPU_BATCH_KEYS = 4278190080n;
 
 // 5b. Admin: set (or clear) a test chunk on the active puzzle
 // POST /api/v1/admin/set-test-chunk
