@@ -466,6 +466,10 @@ app.get('/api/v1/stats', (req, res) => {
 
     const allPuzzles = db.prepare("SELECT id, name, active FROM puzzles ORDER BY id ASC").all();
 
+    const shardsTotal     = pid ? db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id = ?").get(pid).c : 0;
+    const shardsCompleted = pid ? db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id = ? AND status = 'done'").get(pid).c : 0;
+    const shardsStarted   = pid ? db.prepare("SELECT COUNT(DISTINCT sector_id) as c FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL").get(pid).c : 0;
+
     res.json({
         stage: process.env.STAGE || 'PROD',
         puzzles: allPuzzles,
@@ -484,6 +488,7 @@ app.get('/api/v1/stats', (req, res) => {
         total_hashrate: totalHashrate,
         completed_chunks: completedChunks,
         total_keys_completed: totalKeysCompleted.toString(),
+        shards: { total: shardsTotal, started: shardsStarted, completed: shardsCompleted },
         workers,
         scores,
         finders,
