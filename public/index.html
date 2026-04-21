@@ -340,9 +340,9 @@
                     <pre>{
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
   "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
-  "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex) — scan [start_key, end_key)</span>
-}
-<span class="comment">// If this worker already has an assigned chunk, the same job is returned again.</span></pre>
+  "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex)</span>
+} <span class="comment">// scan [start_key, end_key)</span>
+<span class="comment">// If the worker has an assigned chunk, the same job is returned.</span></pre>
                 </div>
             </div>
         </div>
