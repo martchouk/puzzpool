@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo *)",
+      "Bash(git fetch *)",
+      "Bash(GH_HOST=github.com gh pr list --repo martchouk/puzzpool)",
+      "Bash(git pull *)",
+      "Bash(gh issue *)",
+      "Bash(gh pr *)",
+      "Bash(gh api *)",
+      "Bash(npm test *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git commit *)",
+      "Bash(git *)",
+      "Bash(make clean *)",
+      "Bash(make)"
+    ]
+  }
+}

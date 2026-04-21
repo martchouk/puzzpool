@@ -40,3 +40,6 @@ curl -s -X POST https://puzzle.b58.de/api/v1/admin/set-test-chunk -H 'Content-Ty
 #curl -s -X POST https://puzzle.b58.de/api/v1/admin/set-test-chunk -H 'Content-Type: application/json' -d '{"start_hex":"0x5fffffffffff1b1e40","end_hex":"0x600000000000e4e1bf"}'
 #sqlite3 pool.db "SELECT test_start_hex, test_end_hex FROM puzzles WHERE active = 1;"
 
+#curl -X POST http://127.0.0.1:9999/api/v1/admin/set-test-chunk -H "Content-Type: application/json" -d '{"start_hex": "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b0001", "end_hex": "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b0101"}'
+
+#curl -X POST http://127.0.0.1:9999/api/v1/admin/set-test-chunk -H "Content-Type: application/json" -d '{"start_hex": "00000000000000000000000000000000000000000000005fffffffffffff8000", "end_hex": "00000000000000000000000000000000000000000000005fffffffffffff9000"}'
