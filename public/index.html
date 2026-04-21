@@ -250,6 +250,7 @@
             <div class="frontier-label" id="puzzle-name">Active Puzzle</div>
             <div id="frontier" class="frontier-value">Loading...</div>
             <div id="puzzle-total-keys" class="stat-subtext"></div>
+            <div id="puzzle-shards" class="stat-subtext"></div>
             <div id="puzzle-eta" class="stat-subtext"></div>
         </div>
 
@@ -906,6 +907,13 @@ or any found_key is not valid hex</span></pre>
 
                     const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
                     document.getElementById('puzzle-total-keys').textContent = `Keys total: ${formatBigInt(data.puzzle.total_keys)}`;
+                    if (data.shards && data.shards.total > 0) {
+                        const sh = data.shards;
+                        document.getElementById('puzzle-shards').textContent =
+                            `Shards total: ${sh.total.toLocaleString()} · started: ${sh.started.toLocaleString()} · completed: ${sh.completed.toLocaleString()}`;
+                    } else {
+                        document.getElementById('puzzle-shards').textContent = '';
+                    }
                     document.getElementById('puzzle-eta').textContent = `ETA: ${eta}`;
                 }
 
