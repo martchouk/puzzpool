@@ -15,13 +15,14 @@ Request the next keyspace chunk to scan.
 
 **Request**
 ```json
-{ "name": "worker-hostname", "hashrate": 8000000 }
+{ "name": "worker-hostname", "hashrate": 8000000, "version": "1.2.1" }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique worker identifier (hostname recommended) |
 | `hashrate` | number | no | Current scan speed in keys/s. Used to size chunks. Defaults to last known hashrate or 1,000,000. |
+| `version` | string | no | Client version string (e.g. from `APP_VERSION`). Displayed in the Active Workers dashboard. |
 
 **Response 200**
 ```json
@@ -131,7 +132,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "completed_chunks": 187,
   "total_keys_completed": "12345678901234567890",
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "current_chunk": 42 }
+    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "current_chunk": 42, "current_shard": 3 }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }

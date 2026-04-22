@@ -24,7 +24,8 @@ function createTestDb() {
         CREATE TABLE workers (
             name TEXT PRIMARY KEY,
             hashrate REAL,
-            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            version TEXT
         );
         CREATE TABLE chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

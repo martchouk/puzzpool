@@ -124,6 +124,7 @@
         .td-name { color: var(--text-primary); }
         .td-speed { color: var(--accent-green); }
         .td-time { color: var(--text-secondary); }
+        .td-mono { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); }
         .td-rank { color: var(--text-secondary); text-align: center; }
         .td-chunks { color: var(--accent-amber); }
         .td-key { color: var(--accent-amber); }
@@ -283,7 +284,7 @@
         <div class="section-title">Active Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Speed</th><th>Works on</th><th>Last Seen</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
                 <tbody id="worker-list"></tbody>
             </table>
         </div>
@@ -922,11 +923,13 @@ or any found_key is not valid hex</span></pre>
 
                 // Workers
                 const tbody = document.getElementById('worker-list');
-                if (data.workers.length === 0) tbody.innerHTML = emptyRow(4, 'No active workers');
+                if (data.workers.length === 0) tbody.innerHTML = emptyRow(6, 'No active workers');
                 else tbody.innerHTML = data.workers.map(w => `<tr>
                     <td class="td-name">${w.name}</td>
+                    <td class="td-mono">${w.version ?? '—'}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
+                    <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>
                     <td class="td-time">${fmtUtc(w.last_seen)}</td>
                 </tr>`).join('');
 

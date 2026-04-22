@@ -186,16 +186,16 @@ function createApp(db) {
 
 // 1. Request Work
 app.post('/api/v1/work', (req, res) => {
-    const { name, hashrate } = req.body;
+    const { name, hashrate, version } = req.body;
     if (!name) return res.status(400).json({ error: "Missing name" });
 
     // Upsert worker — normalize before storing. Number() loses precision above 2^53 but
     // that range (~9 PH/s) is well beyond realistic hardware; acceptable tradeoff.
     const hashrateNum = Number(normalizeHashrate(hashrate));
     db.prepare(`
-        INSERT INTO workers (name, hashrate, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP
-    `).run(name, hashrateNum);
+        INSERT INTO workers (name, hashrate, last_seen, version) VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+        ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP, version = excluded.version
+    `).run(name, hashrateNum, version || null);
 
     // Fetch active puzzle
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
@@ -354,7 +354,7 @@ app.get('/api/v1/stats', (req, res) => {
     const pid = puzzle ? puzzle.id : null;
 
     const activeWorkers = pid ? db.prepare(`
-        SELECT DISTINCT w.name, w.hashrate, w.last_seen
+        SELECT DISTINCT w.name, w.hashrate, w.last_seen, w.version
         FROM workers w
         JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
         WHERE w.last_seen >= datetime('now', '-10 minutes')
@@ -431,14 +431,26 @@ app.get('/api/v1/stats', (req, res) => {
     `).all(pid) : [];
 
     const assignedNow = puzzle
-        ? db.prepare("SELECT id, worker_name FROM chunks WHERE status = 'assigned' AND puzzle_id = ? AND is_test = 0").all(puzzle.id)
+        ? db.prepare(`
+            SELECT c.id, c.worker_name,
+                CASE WHEN c.sector_id IS NULL THEN NULL
+                     ELSE (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
+                END AS shard_num
+            FROM chunks c
+            WHERE c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
+        `).all(puzzle.id)
         : [];
     const workerChunkMap = {};
-    for (const c of assignedNow) workerChunkMap[c.worker_name] = c.id;
+    const workerShardMap = {};
+    for (const c of assignedNow) {
+        workerChunkMap[c.worker_name] = c.id;
+        workerShardMap[c.worker_name] = c.shard_num;
+    }
 
     const workers = activeWorkers.map(w => ({
         ...w,
-        current_chunk: workerChunkMap[w.name] ?? null
+        current_chunk: workerChunkMap[w.name] ?? null,
+        current_shard: workerShardMap[w.name] ?? null,
     }));
 
     let chunks_vis = [];
@@ -713,6 +725,7 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test         INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN sector_id        INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE workers ADD COLUMN version         TEXT").run();    } catch (_) {}
     // Migration path for DBs created before idx_findings_dedup was added.
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     // Best-effort backfill — runs every boot (idempotent). Marks chunks whose range exactly
