@@ -927,7 +927,7 @@ or any found_key is not valid hex</span></pre>
                 if (data.workers.length === 0) tbody.innerHTML = emptyRow(6, 'No active workers');
                 else tbody.innerHTML = data.workers.map(w => `<tr>
                     <td class="td-name">${w.name}</td>
-                    <td class="td-mono">${w.version ?? '—'}</td>
+                    <td class="td-mono">${w.version || 'unknown'}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
                     <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>

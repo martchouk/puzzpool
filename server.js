@@ -194,7 +194,7 @@ app.post('/api/v1/work', (req, res) => {
     const hashrateNum = Number(normalizeHashrate(hashrate));
     db.prepare(`
         INSERT INTO workers (name, hashrate, last_seen, version) VALUES (?, ?, CURRENT_TIMESTAMP, ?)
-        ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP, version = excluded.version
+        ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP, version = COALESCE(excluded.version, workers.version)
     `).run(name, hashrateNum, version || null);
 
     // Fetch active puzzle
