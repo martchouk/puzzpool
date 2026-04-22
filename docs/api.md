@@ -146,6 +146,17 @@ Dashboard data — polled every 3 seconds by `index.html`.
 }
 ```
 
+**`workers[]` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Worker identifier |
+| `hashrate` | number | Last reported scan speed in keys/s |
+| `version` | string\|null | Client version string sent via `/work`; null if not reported |
+| `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
+| `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
+| `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
+
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations.
 
