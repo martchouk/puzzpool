@@ -63,7 +63,7 @@ Four tables — all created automatically on first run.
 | Table | Purpose |
 |-------|---------|
 | `puzzles` | Puzzle definitions (keyspace range, active flag, test chunk) |
-| `workers` | Registered workers (name, hashrate, last seen) |
+| `workers` | Registered workers (name, hashrate, version, last seen) |
 | `chunks` | Work units (assigned / completed / reclaimed / FOUND) |
 | `findings` | Audit log of discovered private keys |
 

@@ -15,13 +15,14 @@ Request the next keyspace chunk to scan.
 
 **Request**
 ```json
-{ "name": "worker-hostname", "hashrate": 8000000 }
+{ "name": "worker-hostname", "hashrate": 8000000, "version": "1.2.1" }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique worker identifier (hostname recommended) |
 | `hashrate` | number | no | Current scan speed in keys/s. Used to size chunks. Defaults to last known hashrate or 1,000,000. |
+| `version` | string | no | Client version string (e.g. from `APP_VERSION`). Displayed in the Active Workers dashboard. |
 
 **Response 200**
 ```json
@@ -131,7 +132,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "completed_chunks": 187,
   "total_keys_completed": "12345678901234567890",
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "current_chunk": 42 }
+    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "current_chunk": 42, "current_shard": 3 }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
@@ -144,6 +145,17 @@ Dashboard data — polled every 3 seconds by `index.html`.
   ]
 }
 ```
+
+**`workers[]` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Worker identifier |
+| `hashrate` | number | Last reported scan speed in keys/s |
+| `version` | string\|null | Client version string sent via `/work`; null if not reported |
+| `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
+| `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
+| `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations.

@@ -25,6 +25,7 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ name             │ TEXT PK     │ Worker identifier (hostname)           │
 │ hashrate         │ REAL        │ Last reported keys/s                   │
 │ last_seen        │ DATETIME    │ Updated on every /work and /heartbeat  │
+│ version          │ TEXT NULL   │ Client version string from APP_VERSION │
 └──────────────────┴─────────────┴────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐

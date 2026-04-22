@@ -15,7 +15,10 @@
       "Bash(git commit *)",
       "Bash(git *)",
       "Bash(make clean *)",
-      "Bash(make)"
+      "Bash(make)",
+      "Read(//Users/john/git/addresses/**)",
+      "Bash(make benchmark_cpu)",
+      "Bash(make cpu *)"
     ]
   }
 }
