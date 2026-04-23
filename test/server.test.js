@@ -1,10 +1,11 @@
 'use strict';
 
 const request = require('supertest');
-const { createApp, ACTIVE_MINUTES } = require('../server');
+const { createApp, ACTIVE_MINUTES, REACTIVATE_MINUTES } = require('../server');
 const { createTestDb, seedPuzzle } = require('./helpers');
 
-const STALE_MINUTES = (ACTIVE_MINUTES || 1) + 1;
+const STALE_MINUTES          = (ACTIVE_MINUTES    || 1)  + 1; // stale for dashboard color
+const REACTIVATE_STALE_MINUTES = (REACTIVATE_MINUTES || 15) + 1; // stale for chunk reclaim
 
 let db, app;
 
@@ -249,12 +250,13 @@ describe('GET /api/v1/stats', () => {
         expect(res.body.active_workers_count).toBe(1);
     });
 
-    test('worker active=false when chunk reclaimed (no assigned chunk)', async () => {
+    test('worker active=false when chunk reclaimed (fresh heartbeat but no assigned chunk)', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(r.body.job_id);
         const res = await request(app).get('/api/v1/stats').expect(200);
         expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].fresh).toBe(true);
         expect(res.body.workers[0].active).toBe(false);
         expect(res.body.active_workers_count).toBe(0);
         expect(res.body.total_hashrate).toBe(0);
@@ -298,8 +300,8 @@ describe('GET /api/v1/stats', () => {
         const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const oldJobId = r1.body.job_id;
 
-        // Age worker past the active threshold
-        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${STALE_MINUTES} minutes') WHERE name = 'w1'`).run();
+        // Age worker past the ownership reactivation threshold
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${REACTIVATE_STALE_MINUTES} minutes') WHERE name = 'w1'`).run();
 
         // Worker re-activates
         const r2 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });

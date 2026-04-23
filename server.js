@@ -9,10 +9,19 @@ const DB_PATH         = process.env.DB_PATH                 || 'pool.db';
 const TARGET_MINUTES  = parseInt(process.env.TARGET_MINUTES  || '5',    10);
 const TIMEOUT_MINUTES = parseInt(process.env.TIMEOUT_MINUTES || '15',   10);
 const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 10));
-// Active threshold: a worker is green if last_seen is within this window AND holds an
-// assigned chunk. Capped at half of TIMEOUT_MINUTES so gray phase is always visible.
+// Dashboard freshness threshold only. Green = recent heartbeat; gray = visible but stale.
+// This controls UI state only and must not affect chunk ownership/reclaim logic.
 // Accepts fractional minutes (e.g. 0.333 ≈ 20 seconds).
-const ACTIVE_MINUTES  = Math.min(parseFloat(process.env.ACTIVE_MINUTES || '1.167'), Math.floor(TIMEOUT_MINUTES / 2));
+const DEFAULT_ACTIVE_MINUTES = 1.167;
+const rawActiveMinutes = parseFloat(process.env.ACTIVE_MINUTES || String(DEFAULT_ACTIVE_MINUTES));
+const ACTIVE_MINUTES_REQUESTED =
+    Number.isFinite(rawActiveMinutes) && rawActiveMinutes > 0 ? rawActiveMinutes : DEFAULT_ACTIVE_MINUTES;
+const ACTIVE_MINUTES = Math.max(0.1, Math.min(ACTIVE_MINUTES_REQUESTED, TIMEOUT_MINUTES / 2));
+
+// Ownership/reactivation threshold — separate from ACTIVE_MINUTES on purpose.
+// ACTIVE_MINUTES controls dashboard coloring; REACTIVATE_MINUTES controls when a
+// returning worker loses its previous assignment. Keep aligned with chunk-timeout semantics.
+const REACTIVATE_MINUTES = TIMEOUT_MINUTES;
 
 // --- Pure helpers (no db dependency) ---
 
@@ -197,16 +206,17 @@ app.post('/api/v1/work', (req, res) => {
     // that range (~9 PH/s) is well beyond realistic hardware; acceptable tradeoff.
     const hashrateNum = Number(normalizeHashrate(hashrate));
 
-    // Check if this is a re-activation (worker was inactive — last seen > 3 min ago).
-    // If so, reclaim their assigned chunk before the upsert so they get a fresh one.
+    // Check whether this worker is returning after the ownership timeout window.
+    // If so, reclaim its still-assigned chunk before the upsert so it receives fresh work.
+    // Uses REACTIVATE_MINUTES, not ACTIVE_MINUTES — UI freshness must not affect assignment ownership.
     const prevWorker = db.prepare(
-        `SELECT CASE WHEN last_seen < datetime('now', '-${ACTIVE_MINUTES} minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?`
+        `SELECT CASE WHEN last_seen < datetime('now', '-${REACTIVATE_MINUTES} minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?`
     ).get(name);
     const isReactivating = prevWorker?.inactive === 1;
     if (isReactivating) {
-        // Intentionally broad: reclaims all assigned chunks for this worker across all
-        // puzzles and including test chunks. Under the one-chunk-per-worker invariant this
-        // is always at most one row; the breadth is acceptable given that assumption.
+        // Intentionally broad: reclaim all still-assigned chunks for this worker across
+        // puzzles, including test chunks. Defensive cleanup for stale ownership on reactivation.
+        // If intentional multi-puzzle concurrent assignment is introduced later, revisit this.
         db.prepare(
             "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE worker_name = ? AND status = 'assigned'"
         ).run(name);
@@ -221,8 +231,9 @@ app.post('/api/v1/work', (req, res) => {
     const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
     if (!puzzle) return res.status(503).json({ error: "No active puzzle configured" });
 
-    // Idempotency: if the worker already holds any assigned chunk (test or production),
-    // return it. Enforces one chunk total per worker and prevents pool starvation.
+    // Idempotency within the currently active puzzle: if the worker already holds an
+    // assigned chunk for this puzzle (test or production), return it.
+    // Note: does not enforce a global one-chunk-per-worker invariant across puzzles.
     // Skipped for re-activating workers (their chunk was reclaimed above).
     const existing = db.prepare(
         "SELECT id, start_hex, end_hex FROM chunks WHERE worker_name = ? AND puzzle_id = ? AND status = 'assigned' LIMIT 1"
@@ -411,13 +422,27 @@ app.get('/api/v1/stats', (req, res) => {
     // switching tabs shows only that puzzle's stats, workers, scores, and findings.
     const pid = puzzle ? puzzle.id : null;
 
+    // Worker state model for this puzzle:
+    //   fresh:         recent heartbeat within ACTIVE_MINUTES
+    //   assigned_here: currently holds an assigned chunk in this puzzle
+    //   active:        fresh && assigned_here
+    //
+    // Row dimming, dot color, and aggregate counts (active_workers_count, total_hashrate)
+    // all use `active`. Workers that are fresh but not assigned here remain visible but gray.
+    // This prevents workers on a different puzzle from inflating this puzzle's counts.
     const visibleWorkers = pid ? db.prepare(`
         SELECT w.name, w.hashrate, w.last_seen, w.version,
                CASE WHEN w.last_seen >= datetime('now', '-${ACTIVE_MINUTES} minutes')
-                         AND EXISTS (
-                             SELECT 1 FROM chunks c2
-                             WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
-                         )
+               THEN 1 ELSE 0 END AS fresh,
+               CASE WHEN EXISTS (
+                   SELECT 1 FROM chunks c2
+                   WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
+               ) THEN 1 ELSE 0 END AS assigned_here,
+               CASE WHEN w.last_seen >= datetime('now', '-${ACTIVE_MINUTES} minutes')
+                    AND EXISTS (
+                        SELECT 1 FROM chunks c2
+                        WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
+                    )
                THEN 1 ELSE 0 END AS active
         FROM workers w
         WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
@@ -427,7 +452,7 @@ app.get('/api/v1/stats', (req, res) => {
               AND c.puzzle_id = ?
           )
         ORDER BY w.hashrate DESC
-    `).all(pid, pid) : [];
+    `).all(pid, pid, pid) : [];
     const totalHashrate = visibleWorkers.filter(w => w.active).reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
@@ -521,6 +546,8 @@ app.get('/api/v1/stats', (req, res) => {
 
     const workers = visibleWorkers.map(w => ({
         ...w,
+        fresh: w.fresh === 1,
+        assigned_here: w.assigned_here === 1,
         active: w.active === 1,
         current_chunk: workerChunkMap[w.name] ?? null,
         current_shard: workerShardMap[w.name] ?? null,
@@ -901,4 +928,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createApp, isValidHex, randomBigIntInRange, normalizeHashrate, seedSectors, ACTIVE_MINUTES };
+module.exports = { createApp, isValidHex, randomBigIntInRange, normalizeHashrate, seedSectors, ACTIVE_MINUTES, REACTIVATE_MINUTES };
