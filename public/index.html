@@ -352,8 +352,8 @@
     "status": "done", 
     "keys_scanned": 300000000 
 }
-<span class="comment">// keys_scanned optional. If provided and &lt; chunk size: chunk is reclaimed.
-// Values &gt;= chunk size are accepted (clients may overshoot due to batch granularity).</span>
+<span class="comment">// keys_scanned required. If &lt; chunk size: chunk is reclaimed.
+// Values &gt;= chunk size accepted (clients may overshoot due to batch granularity).</span>
 
 <span class="comment">// Key found (status is case-sensitive; otherwise returns 400):</span>
 {

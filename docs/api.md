@@ -68,7 +68,7 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
-| `keys_scanned` | number | no | Keys actually scanned (only used with `status: "done"`). If provided and less than the chunk size, the chunk is reclaimed instead of completed. Values equal to or greater than the chunk size are accepted (clients may overshoot due to fixed batch granularity). Omit for backward-compatible behaviour. |
+| `keys_scanned` | number | yes (when done) | Keys actually scanned (only used with `status: "done"`). Must be a non-negative integer. If less than the chunk size, the chunk is reclaimed instead of completed. Values equal to or greater than the chunk size are accepted (clients may overshoot due to fixed batch granularity). |
 | `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string, `0x` prefix optional) and may optionally include `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**

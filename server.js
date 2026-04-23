@@ -325,37 +325,38 @@ app.post('/api/v1/submit', (req, res) => {
     } else {
         const { keys_scanned } = req.body;
 
-        if (keys_scanned !== undefined) {
-            if (typeof keys_scanned !== 'number' || !Number.isInteger(keys_scanned) || keys_scanned < 0)
-                return res.status(400).json({ accepted: false, error: 'keys_scanned must be a non-negative integer' });
+        if (keys_scanned === undefined)
+            return res.status(400).json({ accepted: false, error: 'keys_scanned is required for status: done' });
 
-            const result = db.transaction(() => {
-                const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id = ? AND worker_name = ? AND status = 'assigned'").get(job_id, name);
-                if (!chunk) return { notOwned: true };
+        if (typeof keys_scanned !== 'number' || !Number.isInteger(keys_scanned) || keys_scanned < 0)
+            return res.status(400).json({ accepted: false, error: 'keys_scanned must be a non-negative integer' });
 
-                const expectedSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
-                const reported = BigInt(keys_scanned);
+        const result = db.transaction(() => {
+            const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id = ? AND worker_name = ? AND status = 'assigned'").get(job_id, name);
+            if (!chunk) return { notOwned: true };
 
-                if (reported < expectedSize) {
-                    const upd = db.prepare(
-                        "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE id = ? AND worker_name = ? AND status = 'assigned'"
-                    ).run(job_id, name);
-                    return { reclaimed: upd.changes > 0, expectedSize, reported };
-                }
+            const expectedSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+            const reported = BigInt(keys_scanned);
 
-                return { sufficient: true };
-            })();
-
-            if (result.notOwned) return res.json({ accepted: false });
-            if (result.reclaimed) {
-                return res.status(400).json({
-                    accepted: false,
-                    error: `chunk #${job_id} not accepted, reported size: ${result.reported}, expected size: ${result.expectedSize}. Chunk reclaimed.`
-                });
+            if (reported < expectedSize) {
+                const upd = db.prepare(
+                    "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE id = ? AND worker_name = ? AND status = 'assigned'"
+                ).run(job_id, name);
+                return { reclaimed: upd.changes > 0, expectedSize, reported };
             }
-            if (!result.sufficient) return res.json({ accepted: false });
-            // sufficient: fall through to normal completion UPDATE below
+
+            return { sufficient: true };
+        })();
+
+        if (result.notOwned) return res.json({ accepted: false });
+        if (result.reclaimed) {
+            return res.status(400).json({
+                accepted: false,
+                error: `chunk #${job_id} not accepted, reported size: ${result.reported}, expected size: ${result.expectedSize}. Chunk reclaimed.`
+            });
         }
+        if (!result.sufficient) return res.json({ accepted: false });
+        // sufficient: fall through to normal completion UPDATE below
 
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
             .run(job_id, name);
