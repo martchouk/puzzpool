@@ -238,6 +238,35 @@ describe('GET /api/v1/stats', () => {
         expect(typeof res.body.total_keys_completed).toBe('string');
     });
 
+    test('worker active field is true when recently seen', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].active).toBe(true);
+        expect(res.body.active_workers_count).toBe(1);
+    });
+
+    test('inactive worker still appears with active=false', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        // Manually age the worker beyond 3-minute active threshold
+        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].active).toBe(false);
+        expect(res.body.active_workers_count).toBe(0);
+        expect(res.body.total_hashrate).toBe(0);
+    });
+
+    test('worker removed from table after TIMEOUT_MINUTES', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${parseInt(process.env.TIMEOUT_MINUTES || '15') + 1} minutes') WHERE name = 'w1'`).run();
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(0);
+    });
+
     test('finders entry includes shard, chunk, and chunk_global', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });

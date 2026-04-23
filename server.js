@@ -388,14 +388,14 @@ app.get('/api/v1/stats', (req, res) => {
     // switching tabs shows only that puzzle's stats, workers, scores, and findings.
     const pid = puzzle ? puzzle.id : null;
 
-    const activeWorkers = pid ? db.prepare(`
-        SELECT DISTINCT w.name, w.hashrate, w.last_seen, w.version
+    const visibleWorkers = pid ? db.prepare(`
+        SELECT w.name, w.hashrate, w.last_seen, w.version,
+               CASE WHEN w.last_seen >= datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS active
         FROM workers w
-        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
-        WHERE w.last_seen >= datetime('now', '-10 minutes')
+        WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
         ORDER BY w.hashrate DESC
-    `).all(pid) : [];
-    const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
+    `).all() : [];
+    const totalHashrate = visibleWorkers.filter(w => w.active).reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
         "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND is_test = 0"
@@ -486,8 +486,9 @@ app.get('/api/v1/stats', (req, res) => {
         workerShardMap[c.worker_name] = c.shard_num;
     }
 
-    const workers = activeWorkers.map(w => ({
+    const workers = visibleWorkers.map(w => ({
         ...w,
+        active: w.active === 1,
         current_chunk: workerChunkMap[w.name] ?? null,
         current_shard: workerShardMap[w.name] ?? null,
     }));
@@ -535,7 +536,7 @@ app.get('/api/v1/stats', (req, res) => {
                 end_hex:   puzzle.test_end_hex,
             } : null,
         } : null,
-        active_workers_count: activeWorkers.length,
+        active_workers_count: visibleWorkers.filter(w => w.active).length,
         total_hashrate: totalHashrate,
         completed_chunks: completedChunks,
         reclaimed_chunks: reclaimedChunks,

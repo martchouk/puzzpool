@@ -131,6 +131,10 @@
         .td-addr { color: var(--text-primary); }
         .td-finder { color: var(--accent-cyan); }
         .td-empty { color: var(--text-muted); text-align: center; padding: 1.5rem; }
+        .worker-dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; }
+        .worker-dot-on  { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse 2s ease-in-out infinite; }
+        .worker-dot-off { background: var(--text-muted); }
+        .worker-dim { color: var(--text-muted) !important; }
 
         /* ── API Reference ── */
         .api-block { background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-default); border-radius: var(--radius); overflow: hidden; margin-bottom: 0.75rem; transition: border-color var(--transition); }
@@ -285,7 +289,7 @@
         <div class="section-title">Active Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
                 <tbody id="worker-list"></tbody>
             </table>
         </div>
@@ -935,15 +939,20 @@
 
                 // Workers
                 const tbody = document.getElementById('worker-list');
-                if (data.workers.length === 0) tbody.innerHTML = emptyRow(6, 'No active workers');
-                else tbody.innerHTML = data.workers.map(w => `<tr>
+                if (data.workers.length === 0) tbody.innerHTML = emptyRow(7, 'No active workers');
+                else tbody.innerHTML = data.workers.map(w => {
+                    const dim = w.active ? '' : ' class="worker-dim"';
+                    const dot = `<span class="worker-dot ${w.active ? 'worker-dot-on' : 'worker-dot-off'}"></span>`;
+                    return `<tr>
+                    <td>${dot}</td>
                     <td class="td-name">${w.name}</td>
                     <td class="td-mono">${w.version || 'unknown'}</td>
-                    <td class="td-speed">${formatHashrate(w.hashrate)}</td>
-                    <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>
+                    <td class="td-speed"${dim}>${formatHashrate(w.hashrate)}</td>
+                    <td class="td-chunks"${dim}>${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
+                    <td class="td-chunks"${dim}>${w.current_shard != null ? w.current_shard : '—'}</td>
                     <td class="td-time">${fmtUtc(w.last_seen)}</td>
-                </tr>`).join('');
+                </tr>`;
+                }).join('');
 
                 // Scores
                 const stbody = document.getElementById('score-list');
