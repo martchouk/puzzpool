@@ -161,7 +161,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `hashrate` | number | Last reported scan speed in keys/s |
 | `version` | string\|null | Client version string sent via `/work`; null if not reported |
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
-| `active` | boolean | `true` if the worker currently holds an assigned chunk in this puzzle (green dot); `false` if visible during grace period but not currently assigned (gray dot) |
+| `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
 | `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
 

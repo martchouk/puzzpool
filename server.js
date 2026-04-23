@@ -409,10 +409,12 @@ app.get('/api/v1/stats', (req, res) => {
 
     const visibleWorkers = pid ? db.prepare(`
         SELECT w.name, w.hashrate, w.last_seen, w.version,
-               CASE WHEN EXISTS (
-                   SELECT 1 FROM chunks c2
-                   WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
-               ) THEN 1 ELSE 0 END AS active
+               CASE WHEN w.last_seen >= datetime('now', '-3 minutes')
+                         AND EXISTS (
+                             SELECT 1 FROM chunks c2
+                             WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
+                         )
+               THEN 1 ELSE 0 END AS active
         FROM workers w
         WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
           AND EXISTS (
