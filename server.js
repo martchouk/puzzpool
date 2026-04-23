@@ -342,6 +342,11 @@ app.post('/api/v1/submit', (req, res) => {
                     ).run(job_id, name);
                     return { reclaimed: upd.changes > 0, expectedSize, reported };
                 }
+
+                if (reported > expectedSize) {
+                    return { oversize: true, expectedSize, reported };
+                }
+
                 return { sufficient: true };
             })();
 
@@ -350,6 +355,12 @@ app.post('/api/v1/submit', (req, res) => {
                 return res.status(400).json({
                     accepted: false,
                     error: `chunk #${job_id} not accepted, reported size: ${result.reported}, expected size: ${result.expectedSize}. Chunk reclaimed.`
+                });
+            }
+            if (result.oversize) {
+                return res.status(400).json({
+                    accepted: false,
+                    error: `chunk #${job_id} not accepted, reported size: ${result.reported}, expected size: ${result.expectedSize}. Reported size exceeds chunk size.`
                 });
             }
             if (!result.sufficient) return res.json({ accepted: false });

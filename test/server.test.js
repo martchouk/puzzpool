@@ -159,6 +159,18 @@ describe('POST /api/v1/submit', () => {
         expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
     });
 
+    test('rejects done when keys_scanned > chunk size', async () => {
+        const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(jobId);
+        const chunkSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+        const r = await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: Number(chunkSize) + 1 })
+            .expect(400);
+        expect(r.body.accepted).toBe(false);
+        expect(r.body.error).toMatch(/exceeds chunk size/);
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('assigned');
+    });
+
     test('reclaims chunk when keys_scanned < chunk size', async () => {
         const res = await request(app)
             .post('/api/v1/submit')
