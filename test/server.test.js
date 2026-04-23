@@ -298,7 +298,7 @@ describe('GET /api/v1/stats', () => {
         const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const oldJobId = r1.body.job_id;
 
-        // Age worker past the 3-minute active threshold
+        // Age worker past the active threshold
         db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${STALE_MINUTES} minutes') WHERE name = 'w1'`).run();
 
         // Worker re-activates
