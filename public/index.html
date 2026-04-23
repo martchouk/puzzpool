@@ -346,8 +346,14 @@
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request"><span class="comment">// Chunk completed normally:</span>
-{ "name": "rig-01", "job_id": 42, "status": "done", "keys_scanned": 300000000 }
-<span class="comment">// keys_scanned optional. If provided: must equal chunk size (end_key - start_key).
+{ 
+    "name": "rig-01", 
+    "job_id": 42, 
+    "status": "done", 
+    "keys_scanned": 300000000 
+}
+<span class="comment">// keys_scanned optional. 
+// If provided: must equal chunk size (end_key - start_key).
 // Under-reporting reclaims the chunk; over-reporting is rejected.</span>
 
 <span class="comment">// Key found (status is case-sensitive; otherwise returns 400):</span>
