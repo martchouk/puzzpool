@@ -132,6 +132,15 @@ describe('POST /api/v1/submit', () => {
         expect(chunk.status).toBe('assigned'); // unchanged
     });
 
+    test('returns 400 on invalid keys_scanned', async () => {
+        for (const bad of ['abc', -1, 1.5, null, []]) {
+            const r = await request(app).post('/api/v1/submit')
+                .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: bad });
+            expect(r.status).toBe(400);
+            expect(r.body.error).toMatch(/keys_scanned/);
+        }
+    });
+
     test('accepts done without keys_scanned (backward compat)', async () => {
         await request(app)
             .post('/api/v1/submit')
