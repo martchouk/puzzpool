@@ -366,6 +366,10 @@ app.get('/api/v1/stats', (req, res) => {
         "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND is_test = 0"
     ).get(pid).count : 0;
 
+    const reclaimedChunks = pid ? db.prepare(
+        "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND status = 'reclaimed' AND is_test = 0"
+    ).get(pid).count : 0;
+
     const doneChunks = pid ? db.prepare(`
         SELECT worker_name, start_hex, end_hex
         FROM chunks
@@ -499,6 +503,7 @@ app.get('/api/v1/stats', (req, res) => {
         active_workers_count: activeWorkers.length,
         total_hashrate: totalHashrate,
         completed_chunks: completedChunks,
+        reclaimed_chunks: reclaimedChunks,
         total_keys_completed: totalKeysCompleted.toString(),
         shards: { total: shardsTotal, started: shardsStarted, completed: shardsCompleted },
         workers,

@@ -73,6 +73,11 @@ and visualises it on a live dashboard.
     UPDATE chunks SET status='FOUND', found_key, found_address
     INSERT findings
     append to BINGO_FOUND_KEYS.txt
+
+  Late FOUND (worker submits after its chunk was reclaimed and reassigned):
+    prev_worker_name is saved on reclaim
+    server accepts FOUND if submitter matches prev_worker_name
+    chunk finalized as status='FOUND' regardless of current assignee
 ```
 
 ## Key Design Decisions
