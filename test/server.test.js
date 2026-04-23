@@ -137,6 +137,7 @@ describe('POST /api/v1/submit', () => {
             const r = await request(app).post('/api/v1/submit')
                 .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: bad });
             expect(r.status).toBe(400);
+            expect(r.body.accepted).toBe(false);
             expect(r.body.error).toMatch(/keys_scanned/);
         }
     });

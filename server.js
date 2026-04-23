@@ -327,7 +327,7 @@ app.post('/api/v1/submit', (req, res) => {
 
         if (keys_scanned !== undefined) {
             if (typeof keys_scanned !== 'number' || !Number.isInteger(keys_scanned) || keys_scanned < 0)
-                return res.status(400).json({ error: 'keys_scanned must be a non-negative integer' });
+                return res.status(400).json({ accepted: false, error: 'keys_scanned must be a non-negative integer' });
 
             const result = db.transaction(() => {
                 const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id = ? AND worker_name = ? AND status = 'assigned'").get(job_id, name);
