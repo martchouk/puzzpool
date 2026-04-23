@@ -1,8 +1,10 @@
 'use strict';
 
 const request = require('supertest');
-const { createApp } = require('../server');
+const { createApp, ACTIVE_MINUTES } = require('../server');
 const { createTestDb, seedPuzzle } = require('./helpers');
+
+const STALE_MINUTES = (ACTIVE_MINUTES || 1) + 1;
 
 let db, app;
 
@@ -261,7 +263,7 @@ describe('GET /api/v1/stats', () => {
     test('worker active=false when assigned but heartbeat stale', async () => {
         seedPuzzle(db);
         await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
-        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${STALE_MINUTES} minutes') WHERE name = 'w1'`).run();
         const res = await request(app).get('/api/v1/stats').expect(200);
         expect(res.body.workers).toHaveLength(1);
         expect(res.body.workers[0].active).toBe(false);
@@ -296,8 +298,8 @@ describe('GET /api/v1/stats', () => {
         const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const oldJobId = r1.body.job_id;
 
-        // Age worker past the 3-minute active threshold
-        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+        // Age worker past the active threshold
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${STALE_MINUTES} minutes') WHERE name = 'w1'`).run();
 
         // Worker re-activates
         const r2 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
