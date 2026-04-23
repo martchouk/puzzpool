@@ -131,6 +131,38 @@ describe('POST /api/v1/submit', () => {
         const chunk = db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId);
         expect(chunk.status).toBe('assigned'); // unchanged
     });
+
+    test('accepts done without keys_scanned (backward compat)', async () => {
+        await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done' })
+            .expect(200, { accepted: true });
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
+    });
+
+    test('accepts done when keys_scanned >= chunk size', async () => {
+        const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(jobId);
+        const chunkSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+        await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: Number(chunkSize) })
+            .expect(200, { accepted: true });
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
+    });
+
+    test('reclaims chunk when keys_scanned < chunk size', async () => {
+        const res = await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: 0 })
+            .expect(400);
+        expect(res.body.accepted).toBe(false);
+        expect(res.body.error).toMatch(/not accepted/);
+        expect(res.body.error).toMatch(/Chunk reclaimed/);
+        const chunk = db.prepare("SELECT status, prev_worker_name, worker_name FROM chunks WHERE id=?").get(jobId);
+        expect(chunk.status).toBe('reclaimed');
+        expect(chunk.prev_worker_name).toBe('w1');
+        expect(chunk.worker_name).toBeNull();
+    });
 });
 
 // ─── /api/v1/heartbeat ───────────────────────────────────────────────────────

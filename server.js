@@ -323,6 +323,24 @@ app.post('/api/v1/submit', (req, res) => {
             fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
         }
     } else {
+        const { keys_scanned } = req.body;
+
+        if (keys_scanned !== undefined) {
+            const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id = ? AND worker_name = ? AND status = 'assigned'").get(job_id, name);
+            if (!chunk) return res.json({ accepted: false });
+
+            const expectedSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+            const reported = BigInt(Math.max(0, Math.floor(Number(keys_scanned))));
+
+            if (reported < expectedSize) {
+                db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE id = ?").run(job_id);
+                return res.status(400).json({
+                    accepted: false,
+                    error: `chunk #${job_id} not accepted, reported size: ${reported}, expected size: ${expectedSize}. Chunk reclaimed.`
+                });
+            }
+        }
+
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
             .run(job_id, name);
         if (!info.changes) return res.json({ accepted: false });

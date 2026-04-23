@@ -48,7 +48,7 @@ Report completion of a chunk, or a key discovery.
 
 **Request — chunk completed**
 ```json
-{ "name": "worker-hostname", "job_id": 42, "status": "done" }
+{ "name": "worker-hostname", "job_id": 42, "status": "done", "keys_scanned": 500000000 }
 ```
 
 **Request — key found**
@@ -68,11 +68,17 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
+| `keys_scanned` | number | no | Keys actually scanned (only used with `status: "done"`). If provided and less than the chunk size, the chunk is reclaimed instead of completed. Omit for backward-compatible behaviour. |
 | `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string, `0x` prefix optional) and may optionally include `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**
 ```json
 { "accepted": true }
+```
+
+**Response 400** — incomplete scan (`keys_scanned` provided but less than chunk size)
+```json
+{ "accepted": false, "error": "chunk #42 not accepted, reported size: 123456, expected size: 500000000. Chunk reclaimed." }
 ```
 
 > **Note:** Ownership is enforced — submitting `job_id` for a chunk assigned to a different
