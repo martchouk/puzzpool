@@ -375,10 +375,8 @@
                     <pre>{
   "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
 }
-<span class="comment">// 400 if status is invalid, 
-// findings missing/empty, found_key not valid hex,
-// keys_scanned not a non-negative integer, 
-// or keys_scanned != chunk size</span></pre>
+<span class="comment">// 400 if status is invalid, findings missing/empty, found_key not valid hex,
+// keys_scanned missing/invalid, or keys_scanned &lt; chunk size (chunk reclaimed)</span></pre>
                 </div>
             </div>
         </div>

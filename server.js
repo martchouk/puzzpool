@@ -200,6 +200,9 @@ app.post('/api/v1/work', (req, res) => {
     ).get(name);
     const isReactivating = prevWorker?.inactive === 1;
     if (isReactivating) {
+        // Intentionally broad: reclaims all assigned chunks for this worker across all
+        // puzzles and including test chunks. Under the one-chunk-per-worker invariant this
+        // is always at most one row; the breadth is acceptable given that assumption.
         db.prepare(
             "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE worker_name = ? AND status = 'assigned'"
         ).run(name);
