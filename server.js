@@ -9,6 +9,9 @@ const DB_PATH         = process.env.DB_PATH                 || 'pool.db';
 const TARGET_MINUTES  = parseInt(process.env.TARGET_MINUTES  || '5',    10);
 const TIMEOUT_MINUTES = parseInt(process.env.TIMEOUT_MINUTES || '15',   10);
 const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 10));
+// Active threshold: a worker is green if last_seen is within this window AND holds an
+// assigned chunk. Capped at half of TIMEOUT_MINUTES so gray phase is always visible.
+const ACTIVE_MINUTES  = Math.min(3, Math.floor(TIMEOUT_MINUTES / 2));
 
 // --- Pure helpers (no db dependency) ---
 
@@ -196,7 +199,7 @@ app.post('/api/v1/work', (req, res) => {
     // Check if this is a re-activation (worker was inactive — last seen > 3 min ago).
     // If so, reclaim their assigned chunk before the upsert so they get a fresh one.
     const prevWorker = db.prepare(
-        "SELECT CASE WHEN last_seen < datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?"
+        `SELECT CASE WHEN last_seen < datetime('now', '-${ACTIVE_MINUTES} minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?`
     ).get(name);
     const isReactivating = prevWorker?.inactive === 1;
     if (isReactivating) {
@@ -409,7 +412,7 @@ app.get('/api/v1/stats', (req, res) => {
 
     const visibleWorkers = pid ? db.prepare(`
         SELECT w.name, w.hashrate, w.last_seen, w.version,
-               CASE WHEN w.last_seen >= datetime('now', '-3 minutes')
+               CASE WHEN w.last_seen >= datetime('now', '-${ACTIVE_MINUTES} minutes')
                          AND EXISTS (
                              SELECT 1 FROM chunks c2
                              WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
@@ -897,4 +900,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createApp, isValidHex, randomBigIntInRange, normalizeHashrate, seedSectors };
+module.exports = { createApp, isValidHex, randomBigIntInRange, normalizeHashrate, seedSectors, ACTIVE_MINUTES };
