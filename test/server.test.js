@@ -238,7 +238,7 @@ describe('GET /api/v1/stats', () => {
         expect(typeof res.body.total_keys_completed).toBe('string');
     });
 
-    test('worker active field is true when recently seen', async () => {
+    test('worker active=true when holding assigned chunk in puzzle', async () => {
         seedPuzzle(db);
         await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const res = await request(app).get('/api/v1/stats').expect(200);
@@ -247,11 +247,11 @@ describe('GET /api/v1/stats', () => {
         expect(res.body.active_workers_count).toBe(1);
     });
 
-    test('inactive worker still appears with active=false', async () => {
+    test('worker active=false when chunk reclaimed (no assigned chunk)', async () => {
         seedPuzzle(db);
-        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
-        // Manually age the worker beyond 3-minute active threshold
-        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        // Reclaim the chunk — worker no longer holds an assigned chunk
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(r.body.job_id);
         const res = await request(app).get('/api/v1/stats').expect(200);
         expect(res.body.workers).toHaveLength(1);
         expect(res.body.workers[0].active).toBe(false);

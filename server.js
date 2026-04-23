@@ -409,7 +409,10 @@ app.get('/api/v1/stats', (req, res) => {
 
     const visibleWorkers = pid ? db.prepare(`
         SELECT w.name, w.hashrate, w.last_seen, w.version,
-               CASE WHEN w.last_seen >= datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS active
+               CASE WHEN EXISTS (
+                   SELECT 1 FROM chunks c2
+                   WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
+               ) THEN 1 ELSE 0 END AS active
         FROM workers w
         WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
           AND EXISTS (
@@ -418,7 +421,7 @@ app.get('/api/v1/stats', (req, res) => {
               AND c.puzzle_id = ?
           )
         ORDER BY w.hashrate DESC
-    `).all(pid) : [];
+    `).all(pid, pid) : [];
     const totalHashrate = visibleWorkers.filter(w => w.active).reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
