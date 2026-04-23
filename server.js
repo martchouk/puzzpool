@@ -12,7 +12,7 @@ const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS  || '65536', 
 // Active threshold: a worker is green if last_seen is within this window AND holds an
 // assigned chunk. Capped at half of TIMEOUT_MINUTES so gray phase is always visible.
 // Accepts fractional minutes (e.g. 0.333 ≈ 20 seconds).
-const ACTIVE_MINUTES  = Math.min(parseFloat(process.env.ACTIVE_MINUTES || '3'), Math.floor(TIMEOUT_MINUTES / 2));
+const ACTIVE_MINUTES  = Math.min(parseFloat(process.env.ACTIVE_MINUTES || '1.167'), Math.floor(TIMEOUT_MINUTES / 2));
 
 // --- Pure helpers (no db dependency) ---
 
