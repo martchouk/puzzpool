@@ -884,7 +884,7 @@ or any found_key is not valid hex</span></pre>
                 document.getElementById('total-hashrate').textContent = formatHashrate(data.total_hashrate);
                 document.getElementById('active-workers').textContent = data.active_workers_count;
                 document.getElementById('completed-chunks').textContent = data.completed_chunks.toLocaleString();
-                document.getElementById('reclaimed-chunks').textContent = 'Reclaimed: ' + data.reclaimed_chunks.toLocaleString();
+                document.getElementById('reclaimed-chunks').textContent = data.puzzle ? ('Reclaimed: ' + data.reclaimed_chunks.toLocaleString()) : '—';
                 document.getElementById('completed-keys').textContent = formatBigInt(data.total_keys_completed);
                 document.getElementById('found-keys').textContent = data.finders.length;
 

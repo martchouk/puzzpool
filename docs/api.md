@@ -130,6 +130,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "active_workers_count": 3,
   "total_hashrate": 24500000,
   "completed_chunks": 187,
+  "reclaimed_chunks": 3,
   "total_keys_completed": "12345678901234567890",
   "workers": [
     { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "current_chunk": 42, "current_shard": 3 }
