@@ -267,6 +267,38 @@ describe('GET /api/v1/stats', () => {
         expect(res.body.workers).toHaveLength(0);
     });
 
+    test('workers scoped to requested puzzle — worker from other puzzle not shown', async () => {
+        const p1 = seedPuzzle(db, { name: 'P1', start_hex: '0'.repeat(64), end_hex: '000000000000000000000000000000000000000000000000000000003b9aca00' });
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+
+        // Switch to a new puzzle
+        await request(app).post('/api/v1/admin/set-puzzle').send({ name: 'P2', start_hex: '0x400', end_hex: '0x800' });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+
+        // Stats for p1 should only show w1
+        const res = await request(app).get(`/api/v1/stats?puzzle_id=${p1.id}`).expect(200);
+        const names = res.body.workers.map(w => w.name);
+        expect(names).toContain('w1');
+        expect(names).not.toContain('w2');
+    });
+
+    test('re-activating worker gets fresh chunk, old chunk reclaimed', async () => {
+        seedPuzzle(db);
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const oldJobId = r1.body.job_id;
+
+        // Age worker past the 3-minute active threshold
+        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+
+        // Worker re-activates
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        expect(r2.body.job_id).not.toBe(oldJobId);
+
+        // Old chunk must be reclaimed
+        const oldChunk = db.prepare("SELECT status FROM chunks WHERE id = ?").get(oldJobId);
+        expect(oldChunk.status).toBe('reclaimed');
+    });
+
     test('finders entry includes shard, chunk, and chunk_global', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });

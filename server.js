@@ -192,6 +192,19 @@ app.post('/api/v1/work', (req, res) => {
     // Upsert worker — normalize before storing. Number() loses precision above 2^53 but
     // that range (~9 PH/s) is well beyond realistic hardware; acceptable tradeoff.
     const hashrateNum = Number(normalizeHashrate(hashrate));
+
+    // Check if this is a re-activation (worker was inactive — last seen > 3 min ago).
+    // If so, reclaim their assigned chunk before the upsert so they get a fresh one.
+    const prevWorker = db.prepare(
+        "SELECT CASE WHEN last_seen < datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?"
+    ).get(name);
+    const isReactivating = prevWorker?.inactive === 1;
+    if (isReactivating) {
+        db.prepare(
+            "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE worker_name = ? AND status = 'assigned'"
+        ).run(name);
+    }
+
     db.prepare(`
         INSERT INTO workers (name, hashrate, last_seen, version) VALUES (?, ?, CURRENT_TIMESTAMP, ?)
         ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP, version = COALESCE(excluded.version, workers.version)
@@ -203,6 +216,7 @@ app.post('/api/v1/work', (req, res) => {
 
     // Idempotency: if the worker already holds any assigned chunk (test or production),
     // return it. Enforces one chunk total per worker and prevents pool starvation.
+    // Skipped for re-activating workers (their chunk was reclaimed above).
     const existing = db.prepare(
         "SELECT id, start_hex, end_hex FROM chunks WHERE worker_name = ? AND puzzle_id = ? AND status = 'assigned' LIMIT 1"
     ).get(name, puzzle.id);
@@ -222,7 +236,9 @@ app.post('/api/v1/work', (req, res) => {
     // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign.
     // Sector frontiers are never rolled back on reclaim; chunks table is the reissue source.
     // is_test = 0 guard prevents a reclaimed test chunk from leaking into normal work.
-    const reclaimed = db.prepare(`
+    // Re-activating workers skip this pool so they get a fresh chunk, not their own
+    // just-reclaimed one back. Their reclaimed chunk stays available for other workers.
+    const reclaimed = isReactivating ? null : db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
         WHERE id = (
             SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? AND is_test = 0 LIMIT 1
@@ -393,8 +409,13 @@ app.get('/api/v1/stats', (req, res) => {
                CASE WHEN w.last_seen >= datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS active
         FROM workers w
         WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
+          AND EXISTS (
+            SELECT 1 FROM chunks c
+            WHERE (c.worker_name = w.name OR c.prev_worker_name = w.name)
+              AND c.puzzle_id = ?
+          )
         ORDER BY w.hashrate DESC
-    `).all() : [];
+    `).all(pid) : [];
     const totalHashrate = visibleWorkers.filter(w => w.active).reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
