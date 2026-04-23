@@ -48,7 +48,7 @@ Report completion of a chunk, or a key discovery.
 
 **Request — chunk completed**
 ```json
-{ "name": "worker-hostname", "job_id": 42, "status": "done" }
+{ "name": "worker-hostname", "job_id": 42, "status": "done", "keys_scanned": 500000000 }
 ```
 
 **Request — key found**
@@ -68,11 +68,17 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
+| `keys_scanned` | number | yes (when done) | Keys actually scanned (only used with `status: "done"`). Must be a non-negative integer. If less than the chunk size, the chunk is reclaimed instead of completed. Values equal to or greater than the chunk size are accepted (clients may overshoot due to fixed batch granularity). |
 | `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string, `0x` prefix optional) and may optionally include `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**
 ```json
 { "accepted": true }
+```
+
+**Response 400** — incomplete scan (`keys_scanned` provided but less than chunk size)
+```json
+{ "accepted": false, "error": "chunk #42 not accepted, reported size: 123456, expected size: 500000000. Chunk reclaimed." }
 ```
 
 > **Note:** Ownership is enforced — submitting `job_id` for a chunk assigned to a different
@@ -133,7 +139,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "reclaimed_chunks": 3,
   "total_keys_completed": "12345678901234567890",
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "current_chunk": 42, "current_shard": 3 }
+    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_shard": 3 }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
@@ -155,6 +161,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `hashrate` | number | Last reported scan speed in keys/s |
 | `version` | string\|null | Client version string sent via `/work`; null if not reported |
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
+| `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
 | `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
 

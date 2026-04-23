@@ -192,6 +192,22 @@ app.post('/api/v1/work', (req, res) => {
     // Upsert worker — normalize before storing. Number() loses precision above 2^53 but
     // that range (~9 PH/s) is well beyond realistic hardware; acceptable tradeoff.
     const hashrateNum = Number(normalizeHashrate(hashrate));
+
+    // Check if this is a re-activation (worker was inactive — last seen > 3 min ago).
+    // If so, reclaim their assigned chunk before the upsert so they get a fresh one.
+    const prevWorker = db.prepare(
+        "SELECT CASE WHEN last_seen < datetime('now', '-3 minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?"
+    ).get(name);
+    const isReactivating = prevWorker?.inactive === 1;
+    if (isReactivating) {
+        // Intentionally broad: reclaims all assigned chunks for this worker across all
+        // puzzles and including test chunks. Under the one-chunk-per-worker invariant this
+        // is always at most one row; the breadth is acceptable given that assumption.
+        db.prepare(
+            "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE worker_name = ? AND status = 'assigned'"
+        ).run(name);
+    }
+
     db.prepare(`
         INSERT INTO workers (name, hashrate, last_seen, version) VALUES (?, ?, CURRENT_TIMESTAMP, ?)
         ON CONFLICT(name) DO UPDATE SET hashrate = excluded.hashrate, last_seen = CURRENT_TIMESTAMP, version = COALESCE(excluded.version, workers.version)
@@ -203,6 +219,7 @@ app.post('/api/v1/work', (req, res) => {
 
     // Idempotency: if the worker already holds any assigned chunk (test or production),
     // return it. Enforces one chunk total per worker and prevents pool starvation.
+    // Skipped for re-activating workers (their chunk was reclaimed above).
     const existing = db.prepare(
         "SELECT id, start_hex, end_hex FROM chunks WHERE worker_name = ? AND puzzle_id = ? AND status = 'assigned' LIMIT 1"
     ).get(name, puzzle.id);
@@ -222,7 +239,9 @@ app.post('/api/v1/work', (req, res) => {
     // PRIORITY 2: Reissue reclaimed (timed-out) chunks — atomic fetch-and-assign.
     // Sector frontiers are never rolled back on reclaim; chunks table is the reissue source.
     // is_test = 0 guard prevents a reclaimed test chunk from leaking into normal work.
-    const reclaimed = db.prepare(`
+    // Re-activating workers skip this pool so they get a fresh chunk, not their own
+    // just-reclaimed one back. Their reclaimed chunk stays available for other workers.
+    const reclaimed = isReactivating ? null : db.prepare(`
         UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
         WHERE id = (
             SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? AND is_test = 0 LIMIT 1
@@ -323,6 +342,41 @@ app.post('/api/v1/submit', (req, res) => {
             fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
         }
     } else {
+        const { keys_scanned } = req.body;
+
+        if (keys_scanned === undefined)
+            return res.status(400).json({ accepted: false, error: 'keys_scanned is required for status: done' });
+
+        if (typeof keys_scanned !== 'number' || !Number.isInteger(keys_scanned) || keys_scanned < 0)
+            return res.status(400).json({ accepted: false, error: 'keys_scanned must be a non-negative integer' });
+
+        const result = db.transaction(() => {
+            const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id = ? AND worker_name = ? AND status = 'assigned'").get(job_id, name);
+            if (!chunk) return { notOwned: true };
+
+            const expectedSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+            const reported = BigInt(keys_scanned);
+
+            if (reported < expectedSize) {
+                const upd = db.prepare(
+                    "UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL WHERE id = ? AND worker_name = ? AND status = 'assigned'"
+                ).run(job_id, name);
+                return { reclaimed: upd.changes > 0, expectedSize, reported };
+            }
+
+            return { sufficient: true };
+        })();
+
+        if (result.notOwned) return res.json({ accepted: false });
+        if (result.reclaimed) {
+            return res.status(400).json({
+                accepted: false,
+                error: `chunk #${job_id} not accepted, reported size: ${result.reported}, expected size: ${result.expectedSize}. Chunk reclaimed.`
+            });
+        }
+        if (!result.sufficient) return res.json({ accepted: false });
+        // sufficient: fall through to normal completion UPDATE below
+
         const info = db.prepare("UPDATE chunks SET status = 'completed' WHERE id = ? AND worker_name = ? AND status = 'assigned'")
             .run(job_id, name);
         if (!info.changes) return res.json({ accepted: false });
@@ -353,14 +407,24 @@ app.get('/api/v1/stats', (req, res) => {
     // switching tabs shows only that puzzle's stats, workers, scores, and findings.
     const pid = puzzle ? puzzle.id : null;
 
-    const activeWorkers = pid ? db.prepare(`
-        SELECT DISTINCT w.name, w.hashrate, w.last_seen, w.version
+    const visibleWorkers = pid ? db.prepare(`
+        SELECT w.name, w.hashrate, w.last_seen, w.version,
+               CASE WHEN w.last_seen >= datetime('now', '-3 minutes')
+                         AND EXISTS (
+                             SELECT 1 FROM chunks c2
+                             WHERE c2.worker_name = w.name AND c2.puzzle_id = ? AND c2.status = 'assigned'
+                         )
+               THEN 1 ELSE 0 END AS active
         FROM workers w
-        JOIN chunks c ON c.worker_name = w.name AND c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
-        WHERE w.last_seen >= datetime('now', '-10 minutes')
+        WHERE w.last_seen >= datetime('now', '-${TIMEOUT_MINUTES} minutes')
+          AND EXISTS (
+            SELECT 1 FROM chunks c
+            WHERE (c.worker_name = w.name OR c.prev_worker_name = w.name)
+              AND c.puzzle_id = ?
+          )
         ORDER BY w.hashrate DESC
-    `).all(pid) : [];
-    const totalHashrate = activeWorkers.reduce((sum, w) => sum + w.hashrate, 0);
+    `).all(pid, pid) : [];
+    const totalHashrate = visibleWorkers.filter(w => w.active).reduce((sum, w) => sum + w.hashrate, 0);
 
     const completedChunks = pid ? db.prepare(
         "SELECT COUNT(*) as count FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND is_test = 0"
@@ -451,8 +515,9 @@ app.get('/api/v1/stats', (req, res) => {
         workerShardMap[c.worker_name] = c.shard_num;
     }
 
-    const workers = activeWorkers.map(w => ({
+    const workers = visibleWorkers.map(w => ({
         ...w,
+        active: w.active === 1,
         current_chunk: workerChunkMap[w.name] ?? null,
         current_shard: workerShardMap[w.name] ?? null,
     }));
@@ -500,7 +565,7 @@ app.get('/api/v1/stats', (req, res) => {
                 end_hex:   puzzle.test_end_hex,
             } : null,
         } : null,
-        active_workers_count: activeWorkers.length,
+        active_workers_count: visibleWorkers.filter(w => w.active).length,
         total_hashrate: totalHashrate,
         completed_chunks: completedChunks,
         reclaimed_chunks: reclaimedChunks,

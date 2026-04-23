@@ -131,6 +131,10 @@
         .td-addr { color: var(--text-primary); }
         .td-finder { color: var(--accent-cyan); }
         .td-empty { color: var(--text-muted); text-align: center; padding: 1.5rem; }
+        .worker-dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; }
+        .worker-dot-on  { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse 2s ease-in-out infinite; }
+        .worker-dot-off { background: var(--text-muted); }
+        .worker-dim { color: var(--text-muted) !important; }
 
         /* ── API Reference ── */
         .api-block { background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-default); border-radius: var(--radius); overflow: hidden; margin-bottom: 0.75rem; transition: border-color var(--transition); }
@@ -285,7 +289,7 @@
         <div class="section-title">Active Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
                 <tbody id="worker-list"></tbody>
             </table>
         </div>
@@ -323,9 +327,9 @@
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request">{
-  "name":     "rig-01",   <span class="comment">// worker identifier (any unique string)</span>
+  "name":     "rig-01",   <span class="comment">// worker id (any unique string)</span>
   "hashrate": 5000000,    <span class="comment">// keys/s, used to size the chunk</span>
-  "version":  "1.2.1"    <span class="comment">// optional; shown in Active Workers table</span>
+  "version":  "1.2.1"    <span class="comment">// optional; for Active Workers table</span>
 }</pre>
                 </div>
                 <div class="api-panel">
@@ -346,7 +350,14 @@
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request"><span class="comment">// Chunk completed normally:</span>
-{ "name": "rig-01", "job_id": 42, "status": "done" }
+{ 
+    "name": "rig-01", 
+    "job_id": 42, 
+    "status": "done", 
+    "keys_scanned": 300000000 
+}
+<span class="comment">// keys_scanned required. If &lt; chunk size: chunk is reclaimed.
+// Values &gt;= chunk size accepted (clients may overshoot due to batch granularity).</span>
 
 <span class="comment">// Key found (status is case-sensitive; otherwise returns 400):</span>
 {
@@ -364,8 +375,8 @@
                     <pre>{
   "accepted": true   <span class="comment">// false if job_id unknown or already closed</span>
 }
-<span class="comment">// 400 if status is invalid, findings is missing/empty, 
-or any found_key is not valid hex</span></pre>
+<span class="comment">// 400 if status is invalid, findings missing/empty, found_key not valid hex,
+// keys_scanned missing/invalid, or keys_scanned &lt; chunk size (chunk reclaimed)</span></pre>
                 </div>
             </div>
         </div>
@@ -926,15 +937,20 @@ or any found_key is not valid hex</span></pre>
 
                 // Workers
                 const tbody = document.getElementById('worker-list');
-                if (data.workers.length === 0) tbody.innerHTML = emptyRow(6, 'No active workers');
-                else tbody.innerHTML = data.workers.map(w => `<tr>
+                if (data.workers.length === 0) tbody.innerHTML = emptyRow(7, 'No active workers');
+                else tbody.innerHTML = data.workers.map(w => {
+                    const dim = w.active ? '' : ' class="worker-dim"';
+                    const dot = `<span class="worker-dot ${w.active ? 'worker-dot-on' : 'worker-dot-off'}"></span>`;
+                    return `<tr>
+                    <td>${dot}</td>
                     <td class="td-name">${w.name}</td>
                     <td class="td-mono">${w.version || 'unknown'}</td>
-                    <td class="td-speed">${formatHashrate(w.hashrate)}</td>
-                    <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>
+                    <td class="td-speed"${dim}>${formatHashrate(w.hashrate)}</td>
+                    <td class="td-chunks"${dim}>${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
+                    <td class="td-chunks"${dim}>${w.current_shard != null ? w.current_shard : '—'}</td>
                     <td class="td-time">${fmtUtc(w.last_seen)}</td>
-                </tr>`).join('');
+                </tr>`;
+                }).join('');
 
                 // Scores
                 const stbody = document.getElementById('score-list');

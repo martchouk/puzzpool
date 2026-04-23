@@ -18,7 +18,8 @@
       "Bash(make)",
       "Read(//Users/john/git/addresses/**)",
       "Bash(make benchmark_cpu)",
-      "Bash(make cpu *)"
+      "Bash(make cpu *)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

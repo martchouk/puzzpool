@@ -15,6 +15,11 @@ afterEach(() => {
     db.close();
 });
 
+function chunkSize(db, job_id) {
+    const c = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(job_id);
+    return Number(BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex));
+}
+
 // ─── /api/v1/work ────────────────────────────────────────────────────────────
 
 describe('POST /api/v1/work', () => {
@@ -103,12 +108,13 @@ describe('POST /api/v1/submit', () => {
     });
 
     test('marks chunk completed on status=done', async () => {
+        const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(jobId);
+        const chunkSize = Number(BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex));
         await request(app)
             .post('/api/v1/submit')
-            .send({ name: 'w1', job_id: jobId, status: 'done' })
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: chunkSize })
             .expect(200, { accepted: true });
-        const chunk = db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId);
-        expect(chunk.status).toBe('completed');
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
     });
 
     test('marks chunk FOUND and inserts findings row', async () => {
@@ -127,9 +133,60 @@ describe('POST /api/v1/submit', () => {
     test('wrong worker cannot complete another worker\'s chunk', async () => {
         await request(app)
             .post('/api/v1/submit')
-            .send({ name: 'w_other', job_id: jobId, status: 'done' });
+            .send({ name: 'w_other', job_id: jobId, status: 'done', keys_scanned: chunkSize(db, jobId) });
         const chunk = db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId);
         expect(chunk.status).toBe('assigned'); // unchanged
+    });
+
+    test('returns 400 on invalid keys_scanned', async () => {
+        for (const bad of ['abc', -1, 1.5, null, []]) {
+            const r = await request(app).post('/api/v1/submit')
+                .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: bad });
+            expect(r.status).toBe(400);
+            expect(r.body.accepted).toBe(false);
+            expect(r.body.error).toMatch(/keys_scanned/);
+        }
+    });
+
+    test('rejects done without keys_scanned', async () => {
+        await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done' })
+            .expect(400, { accepted: false, error: 'keys_scanned is required for status: done' });
+    });
+
+    test('accepts done when keys_scanned == chunk size', async () => {
+        const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(jobId);
+        const chunkSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+        await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: Number(chunkSize) })
+            .expect(200, { accepted: true });
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
+    });
+
+    test('accepts done when keys_scanned > chunk size (batch overshoot)', async () => {
+        const chunk = db.prepare("SELECT start_hex, end_hex FROM chunks WHERE id=?").get(jobId);
+        const chunkSize = BigInt('0x' + chunk.end_hex) - BigInt('0x' + chunk.start_hex);
+        await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: Number(chunkSize) + 4096 })
+            .expect(200, { accepted: true });
+        expect(db.prepare("SELECT status FROM chunks WHERE id=?").get(jobId).status).toBe('completed');
+    });
+
+    test('reclaims chunk when keys_scanned < chunk size', async () => {
+        const res = await request(app)
+            .post('/api/v1/submit')
+            .send({ name: 'w1', job_id: jobId, status: 'done', keys_scanned: 0 })
+            .expect(400);
+        expect(res.body.accepted).toBe(false);
+        expect(res.body.error).toMatch(/not accepted/);
+        expect(res.body.error).toMatch(/Chunk reclaimed/);
+        const chunk = db.prepare("SELECT status, prev_worker_name, worker_name FROM chunks WHERE id=?").get(jobId);
+        expect(chunk.status).toBe('reclaimed');
+        expect(chunk.prev_worker_name).toBe('w1');
+        expect(chunk.worker_name).toBeNull();
     });
 });
 
@@ -181,6 +238,76 @@ describe('GET /api/v1/stats', () => {
         expect(typeof res.body.total_keys_completed).toBe('string');
     });
 
+    test('worker active=true when holding assigned chunk in puzzle', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].active).toBe(true);
+        expect(res.body.active_workers_count).toBe(1);
+    });
+
+    test('worker active=false when chunk reclaimed (no assigned chunk)', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        db.prepare("UPDATE chunks SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL WHERE id = ?").run(r.body.job_id);
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].active).toBe(false);
+        expect(res.body.active_workers_count).toBe(0);
+        expect(res.body.total_hashrate).toBe(0);
+    });
+
+    test('worker active=false when assigned but heartbeat stale', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(1);
+        expect(res.body.workers[0].active).toBe(false);
+        expect(res.body.active_workers_count).toBe(0);
+    });
+
+    test('worker removed from table after TIMEOUT_MINUTES', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${parseInt(process.env.TIMEOUT_MINUTES || '15') + 1} minutes') WHERE name = 'w1'`).run();
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.workers).toHaveLength(0);
+    });
+
+    test('workers scoped to requested puzzle — worker from other puzzle not shown', async () => {
+        const p1 = seedPuzzle(db, { name: 'P1', start_hex: '0'.repeat(64), end_hex: '000000000000000000000000000000000000000000000000000000003b9aca00' });
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+
+        // Switch to a new puzzle
+        await request(app).post('/api/v1/admin/set-puzzle').send({ name: 'P2', start_hex: '0x400', end_hex: '0x800' });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+
+        // Stats for p1 should only show w1
+        const res = await request(app).get(`/api/v1/stats?puzzle_id=${p1.id}`).expect(200);
+        const names = res.body.workers.map(w => w.name);
+        expect(names).toContain('w1');
+        expect(names).not.toContain('w2');
+    });
+
+    test('re-activating worker gets fresh chunk, old chunk reclaimed', async () => {
+        seedPuzzle(db);
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const oldJobId = r1.body.job_id;
+
+        // Age worker past the 3-minute active threshold
+        db.prepare("UPDATE workers SET last_seen = datetime('now', '-4 minutes') WHERE name = 'w1'").run();
+
+        // Worker re-activates
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        expect(r2.body.job_id).not.toBe(oldJobId);
+
+        // Old chunk must be reclaimed
+        const oldChunk = db.prepare("SELECT status FROM chunks WHERE id = ?").get(oldJobId);
+        expect(oldChunk.status).toBe('reclaimed');
+    });
+
     test('finders entry includes shard, chunk, and chunk_global', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
@@ -205,7 +332,7 @@ describe('GET /api/v1/stats', () => {
         const { job_id, start_key, end_key } = r.body;
         await request(app)
             .post('/api/v1/submit')
-            .send({ name: 'w1', job_id, status: 'done' });
+            .send({ name: 'w1', job_id, status: 'done', keys_scanned: chunkSize(db, job_id) });
 
         const stats = await request(app).get('/api/v1/stats');
         const expected = (BigInt('0x' + end_key) - BigInt('0x' + start_key)).toString();
@@ -415,7 +542,7 @@ describe('Sharded Frontier Allocator', () => {
         await request(app).post('/api/v1/admin/set-puzzle')
             .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
-        await request(app).post('/api/v1/submit').send({ name: 'w1', job_id: r.body.job_id, status: 'done' });
+        await request(app).post('/api/v1/submit').send({ name: 'w1', job_id: r.body.job_id, status: 'done', keys_scanned: chunkSize(db, r.body.job_id) });
 
         // Change range → new puzzle row
         await request(app).post('/api/v1/admin/set-puzzle')
@@ -452,7 +579,7 @@ describe('Sharded Frontier Allocator', () => {
 
         // Submit it as done
         await request(app).post('/api/v1/submit')
-            .send({ name: 'tester', job_id: work.body.job_id, status: 'done' })
+            .send({ name: 'tester', job_id: work.body.job_id, status: 'done', keys_scanned: chunkSize(db, work.body.job_id) })
             .expect(200);
 
         // Stats must not reflect the test chunk
@@ -504,7 +631,7 @@ describe('Sharded Frontier Allocator', () => {
         expect(chunk.status).toBe('FOUND');
 
         const bSubmit = await request(app).post('/api/v1/submit')
-            .send({ name: 'workerB', job_id: jobId, status: 'done' })
+            .send({ name: 'workerB', job_id: jobId, status: 'done', keys_scanned: chunkSize(db, jobId) })
             .expect(200);
         expect(bSubmit.body.accepted).toBe(false);
     });
