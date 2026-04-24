@@ -532,16 +532,21 @@ app.get('/api/v1/stats', (req, res) => {
             SELECT c.id, c.worker_name,
                 CASE WHEN c.sector_id IS NULL THEN NULL
                      ELSE (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
-                END AS shard_num
+                END AS shard_num,
+                CASE WHEN c.sector_id IS NULL THEN NULL
+                     ELSE (SELECT COUNT(*) FROM chunks c2 WHERE c2.sector_id = c.sector_id AND c2.id < c.id)
+                END AS chunk_in_shard
             FROM chunks c
             WHERE c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
         `).all(puzzle.id)
         : [];
     const workerChunkMap = {};
     const workerShardMap = {};
+    const workerChunkInShardMap = {};
     for (const c of assignedNow) {
         workerChunkMap[c.worker_name] = c.id;
         workerShardMap[c.worker_name] = c.shard_num;
+        workerChunkInShardMap[c.worker_name] = c.chunk_in_shard;
     }
 
     const workers = visibleWorkers.map(w => ({
@@ -551,6 +556,7 @@ app.get('/api/v1/stats', (req, res) => {
         active: w.active === 1,
         current_chunk: workerChunkMap[w.name] ?? null,
         current_shard: workerShardMap[w.name] ?? null,
+        current_chunk_in_shard: workerChunkInShardMap[w.name] ?? null,
     }));
 
     let chunks_vis = [];

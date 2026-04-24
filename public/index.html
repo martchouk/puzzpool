@@ -329,7 +329,7 @@
                     <pre class="request">{
   "name":     "rig-01",   <span class="comment">// worker id (any unique string)</span>
   "hashrate": 5000000,    <span class="comment">// keys/s, used to size the chunk</span>
-  "version":  "1.2.1"    <span class="comment">// optional; for Active Workers table</span>
+  "version":  "1.2.1"    <span class="comment">// optional; displayed in Visible Workers table</span>
 }</pre>
                 </div>
                 <div class="api-panel">
@@ -950,7 +950,7 @@
                     <td class="td-mono">${w.version || 'unknown'}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>
+                    <td class="td-chunks">${w.current_shard != null ? (w.current_chunk_in_shard != null ? `${w.current_shard}/${w.current_chunk_in_shard}` : w.current_shard) : '—'}</td>
                     <td class="td-time">${fmtUtc(w.last_seen)}</td>
                 </tr>`;
                 }).join('');
