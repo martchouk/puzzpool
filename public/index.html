@@ -234,6 +234,7 @@
             <div class="stat-card">
                 <div class="stat-label">Active Workers</div>
                 <div id="active-workers" class="stat-value amber">—</div>
+                <div id="inactive-workers" class="stat-subtext">—</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Chunks Done</div>
@@ -895,6 +896,7 @@
                 renderKeyspaceTabs(data.puzzles || []);
                 document.getElementById('total-hashrate').textContent = formatHashrate(data.total_hashrate);
                 document.getElementById('active-workers').textContent = data.active_workers_count;
+                document.getElementById('inactive-workers').textContent = data.puzzle ? ('Inactive: ' + data.inactive_workers_count) : '—';
                 document.getElementById('completed-chunks').textContent = data.completed_chunks.toLocaleString();
                 document.getElementById('reclaimed-chunks').textContent = data.puzzle ? ('Reclaimed: ' + data.reclaimed_chunks.toLocaleString()) : '—';
                 document.getElementById('completed-keys').textContent = formatBigInt(data.total_keys_completed);
