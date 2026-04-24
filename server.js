@@ -603,6 +603,7 @@ app.get('/api/v1/stats', (req, res) => {
             } : null,
         } : null,
         active_workers_count: visibleWorkers.filter(w => w.active).length,
+        inactive_workers_count: visibleWorkers.filter(w => !w.active).length,
         total_hashrate: totalHashrate,
         completed_chunks: completedChunks,
         reclaimed_chunks: reclaimedChunks,

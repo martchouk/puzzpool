@@ -272,6 +272,17 @@ describe('GET /api/v1/stats', () => {
         expect(res.body.active_workers_count).toBe(0);
     });
 
+    test('inactive_workers_count: one active and one inactive worker', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+        // Age w2 past the active threshold but keep it within TIMEOUT_MINUTES
+        db.prepare(`UPDATE workers SET last_seen = datetime('now', '-${STALE_MINUTES} minutes') WHERE name = 'w2'`).run();
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.active_workers_count).toBe(1);
+        expect(res.body.inactive_workers_count).toBe(1);
+    });
+
     test('worker removed from table after TIMEOUT_MINUTES', async () => {
         seedPuzzle(db);
         await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });

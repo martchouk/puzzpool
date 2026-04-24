@@ -134,6 +134,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "test_chunk": null
   },
   "active_workers_count": 3,
+  "inactive_workers_count": 1,
   "total_hashrate": 24500000,
   "completed_chunks": 187,
   "reclaimed_chunks": 3,
