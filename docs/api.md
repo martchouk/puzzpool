@@ -139,7 +139,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "reclaimed_chunks": 3,
   "total_keys_completed": "12345678901234567890",
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_shard": 3 }
+    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_shard": 3, "current_chunk_in_shard": 2 }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
@@ -164,6 +164,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
 | `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
+| `current_chunk_in_shard` | number\|null | 0-based serial number of the current chunk within its sector (chunk creation order); null if no chunk or pre-migration chunk without a sector |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations.

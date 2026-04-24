@@ -312,6 +312,21 @@ describe('GET /api/v1/stats', () => {
         expect(oldChunk.status).toBe('reclaimed');
     });
 
+    test('current_chunk_in_shard is 0 for first chunk and 1 for second chunk in same shard', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        const w1 = res.body.workers.find(w => w.name === 'w1');
+        const w2 = res.body.workers.find(w => w.name === 'w2');
+
+        expect(w1.current_shard).toBe(0);
+        expect(w1.current_chunk_in_shard).toBe(0);
+        expect(w2.current_shard).toBe(0);
+        expect(w2.current_chunk_in_shard).toBe(1);
+    });
+
     test('finders entry includes shard, chunk, and chunk_global', async () => {
         seedPuzzle(db);
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });

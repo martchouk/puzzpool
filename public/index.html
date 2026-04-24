@@ -950,7 +950,7 @@
                     <td class="td-mono">${w.version || 'unknown'}</td>
                     <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                     <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                    <td class="td-chunks">${w.current_shard != null ? w.current_shard : '—'}</td>
+                    <td class="td-chunks">${w.current_shard != null ? (w.current_chunk_in_shard != null ? `${w.current_shard}/${w.current_chunk_in_shard}` : w.current_shard) : '—'}</td>
                     <td class="td-time">${fmtUtc(w.last_seen)}</td>
                 </tr>`;
                 }).join('');
