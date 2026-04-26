@@ -187,6 +187,10 @@ function seedGlobalBlocks(db, puzzleId, startHex, endHex, allocSeed, blockSizeKe
     `);
 
     db.transaction(() => {
+        // Clear any partial state so reseeding is always safe after an interrupted boot.
+        db.prepare("DELETE FROM alloc_order WHERE puzzle_id = ?").run(puzzleId);
+        db.prepare("DELETE FROM alloc_blocks WHERE puzzle_id = ?").run(puzzleId);
+
         db.prepare(`
             UPDATE puzzles
             SET alloc_strategy = ?,
@@ -868,7 +872,7 @@ function createApp(db) {
                        WHEN c.sector_id IS NOT NULL THEN
                            (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
                        ELSE NULL
-                   END AS shard_num,
+                   END AS unit_num,
                    CASE
                        WHEN c.alloc_block_id IS NOT NULL THEN
                            (SELECT COUNT(*) FROM chunks c2 WHERE c2.alloc_block_id = c.alloc_block_id AND c2.id < c.id)
@@ -885,7 +889,7 @@ function createApp(db) {
         const workerChunkInShardMap = {};
         for (const c of assignedNow) {
             workerChunkMap[c.worker_name] = c.id;
-            workerShardMap[c.worker_name] = c.shard_num;
+            workerShardMap[c.worker_name] = c.unit_num;
             workerChunkInShardMap[c.worker_name] = c.chunk_in_shard;
         }
 
@@ -1060,18 +1064,23 @@ function createApp(db) {
             const existing = db.prepare("SELECT * FROM puzzles WHERE name = ?").get(name);
             let puzzleId;
 
+            const seed = alloc_seed || defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm });
+            const seedMatches = !existing || existing.alloc_seed === seed;
+            const blockSizeMatches = !existing || !existing.alloc_block_size_keys ||
+                existing.alloc_block_size_keys === blockSize.toString();
+
             if (
                 existing &&
                 existing.start_hex === startNorm &&
                 existing.end_hex === endNorm &&
-                (existing.alloc_strategy || ALLOC_STRATEGY_LEGACY) === strategy
+                (existing.alloc_strategy || ALLOC_STRATEGY_LEGACY) === strategy &&
+                seedMatches &&
+                blockSizeMatches
             ) {
                 db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(existing.id);
                 puzzleId = existing.id;
                 ensureAllocatorForPuzzle(db, puzzleId);
             } else {
-                const seed = alloc_seed || defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm });
-
                 const info = db.prepare(`
                     INSERT INTO puzzles (
                         name, start_hex, end_hex, active,

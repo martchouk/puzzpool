@@ -695,7 +695,7 @@
         <div class="section-title">Visible Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Shard</th><th>Last Seen</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th id="worker-unit-th">Shard</th><th>Last Seen</th></tr></thead>
                 <tbody id="worker-list"></tbody>
             </table>
         </div>
@@ -703,7 +703,7 @@
         <div class="section-title">Scores — All Time</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th></th><th>Worker</th><th>Keys Checked</th><th>Chunks</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Keys Completed</th><th>Chunks</th></tr></thead>
                 <tbody id="score-list"></tbody>
             </table>
         </div>
@@ -711,7 +711,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Job ID</th><th>Datetime</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th id="finder-unit-th">Shard</th><th>Chunk</th><th>Job ID</th><th>Datetime</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -1244,12 +1244,23 @@
             return 'Shards';
         }
 
+        function unitLabel(strategy) {
+            if (strategy === 'random_global_blocks_v1') return 'Block';
+            return 'Shard';
+        }
+
+        function allocatorFriendlyName(strategy) {
+            if (strategy === 'random_global_blocks_v1') return 'Global random blocks';
+            if (strategy === 'legacy_random_shards_v1') return 'Legacy random shards';
+            return strategy;
+        }
+
         function allocatorDiagnosticsHtml(puzzle) {
             if (!puzzle || puzzle.alloc_strategy !== 'random_global_blocks_v1') return '';
             const cursor = puzzle.alloc_cursor ?? '—';
             const total = puzzle.alloc_block_count ?? '—';
             const done = puzzle.alloc_blocks_completed ?? '—';
-            return `Allocator: <span style="color:var(--accent-cyan)">random_global_blocks_v1</span> · cursor: <span style="color:var(--accent-amber)">${cursor}</span> · blocks: <span style="color:var(--accent-cyan)">${total}</span> · done: <span style="color:var(--accent-green)">${done}</span>`;
+            return `Allocator: <span style="color:var(--accent-cyan)">${allocatorFriendlyName(puzzle.alloc_strategy)}</span> · cursor: <span style="color:var(--accent-amber)">${cursor}</span> · blocks: <span style="color:var(--accent-cyan)">${total}</span> · done: <span style="color:var(--accent-green)">${done}</span>`;
         }
 
         async function updateDashboard() {
@@ -1298,6 +1309,9 @@
                         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
 
                     const unit = allocatorLabel(data.puzzle.alloc_strategy);
+                    const uLabel = unitLabel(data.puzzle.alloc_strategy);
+                    document.getElementById('worker-unit-th').textContent = uLabel;
+                    document.getElementById('finder-unit-th').textContent = uLabel;
                     if (data.shards && data.shards.total > 0) {
                         document.getElementById('puzzle-shards').innerHTML =
                             `${unit} total: ${a(data.shards.total.toLocaleString())} · started: ${c(data.shards.started.toLocaleString())} · completed: ${g(data.shards.completed.toLocaleString())}`;

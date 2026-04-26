@@ -858,6 +858,25 @@ describe('Global Block Allocator — seeding', () => {
         expect(blocks[0].start_hex).toBe('0'.repeat(64));
         expect(BigInt('0x' + blocks[0].end_hex)).toBe(500n);
     });
+
+    test('seedGlobalBlocks is idempotent — calling twice replaces state cleanly', () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        // Simulate partial state: delete only alloc_order (as if a boot was interrupted)
+        db.prepare("DELETE FROM alloc_order WHERE puzzle_id = ?").run(puzzle.id);
+
+        // Should not throw — seedGlobalBlocks clears both tables before inserting
+        expect(() => {
+            seedGlobalBlocks(db, puzzle.id, '0'.repeat(64), end,
+                defaultAllocSeedForPuzzle(puzzle), 100n);
+        }).not.toThrow();
+
+        const blockCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ?").get(puzzle.id).c;
+        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order WHERE puzzle_id = ?").get(puzzle.id).c;
+        expect(blockCount).toBe(10);
+        expect(orderCount).toBe(10);
+    });
 });
 
 describe('Global Block Allocator — fresh allocation', () => {
@@ -1048,6 +1067,42 @@ describe('Global Block Allocator — stats and API', () => {
             .post('/api/v1/admin/set-puzzle')
             .send({ name: 'Bad', start_hex: '0x100', end_hex: '0x200', alloc_strategy: 'bogus_strategy' })
             .expect(400);
+    });
+
+    test('set-puzzle creates new puzzle row when block size differs from existing', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', alloc_block_size_keys: '100' })
+            .expect(200);
+        const first = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        // Same name/range/strategy, different block size — should create a new row
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', alloc_block_size_keys: '200' })
+            .expect(200);
+        const second = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        expect(second.id).not.toBe(first.id);
+        const newPuzzle = db.prepare("SELECT alloc_block_count FROM puzzles WHERE id = ?").get(second.id);
+        expect(newPuzzle.alloc_block_count).toBe(5); // 1000 / 200 = 5 blocks
+    });
+
+    test('set-puzzle reuses existing puzzle when block size is unchanged', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', alloc_block_size_keys: '100' })
+            .expect(200);
+        const first = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        // Same everything — should reuse
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', alloc_block_size_keys: '100' })
+            .expect(200);
+        const second = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        expect(second.id).toBe(first.id);
     });
 
     test('current_shard and finders[].shard both use physical block_index (consistency)', async () => {
