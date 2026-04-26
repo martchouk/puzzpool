@@ -1049,4 +1049,49 @@ describe('Global Block Allocator — stats and API', () => {
             .send({ name: 'Bad', start_hex: '0x100', end_hex: '0x200', alloc_strategy: 'bogus_strategy' })
             .expect(400);
     });
+
+    test('current_shard and finders[].shard both use physical block_index (consistency)', async () => {
+        // 10 blocks of 100 keys; bootstrap goes to block_index 5 (midpoint)
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const job_id = r.body.job_id;
+
+        // Worker is still assigned — check current_shard shows physical block_index
+        const statsBeforeSubmit = await request(app).get('/api/v1/stats');
+        const worker = statsBeforeSubmit.body.workers.find(w => w.name === 'w1');
+        expect(worker.current_shard).toBe(5); // physical block_index 5 = midpoint of 10 blocks
+
+        // Submit FOUND so the chunk appears in finders
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'w1', job_id, status: 'FOUND', findings: [{ found_key: '0'.repeat(64) }] });
+
+        const statsAfterSubmit = await request(app).get('/api/v1/stats');
+        const finder = statsAfterSubmit.body.finders[0];
+        expect(finder.shard).toBe(5); // same physical block_index
+    });
+
+    test('non-bootstrap fresh chunk shows correct physical block_index in current_shard', async () => {
+        // 3 blocks of 100 keys; bootstrap consumes block_index 1 (midpoint of 3)
+        const end = (300n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        // w1 gets bootstrap chunk (block_index 1)
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        // w2 gets next chunk from permutation (some other physical block)
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+
+        const stats = await request(app).get('/api/v1/stats');
+        const w1 = stats.body.workers.find(w => w.name === 'w1');
+        const w2 = stats.body.workers.find(w => w.name === 'w2');
+
+        // Both shards must be valid physical block indices (0, 1, or 2)
+        expect(w1.current_shard).toBeGreaterThanOrEqual(0);
+        expect(w1.current_shard).toBeLessThan(3);
+        expect(w2.current_shard).toBeGreaterThanOrEqual(0);
+        expect(w2.current_shard).toBeLessThan(3);
+        // And they must be in different blocks
+        expect(w1.current_shard).not.toBe(w2.current_shard);
+    });
 });

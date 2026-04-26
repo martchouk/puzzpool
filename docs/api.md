@@ -168,7 +168,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
 | `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
-| `current_shard` | number\|null | For `random_global_blocks_v1`: randomized order position of the block containing the current chunk. For legacy strategy: 0-based sector index. Null if no chunk assigned. |
+| `current_shard` | number\|null | Physical block or sector index of the work unit containing the current chunk. For `random_global_blocks_v1`: `alloc_blocks.block_index` (0-based, contiguous keyspace position). For legacy strategy: 0-based sector index. This is the same identifier used in `finders[].shard`. Null if no chunk assigned. |
 | `current_chunk_in_shard` | number\|null | 0-based serial number of the current chunk within its block or sector (chunk creation order); null if no chunk assigned. |
 
 **`shards` field**

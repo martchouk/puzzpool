@@ -849,13 +849,7 @@ function createApp(db) {
                    END AS chunk,
                    CASE
                        WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT ao.order_index
-                            FROM alloc_blocks ab
-                            JOIN alloc_order ao
-                              ON ao.puzzle_id = ab.puzzle_id
-                             AND ao.block_index = ab.block_index
-                            WHERE ab.id = c.alloc_block_id
-                            LIMIT 1)
+                           (SELECT ab.block_index FROM alloc_blocks ab WHERE ab.id = c.alloc_block_id)
                        WHEN c.sector_id IS NOT NULL THEN
                            (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
                        ELSE NULL
@@ -870,13 +864,7 @@ function createApp(db) {
             SELECT c.id, c.worker_name,
                    CASE
                        WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT ao.order_index
-                            FROM alloc_blocks ab
-                            JOIN alloc_order ao
-                              ON ao.puzzle_id = ab.puzzle_id
-                             AND ao.block_index = ab.block_index
-                            WHERE ab.id = c.alloc_block_id
-                            LIMIT 1)
+                           (SELECT ab.block_index FROM alloc_blocks ab WHERE ab.id = c.alloc_block_id)
                        WHEN c.sector_id IS NOT NULL THEN
                            (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
                        ELSE NULL
