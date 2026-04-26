@@ -29,18 +29,10 @@ const ALLOC_STRATEGY_LEGACY = 'legacy_random_shards_v1';
 const ALLOC_STRATEGY_GLOBAL = 'random_global_blocks_v1';
 const DEFAULT_ALLOC_STRATEGY = process.env.DEFAULT_ALLOC_STRATEGY || ALLOC_STRATEGY_GLOBAL;
 
-// Fixed-size block size for the new allocator.
-// Default 2^30 = 1,073,741,824 keys.
-const DEFAULT_ALLOC_BLOCK_SIZE_KEYS = (() => {
-    const raw = (process.env.ALLOC_BLOCK_SIZE_KEYS || '').trim();
-    if (!raw) return 1n << 30n;
-    try {
-        const n = BigInt(raw);
-        return n > 0n ? n : (1n << 30n);
-    } catch (_) {
-        return 1n << 30n;
-    }
-})();
+// Auto-sizing keeps block count <= DEFAULT_TARGET_BLOCKS (2^18) by doubling the
+// minimum block size (2^30) until the target is met. Hard cap at MAX_PRECOMPUTED_BLOCKS.
+const DEFAULT_TARGET_BLOCKS  = 262144;   // 2^18 — target block count
+const MAX_PRECOMPUTED_BLOCKS = 1048576;  // 2^20 — absolute upper limit
 
 // --- Pure helpers (no db dependency) ---
 
@@ -88,14 +80,31 @@ function normalizedRange(startHex, endHex) {
     return { start, end, range: end - start };
 }
 
-function deriveBlockSizeForRange(range, requestedBlockSize = DEFAULT_ALLOC_BLOCK_SIZE_KEYS) {
-    let size = requestedBlockSize > 0n ? requestedBlockSize : DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
+function deriveBlockSizeForRange(range, requestedBlockSize) {
+    let size = requestedBlockSize > 0n ? requestedBlockSize : 1n;
     if (size > range) size = range;
     return size;
 }
 
 function computeBlockCount(range, blockSize) {
     return (range + blockSize - 1n) / blockSize;
+}
+
+function chooseDefaultAllocBlockSize(range) {
+    let size = 1n << 30n;
+    while (computeBlockCount(range, size) > BigInt(DEFAULT_TARGET_BLOCKS)) {
+        size <<= 1n;
+    }
+    return size;
+}
+
+function validateBlockCountOrThrow(blockCountBig, context) {
+    if (blockCountBig > BigInt(MAX_PRECOMPUTED_BLOCKS)) {
+        throw new Error(
+            `${context}: block count ${blockCountBig.toString()} exceeds MAX_PRECOMPUTED_BLOCKS ` +
+            `(${MAX_PRECOMPUTED_BLOCKS}). Use a larger alloc_block_size_keys value.`
+        );
+    }
 }
 
 function makePermutationRng(seedHex) {
@@ -110,6 +119,9 @@ function makePermutationRng(seedHex) {
 
 function buildDeterministicPermutation(count, seedHex) {
     if (count < 0) throw new Error('count must be >= 0');
+    if (count > MAX_PRECOMPUTED_BLOCKS) {
+        throw new Error(`buildDeterministicPermutation: count ${count} exceeds MAX_PRECOMPUTED_BLOCKS (${MAX_PRECOMPUTED_BLOCKS})`);
+    }
     const arr = Array.from({ length: count }, (_, i) => i);
     const nextU64 = makePermutationRng(seedHex);
 
@@ -158,10 +170,7 @@ function seedGlobalBlocks(db, puzzleId, startHex, endHex, allocSeed, blockSizeKe
     const { start, end, range } = normalizedRange(startHex, endHex);
     const blockSize = deriveBlockSizeForRange(range, blockSizeKeys);
     const blockCountBig = computeBlockCount(range, blockSize);
-
-    if (blockCountBig > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new Error(`Block count too large for current implementation: ${blockCountBig.toString()}`);
-    }
+    validateBlockCountOrThrow(blockCountBig, 'seedGlobalBlocks');
     const blockCount = Number(blockCountBig);
 
     const permutation = buildDeterministicPermutation(blockCount, allocSeed);
@@ -223,11 +232,11 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
         if (blockCount === 0 || orderCount === 0) {
             const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle);
             const blockSize = (() => {
-                try {
-                    return puzzle.alloc_block_size_keys ? BigInt(puzzle.alloc_block_size_keys) : DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
-                } catch (_) {
-                    return DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
+                if (puzzle.alloc_block_size_keys) {
+                    try { return BigInt(puzzle.alloc_block_size_keys); } catch (_) {}
                 }
+                const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
+                return chooseDefaultAllocBlockSize(range);
             })();
             seedGlobalBlocks(db, puzzle.id, puzzle.start_hex, puzzle.end_hex, seed, blockSize);
         }
@@ -370,20 +379,10 @@ function createApp(db) {
         // alloc_blocks.current_hex already advanced and continues from there — no gap,
         // no overlap. bootstrap_done prevents this path from running again.
         if (!puzzle.bootstrap_done && freshChunkCount === 0) {
-            const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
-            const blockSize = (() => {
-                try {
-                    return puzzle.alloc_block_size_keys ? BigInt(puzzle.alloc_block_size_keys) : DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
-                } catch (_) {
-                    return DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
-                }
-            })();
-            const actualBlockSize = deriveBlockSizeForRange(range, blockSize);
-            const blockCountBig = computeBlockCount(range, actualBlockSize);
-
+            const storedBlockCount = puzzle.alloc_block_count ? Number(puzzle.alloc_block_count) : 0;
             let blockIndex = 0;
-            if (blockCountBig > 1n) {
-                blockIndex = Number(blockCountBig / 2n);
+            if (storedBlockCount > 1) {
+                blockIndex = Math.floor(storedBlockCount / 2);
             }
 
             const bootstrapBlock = db.prepare(`
@@ -1048,7 +1047,8 @@ function createApp(db) {
             return res.status(400).json({ error: 'end_hex must be greater than start_hex' });
         }
 
-        let blockSize = DEFAULT_ALLOC_BLOCK_SIZE_KEYS;
+        const puzzleRange = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
+        let blockSize;
         if (alloc_block_size_keys !== undefined && alloc_block_size_keys !== null && String(alloc_block_size_keys) !== '') {
             try {
                 blockSize = BigInt(String(alloc_block_size_keys));
@@ -1056,6 +1056,8 @@ function createApp(db) {
             } catch (_) {
                 return res.status(400).json({ error: 'alloc_block_size_keys must be a positive integer string' });
             }
+        } else {
+            blockSize = chooseDefaultAllocBlockSize(puzzleRange);
         }
 
         db.transaction(() => {
@@ -1336,6 +1338,8 @@ if (require.main === module) {
         if (!existing) {
             const strategy = DEFAULT_ALLOC_STRATEGY;
             const seed = defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm });
+            const ksRange = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
+            const ksBlockSize = strategy === ALLOC_STRATEGY_GLOBAL ? chooseDefaultAllocBlockSize(ksRange) : null;
 
             const info = db.prepare(`
                 INSERT INTO puzzles (
@@ -1349,12 +1353,12 @@ if (require.main === module) {
                 endNorm,
                 strategy,
                 seed,
-                strategy === ALLOC_STRATEGY_GLOBAL ? DEFAULT_ALLOC_BLOCK_SIZE_KEYS.toString() : null
+                ksBlockSize ? ksBlockSize.toString() : null
             );
 
             console.log(`[Config] Seeded keyspace: ${name}`);
             if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                seedGlobalBlocks(db, info.lastInsertRowid, startNorm, endNorm, seed, DEFAULT_ALLOC_BLOCK_SIZE_KEYS);
+                seedGlobalBlocks(db, info.lastInsertRowid, startNorm, endNorm, seed, ksBlockSize);
             } else {
                 seedSectors(db, info.lastInsertRowid, startNorm, endNorm);
             }
@@ -1368,6 +1372,8 @@ if (require.main === module) {
         const name = 'Puzzle #71';
         const strategy = DEFAULT_ALLOC_STRATEGY;
         const seed = defaultAllocSeedForPuzzle({ name, start_hex: startHex, end_hex: endHex });
+        const p71Range = BigInt('0x' + endHex) - BigInt('0x' + startHex);
+        const p71BlockSize = strategy === ALLOC_STRATEGY_GLOBAL ? chooseDefaultAllocBlockSize(p71Range) : null;
 
         const info = db.prepare(`
             INSERT INTO puzzles (
@@ -1381,12 +1387,12 @@ if (require.main === module) {
             endHex,
             strategy,
             seed,
-            strategy === ALLOC_STRATEGY_GLOBAL ? DEFAULT_ALLOC_BLOCK_SIZE_KEYS.toString() : null
+            p71BlockSize ? p71BlockSize.toString() : null
         );
 
         console.log('[Init] Seeded Puzzle #71 as active puzzle.');
         if (strategy === ALLOC_STRATEGY_GLOBAL) {
-            seedGlobalBlocks(db, info.lastInsertRowid, startHex, endHex, seed, DEFAULT_ALLOC_BLOCK_SIZE_KEYS);
+            seedGlobalBlocks(db, info.lastInsertRowid, startHex, endHex, seed, p71BlockSize);
         } else {
             seedSectors(db, info.lastInsertRowid, startHex, endHex);
         }
@@ -1442,8 +1448,11 @@ module.exports = {
     seedGlobalBlocks,
     buildDeterministicPermutation,
     defaultAllocSeedForPuzzle,
+    chooseDefaultAllocBlockSize,
     ACTIVE_MINUTES,
     REACTIVATE_MINUTES,
     ALLOC_STRATEGY_LEGACY,
     ALLOC_STRATEGY_GLOBAL,
+    DEFAULT_TARGET_BLOCKS,
+    MAX_PRECOMPUTED_BLOCKS,
 };
