@@ -131,7 +131,11 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "start_hex": "000...0400000000000000000",
     "end_hex":   "000...07fffffffffffffffff",
     "total_keys": "2361183241434822606848",
-    "test_chunk": null
+    "test_chunk": null,
+    "alloc_strategy": "random_global_blocks_v1",
+    "alloc_cursor": 10452,
+    "alloc_block_count": 131072,
+    "alloc_blocks_completed": 10451
   },
   "active_workers_count": 3,
   "inactive_workers_count": 1,
@@ -164,8 +168,25 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
 | `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
-| `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
-| `current_chunk_in_shard` | number\|null | 0-based serial number of the current chunk within its sector (chunk creation order); null if no chunk or pre-migration chunk without a sector |
+| `current_shard` | number\|null | For `random_global_blocks_v1`: randomized order position of the block containing the current chunk. For legacy strategy: 0-based sector index. Null if no chunk assigned. |
+| `current_chunk_in_shard` | number\|null | 0-based serial number of the current chunk within its block or sector (chunk creation order); null if no chunk assigned. |
+
+**`shards` field**
+
+```json
+{ "shards": { "total": 131072, "started": 10452, "completed": 10451 } }
+```
+
+For `random_global_blocks_v1`, `shards` counts allocation *blocks* (not legacy sectors): `total` is `alloc_block_count`, `completed` is the number of fully exhausted blocks. The dashboard displays these as "Blocks" when this strategy is active. For `legacy_random_shards_v1`, `shards` counts sectors as before.
+
+**`puzzle` allocator fields** (present when a puzzle is active)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `alloc_strategy` | string | Active allocator: `"random_global_blocks_v1"` or `"legacy_random_shards_v1"` |
+| `alloc_cursor` | number | Next position in the randomized block order to allocate from (global strategy only; 0 for legacy) |
+| `alloc_block_count` | number\|null | Total number of allocation blocks (global strategy only) |
+| `alloc_blocks_completed` | number\|null | Fully exhausted blocks so far (global strategy only) |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations.
@@ -183,10 +204,28 @@ Create or activate a puzzle. Deactivates any currently active puzzle.
 
 **Request**
 ```json
-{ "name": "Puzzle #71", "start_hex": "0x400000000000000000", "end_hex": "0x7FFFFFFFFFFFFFFFFF" }
+{
+  "name": "Puzzle #71",
+  "start_hex": "0x400000000000000000",
+  "end_hex": "0x7FFFFFFFFFFFFFFFFF",
+  "alloc_strategy": "random_global_blocks_v1",
+  "alloc_block_size_keys": "1073741824",
+  "alloc_seed": "optional-hex-seed"
+}
 ```
 
 Hex strings may include an optional `0x` prefix; they are normalised server-side.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Puzzle name |
+| `start_hex` | string | yes | Keyspace start (inclusive) |
+| `end_hex` | string | yes | Keyspace end (exclusive) |
+| `alloc_strategy` | string | no | `"random_global_blocks_v1"` (default) or `"legacy_random_shards_v1"` |
+| `alloc_block_size_keys` | string | no | Block size in keys as a decimal integer string. Defaults to `1073741824` (2³⁰). Ignored for legacy strategy. |
+| `alloc_seed` | string | no | Override the deterministic allocation seed. Immutable after first fresh allocation. |
+
+If a puzzle with the same `name`, `start_hex`, `end_hex`, and `alloc_strategy` already exists, it is reactivated without creating a new row.
 
 **Response 200**
 ```json

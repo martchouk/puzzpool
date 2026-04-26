@@ -1,7 +1,16 @@
 'use strict';
 
 const request = require('supertest');
-const { createApp, ACTIVE_MINUTES, REACTIVATE_MINUTES } = require('../server');
+const {
+    createApp,
+    ACTIVE_MINUTES,
+    REACTIVATE_MINUTES,
+    buildDeterministicPermutation,
+    seedGlobalBlocks,
+    defaultAllocSeedForPuzzle,
+    ALLOC_STRATEGY_LEGACY,
+    ALLOC_STRATEGY_GLOBAL,
+} = require('../server');
 const { createTestDb, seedPuzzle } = require('./helpers');
 
 const STALE_MINUTES          = (ACTIVE_MINUTES    || 1)  + 1; // stale for dashboard color
@@ -451,7 +460,7 @@ describe('Sharded Frontier Allocator', () => {
     test('0. first work request without test chunk targets sector #32768', async () => {
         // Puzzle with exactly 65536 sectors (range = 65536 × MIN_SECTOR_SIZE = 65536 × 1B)
         const end = (65536n * 1_000_000_000n).toString(16).padStart(64, '0');
-        seedPuzzle(db, { name: 'Large', end_hex: end });
+        seedPuzzle(db, { name: 'Large', end_hex: end, strategy: ALLOC_STRATEGY_LEGACY });
 
         const res = await request(app).post('/api/v1/work')
             .send({ name: 'w1', hashrate: 1e6 }).expect(200);
@@ -515,9 +524,9 @@ describe('Sharded Frontier Allocator', () => {
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         expect(r.body.job_id).toBe(reclaimedInfo.lastInsertRowid);
 
-        // Sector frontier must not have moved — reclaim took priority
-        const sector = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ?").get(puzzle.id);
-        expect(sector.current_hex).toBe(sector.start_hex);
+        // Block frontier must not have moved — reclaim took priority over fresh allocation
+        const block = db.prepare("SELECT * FROM alloc_blocks WHERE puzzle_id = ? ORDER BY block_index ASC LIMIT 1").get(puzzle.id);
+        expect(block.current_hex).toBe(block.start_hex);
     });
 
     test('5. progress accounting: overlapping done chunks not double-counted', async () => {
@@ -541,8 +550,8 @@ describe('Sharded Frontier Allocator', () => {
         await request(app).post('/api/v1/admin/set-puzzle')
             .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
         const p1 = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
-        const p1Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p1.id).c;
-        expect(p1Sectors).toBe(1);
+        const p1Blocks = db.prepare("SELECT COUNT(*) as c FROM alloc_blocks WHERE puzzle_id=?").get(p1.id).c;
+        expect(p1Blocks).toBe(1);
 
         // Change range → new puzzle row
         await request(app).post('/api/v1/admin/set-puzzle')
@@ -551,8 +560,8 @@ describe('Sharded Frontier Allocator', () => {
 
         expect(p2.id).not.toBe(p1.id);
         expect(p2.start_hex).toContain('3');   // normalized 0x300
-        const p2Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p2.id).c;
-        expect(p2Sectors).toBe(1);
+        const p2Blocks = db.prepare("SELECT COUNT(*) as c FROM alloc_blocks WHERE puzzle_id=?").get(p2.id).c;
+        expect(p2Blocks).toBe(1);
         // Old row still exists and is inactive
         const p1Row = db.prepare("SELECT * FROM puzzles WHERE id=?").get(p1.id);
         expect(p1Row).toBeTruthy();
@@ -754,5 +763,290 @@ describe('ADMIN_TOKEN middleware', () => {
             .get('/api/v1/admin/puzzles')
             .set('X-Admin-Token', 'wrongtoken')
             .expect(401);
+    });
+});
+
+// ─── Global Block Allocator ───────────────────────────────────────────────────
+
+describe('buildDeterministicPermutation', () => {
+    test('produces a full permutation with no duplicates', () => {
+        const n = 500;
+        const perm = buildDeterministicPermutation(n, 'test-seed-abc');
+        expect(perm).toHaveLength(n);
+        const set = new Set(perm);
+        expect(set.size).toBe(n);
+        for (const v of perm) expect(v >= 0 && v < n).toBe(true);
+    });
+
+    test('is deterministic: same seed produces identical output', () => {
+        const p1 = buildDeterministicPermutation(200, 'fixed-seed');
+        const p2 = buildDeterministicPermutation(200, 'fixed-seed');
+        expect(p1).toEqual(p2);
+    });
+
+    test('different seeds produce different orderings', () => {
+        const p1 = buildDeterministicPermutation(200, 'seed-A');
+        const p2 = buildDeterministicPermutation(200, 'seed-B');
+        expect(p1).not.toEqual(p2);
+    });
+
+    test('handles edge cases: count=0 and count=1', () => {
+        expect(buildDeterministicPermutation(0, 'seed')).toEqual([]);
+        expect(buildDeterministicPermutation(1, 'seed')).toEqual([0]);
+    });
+});
+
+describe('Global Block Allocator — seeding', () => {
+    test('seedGlobalBlocks creates correct number of contiguous blocks', () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const blocks = db.prepare(
+            "SELECT * FROM alloc_blocks WHERE puzzle_id = ? ORDER BY block_index ASC"
+        ).all(puzzle.id);
+
+        expect(blocks).toHaveLength(10);
+        for (let i = 0; i < 10; i++) {
+            const expectedStart = (BigInt(i) * 100n).toString(16).padStart(64, '0');
+            const expectedEnd   = (BigInt(i + 1) * 100n).toString(16).padStart(64, '0');
+            expect(blocks[i].start_hex).toBe(expectedStart);
+            expect(blocks[i].end_hex).toBe(expectedEnd);
+            expect(blocks[i].current_hex).toBe(expectedStart);
+            expect(blocks[i].status).toBe('open');
+        }
+    });
+
+    test('alloc_order is a full permutation of all block indices', () => {
+        const end = (500n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const rows = db.prepare(
+            "SELECT block_index FROM alloc_order WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(puzzle.id);
+
+        expect(rows).toHaveLength(5);
+        const sorted = rows.map(r => r.block_index).sort((a, b) => a - b);
+        expect(sorted).toEqual([0, 1, 2, 3, 4]);
+    });
+
+    test('allocation order is deterministic: same puzzle parameters and seed produce same order', () => {
+        const start = '0'.repeat(64);
+        const end   = (1000n).toString(16).padStart(64, '0');
+        const seed  = 'determinism-test-seed';
+
+        const p1 = seedPuzzle(db, { name: 'P1', start_hex: start, end_hex: end, block_size_keys: 100, seed });
+        db.prepare("UPDATE puzzles SET active = 0").run();
+        const p2 = seedPuzzle(db, { name: 'P2', start_hex: start, end_hex: end, block_size_keys: 100, seed });
+
+        const order1 = db.prepare(
+            "SELECT block_index FROM alloc_order WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(p1.id).map(r => r.block_index);
+
+        const order2 = db.prepare(
+            "SELECT block_index FROM alloc_order WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(p2.id).map(r => r.block_index);
+
+        expect(order1).toEqual(order2);
+    });
+
+    test('puzzle range smaller than block size produces exactly one block', () => {
+        const end = (500n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
+
+        const blocks = db.prepare("SELECT * FROM alloc_blocks WHERE puzzle_id = ?").all(puzzle.id);
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0].start_hex).toBe('0'.repeat(64));
+        expect(BigInt('0x' + blocks[0].end_hex)).toBe(500n);
+    });
+});
+
+describe('Global Block Allocator — fresh allocation', () => {
+    test('bootstrap: first chunk targets midpoint block by block_index', async () => {
+        // 10 blocks of 100 keys; midpoint = block_index 5, starts at key 500
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        expect(r.status).toBe(200);
+        expect(BigInt('0x' + r.body.start_key)).toBe(500n);
+    });
+
+    test('no overlap between consecutive fresh allocations', async () => {
+        const end = (2000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 200 });
+
+        const chunks = [];
+        for (let i = 0; i < 5; i++) {
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            expect(r.status).toBe(200);
+            chunks.push({ s: BigInt('0x' + r.body.start_key), e: BigInt('0x' + r.body.end_key) });
+        }
+
+        for (let i = 0; i < chunks.length; i++) {
+            for (let j = i + 1; j < chunks.length; j++) {
+                expect(chunks[i].s < chunks[j].e && chunks[j].s < chunks[i].e).toBe(false);
+            }
+        }
+    });
+
+    test('full allocation exhausts puzzle keyspace exactly and then returns 503', async () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const chunks = [];
+        for (let i = 0; i < 10; i++) {
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            expect(r.status).toBe(200);
+            chunks.push({ s: BigInt('0x' + r.body.start_key), e: BigInt('0x' + r.body.end_key) });
+        }
+
+        // No pairwise overlaps
+        for (let i = 0; i < chunks.length; i++) {
+            for (let j = i + 1; j < chunks.length; j++) {
+                expect(chunks[i].s < chunks[j].e && chunks[j].s < chunks[i].e).toBe(false);
+            }
+        }
+
+        // Union equals full keyspace
+        const sorted = [...chunks].sort((a, b) => (a.s < b.s ? -1 : 1));
+        const totalCovered = sorted.reduce((acc, c) => acc + (c.e - c.s), 0n);
+        expect(totalCovered).toBe(1000n);
+
+        // 11th request: exhausted
+        const last = await request(app).post('/api/v1/work').send({ name: 'w_last', hashrate: 1 });
+        expect(last.status).toBe(503);
+    }, 30000);
+
+    test('alloc_cursor reaches blockCount after all blocks exhausted', async () => {
+        const end = (300n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        for (let i = 0; i < 3; i++) {
+            await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+        }
+
+        const p = db.prepare("SELECT alloc_cursor, alloc_block_count FROM puzzles WHERE id = ?").get(puzzle.id);
+        expect(p.alloc_cursor).toBe(p.alloc_block_count);
+    });
+
+    test('block frontier is not rolled back when chunk is reclaimed', async () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const chunk = db.prepare("SELECT alloc_block_id FROM chunks WHERE id = ?").get(r.body.job_id);
+
+        const beforeHex = db.prepare("SELECT current_hex FROM alloc_blocks WHERE id = ?")
+            .get(chunk.alloc_block_id).current_hex;
+
+        db.prepare(
+            "UPDATE chunks SET status='reclaimed', prev_worker_name=worker_name, worker_name=NULL WHERE id=?"
+        ).run(r.body.job_id);
+
+        const afterHex = db.prepare("SELECT current_hex FROM alloc_blocks WHERE id = ?")
+            .get(chunk.alloc_block_id).current_hex;
+
+        expect(afterHex).toBe(beforeHex);
+    });
+
+    test('reclaimed chunk reissued before fresh allocation, no overlap with subsequent fresh chunk', async () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        db.prepare(
+            "UPDATE chunks SET status='reclaimed', prev_worker_name=worker_name, worker_name=NULL WHERE id=?"
+        ).run(r1.body.job_id);
+
+        // w2 should receive the reclaimed chunk
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        expect(r2.body.job_id).toBe(r1.body.job_id);
+
+        // w3 gets a fresh chunk with no overlap against the reclaimed one
+        const r3 = await request(app).post('/api/v1/work').send({ name: 'w3', hashrate: 1 });
+        expect(r3.status).toBe(200);
+        expect(r3.body.job_id).not.toBe(r1.body.job_id);
+
+        const aS = BigInt('0x' + r2.body.start_key), aE = BigInt('0x' + r2.body.end_key);
+        const bS = BigInt('0x' + r3.body.start_key), bE = BigInt('0x' + r3.body.end_key);
+        expect(aS < bE && bS < aE).toBe(false);
+    });
+});
+
+describe('Global Block Allocator — stats and API', () => {
+    test('stats puzzle object includes allocator diagnostic fields', async () => {
+        seedPuzzle(db);
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        const p = res.body.puzzle;
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_GLOBAL);
+        expect(p.alloc_block_count).toBeGreaterThan(0);
+        expect(typeof p.alloc_cursor).toBe('number');
+        expect(p.alloc_blocks_completed).toBe(0);
+    });
+
+    test('shards.total reflects alloc_block_count for global strategy', async () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.shards.total).toBe(10);
+        expect(res.body.shards.completed).toBe(0);
+    });
+
+    test('shards.completed increments as blocks are exhausted', async () => {
+        const end = (300n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
+
+        let prevCompleted = 0;
+        for (let i = 0; i < 3; i++) {
+            await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            const res = await request(app).get('/api/v1/stats');
+            expect(res.body.shards.completed).toBeGreaterThanOrEqual(prevCompleted);
+            prevCompleted = res.body.shards.completed;
+        }
+        expect(prevCompleted).toBe(3);
+    });
+
+    test('set-puzzle creates global block puzzle by default', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'NewPuzzle', start_hex: '0x0', end_hex: '0x3e8' })
+            .expect(200);
+
+        const p = db.prepare("SELECT * FROM puzzles WHERE active = 1").get();
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_GLOBAL);
+        const blockCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ?").get(p.id).c;
+        expect(blockCount).toBeGreaterThan(0);
+    });
+
+    test('set-puzzle accepts explicit alloc_strategy=legacy and creates sectors not blocks', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Legacy', start_hex: '0x100', end_hex: '0x200', alloc_strategy: ALLOC_STRATEGY_LEGACY })
+            .expect(200);
+
+        const p = db.prepare("SELECT * FROM puzzles WHERE active = 1").get();
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_LEGACY);
+        const sectors = db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(p.id).c;
+        expect(sectors).toBeGreaterThan(0);
+        const blocks = db.prepare("SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ?").get(p.id).c;
+        expect(blocks).toBe(0);
+    });
+
+    test('set-puzzle accepts custom alloc_block_size_keys and populates correct block count', async () => {
+        // 0x3e8 = 1000 keys / 100 per block = 10 blocks
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Custom', start_hex: '0x0', end_hex: '0x3e8', alloc_block_size_keys: '100' })
+            .expect(200);
+
+        const p = db.prepare("SELECT alloc_block_count FROM puzzles WHERE active = 1").get();
+        expect(p.alloc_block_count).toBe(10);
+    });
+
+    test('set-puzzle rejects unknown alloc_strategy', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Bad', start_hex: '0x100', end_hex: '0x200', alloc_strategy: 'bogus_strategy' })
+            .expect(400);
     });
 });
