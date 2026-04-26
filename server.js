@@ -231,11 +231,17 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
 
         if (blockCount === 0 || orderCount === 0) {
             const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle);
+            const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
             const blockSize = (() => {
                 if (puzzle.alloc_block_size_keys) {
-                    try { return BigInt(puzzle.alloc_block_size_keys); } catch (_) {}
+                    try {
+                        const stored = BigInt(puzzle.alloc_block_size_keys);
+                        const actual = deriveBlockSizeForRange(range, stored);
+                        if (computeBlockCount(range, actual) <= BigInt(MAX_PRECOMPUTED_BLOCKS)) {
+                            return stored;
+                        }
+                    } catch (_) {}
                 }
-                const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
                 return chooseDefaultAllocBlockSize(range);
             })();
             seedGlobalBlocks(db, puzzle.id, puzzle.start_hex, puzzle.end_hex, seed, blockSize);
