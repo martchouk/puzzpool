@@ -711,7 +711,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Chunk Global</th><th>Datetime</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th>Shard</th><th>Chunk</th><th>Job ID</th><th>Datetime</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -1356,7 +1356,7 @@
                         <td class="td-addr">${f.found_address || 'Unknown'}</td>
                         <td class="td-key">${f.shard ?? '—'}</td>
                         <td class="td-key">${f.chunk ?? '—'}</td>
-                        <td class="td-key">${f.chunk_global ?? '—'}</td>
+                        <td class="td-key">${f.chunk_global != null ? '#'+f.chunk_global : '—'}</td>
                         <td class="td-time">${fmtUtc(f.created_at)}</td>
                     </tr>`).join('');
                 }
