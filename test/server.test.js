@@ -936,7 +936,7 @@ describe('Global Block Allocator — fresh allocation', () => {
         expect(last.status).toBe(503);
     }, 30000);
 
-    test('alloc_cursor reaches blockCount after all blocks exhausted', async () => {
+    test('all blocks marked done after all keyspace is exhausted', async () => {
         const end = (300n).toString(16).padStart(64, '0');
         const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 100 });
 
@@ -944,8 +944,28 @@ describe('Global Block Allocator — fresh allocation', () => {
             await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
         }
 
-        const p = db.prepare("SELECT alloc_cursor, alloc_block_count FROM puzzles WHERE id = ?").get(puzzle.id);
-        expect(p.alloc_cursor).toBe(p.alloc_block_count);
+        const doneCount = db.prepare(
+            "SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ? AND status = 'done'"
+        ).get(puzzle.id).c;
+        const p = db.prepare("SELECT alloc_block_count FROM puzzles WHERE id = ?").get(puzzle.id);
+        expect(doneCount).toBe(p.alloc_block_count);
+    });
+
+    test('each fresh assignment rotates to a different physical block', async () => {
+        // 5 blocks of 200 keys each, chunk size >> block size so each request exhausts one block
+        const end = (1000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, block_size_keys: 200 });
+
+        const shards = [];
+        for (let i = 0; i < 5; i++) {
+            await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            const stats = await request(app).get('/api/v1/stats');
+            const w = stats.body.workers.find(w => w.name === `w${i}`);
+            shards.push(w.current_shard);
+        }
+
+        // All 5 assignments must land in distinct physical blocks
+        expect(new Set(shards).size).toBe(5);
     });
 
     test('block frontier is not rolled back when chunk is reclaimed', async () => {

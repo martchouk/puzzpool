@@ -307,6 +307,10 @@ function createApp(db) {
         SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ? AND status = 'done'
     `);
 
+    const stmtAllocPuzzleBootstrapDone = db.prepare(`
+        UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?
+    `);
+
     const stmtInsertChunk = db.prepare(`
         INSERT INTO chunks (
             puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test, sector_id, alloc_block_id
@@ -417,36 +421,46 @@ function createApp(db) {
                         stmtAllocBlockAdvance.run(endHex, bootstrapBlock.id);
                     }
 
-                    db.prepare("UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?").run(puzzle.id);
+                    stmtAllocPuzzleBootstrapDone.run(puzzle.id);
                     const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, null, bootstrapBlock.id);
                     return { chunkId: info.lastInsertRowid, startHex, endHex };
                 }
 
                 // Defensive cleanup if the bootstrap target is already exhausted
                 stmtAllocBlockDone.run(bootstrapBlock.id);
-                db.prepare("UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?").run(puzzle.id);
+                stmtAllocPuzzleBootstrapDone.run(puzzle.id);
             } else {
-                db.prepare("UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?").run(puzzle.id);
+                stmtAllocPuzzleBootstrapDone.run(puzzle.id);
             }
         }
 
-        for (;;) {
-            const allocPuzzle = stmtAllocPuzzle.get(puzzle.id);
-            if (!allocPuzzle) return null;
+        const allocPuzzle = stmtAllocPuzzle.get(puzzle.id);
+        if (!allocPuzzle) return null;
 
-            const cursor = Number(allocPuzzle.alloc_cursor || 0);
-            const blockCount = Number(allocPuzzle.alloc_block_count || 0);
-            if (cursor >= blockCount) return null;
+        const rawCursor = Number(allocPuzzle.alloc_cursor || 0);
+        const blockCount = Number(allocPuzzle.alloc_block_count || 0);
+        if (blockCount <= 0) return null;
+        if (stmtAllocBlocksCompleted.get(puzzle.id).c >= blockCount) return null;
 
+        let cursor = rawCursor % blockCount;
+        let attempts = 0;
+
+        while (attempts < blockCount) {
             const slot = stmtAllocOrderAt.get(puzzle.id, cursor);
+            const nextCursor = (cursor + 1) % blockCount;
+
             if (!slot) {
-                // Broken order row — skip it defensively.
-                stmtAllocCursorAdvance.run(cursor + 1, puzzle.id, cursor);
+                // Broken order row — skip it defensively and keep rotating.
+                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
+                cursor = nextCursor;
+                attempts++;
                 continue;
             }
 
             if (slot.status === 'done') {
-                stmtAllocCursorAdvance.run(cursor + 1, puzzle.id, cursor);
+                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
+                cursor = nextCursor;
+                attempts++;
                 continue;
             }
 
@@ -456,7 +470,9 @@ function createApp(db) {
 
             if (effective <= 0n) {
                 stmtAllocBlockDone.run(slot.alloc_block_id);
-                stmtAllocCursorAdvance.run(cursor + 1, puzzle.id, cursor);
+                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
+                cursor = nextCursor;
+                attempts++;
                 continue;
             }
 
@@ -465,15 +481,16 @@ function createApp(db) {
 
             if (current + effective >= blockEnd) {
                 stmtAllocBlockDone.run(slot.alloc_block_id);
-                stmtAllocCursorAdvance.run(cursor + 1, puzzle.id, cursor);
             } else {
                 stmtAllocBlockAdvance.run(endHex, slot.alloc_block_id);
             }
 
-            db.prepare("UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?").run(puzzle.id);
+            stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
+            stmtAllocPuzzleBootstrapDone.run(puzzle.id);
             const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, null, slot.alloc_block_id);
             return { chunkId: info.lastInsertRowid, startHex, endHex };
         }
+        return null;
     });
 
     const claimTestChunk = db.transaction((name, puzzle) => {
