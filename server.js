@@ -448,14 +448,24 @@ function createApp(db) {
     }
 
     function findBeginBootstrapRun(puzzleId, totalChunks, neededChunks) {
-        for (let start = 0; start + neededChunks <= totalChunks; start++) {
+        const maxStart = totalChunks - neededChunks;
+        if (maxStart < 0) return null;
+
+        const probes = Math.min(maxStart + 1, MAX_ALLOC_PROBES);
+        for (let i = 0; i < probes; i++) {
+            const start = i;
             if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
         }
         return null;
     }
 
     function findEndBootstrapRun(puzzleId, totalChunks, neededChunks) {
-        for (let start = totalChunks - neededChunks; start >= 0; start--) {
+        const maxStart = totalChunks - neededChunks;
+        if (maxStart < 0) return null;
+
+        const probes = Math.min(maxStart + 1, MAX_ALLOC_PROBES);
+        for (let i = 0; i < probes; i++) {
+            const start = maxStart - i;
             if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
         }
         return null;
@@ -463,26 +473,36 @@ function createApp(db) {
 
     function findMidBootstrapRun(puzzleId, totalChunks, neededChunks) {
         if (totalChunks <= 0) return null;
+
         const anchor = Math.floor(totalChunks / 2);
+        const maxStart = totalChunks - neededChunks;
+        if (maxStart < 0) return null;
 
         const tried = new Set();
-        const candidateStarts = [];
+        const probes = Math.min(totalChunks, MAX_ALLOC_PROBES);
 
-        let preferred = normalizeRunStartForCandidate(anchor, neededChunks, totalChunks);
-        candidateStarts.push(preferred);
-
-        for (let dist = 1; dist < totalChunks; dist++) {
+        for (let dist = 0; dist < probes; dist++) {
             const leftAnchor = anchor - dist;
+            if (leftAnchor >= 0) {
+                const start = normalizeRunStartForCandidate(leftAnchor, neededChunks, totalChunks);
+                if (!tried.has(start)) {
+                    tried.add(start);
+                    if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+                }
+            }
+
+            if (dist === 0) continue;
+
             const rightAnchor = anchor + dist;
-            if (leftAnchor >= 0) candidateStarts.push(normalizeRunStartForCandidate(leftAnchor, neededChunks, totalChunks));
-            if (rightAnchor < totalChunks) candidateStarts.push(normalizeRunStartForCandidate(rightAnchor, neededChunks, totalChunks));
+            if (rightAnchor < totalChunks) {
+                const start = normalizeRunStartForCandidate(rightAnchor, neededChunks, totalChunks);
+                if (!tried.has(start)) {
+                    tried.add(start);
+                    if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+                }
+            }
         }
 
-        for (const start of candidateStarts) {
-            if (tried.has(start)) continue;
-            tried.add(start);
-            if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
-        }
         return null;
     }
 
