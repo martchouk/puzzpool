@@ -1,6 +1,7 @@
 # Private Claude config — never publish
 CLAUDE.md
 skills.md
+.claude
 
 # Runtime / generated
 node_modules/
@@ -12,3 +13,6 @@ BINGO_FOUND_KEYS.txt
 # macOS
 .DS_Store
 
+changes.patch
+server.js.bak
+server.js.orig
