@@ -6,35 +6,36 @@ const fs = require('fs');
 // --- Configuration ---
 const PORT            = parseInt(process.env.PORT || '8888', 10);
 const DB_PATH         = process.env.DB_PATH || 'pool.db';
-const TARGET_MINUTES  = parseInt(process.env.TARGET_MINUTES || '5', 10);
+const TARGET_MINUTES  = parseInt(process.env.TARGET_MINUTES || '10', 10);
 const TIMEOUT_MINUTES = parseInt(process.env.TIMEOUT_MINUTES || '15', 10);
 const TARGET_SECTORS  = BigInt(parseInt(process.env.TARGET_SECTORS || '65536', 10));
 
 // Dashboard freshness threshold only. Green = recent heartbeat; gray = visible but stale.
-// This controls UI state only and must not affect chunk ownership/reclaim logic.
-// Accepts fractional minutes (e.g. 0.333 ≈ 20 seconds).
 const DEFAULT_ACTIVE_MINUTES = 1.167;
 const rawActiveMinutes = parseFloat(process.env.ACTIVE_MINUTES || String(DEFAULT_ACTIVE_MINUTES));
 const ACTIVE_MINUTES_REQUESTED =
     Number.isFinite(rawActiveMinutes) && rawActiveMinutes > 0 ? rawActiveMinutes : DEFAULT_ACTIVE_MINUTES;
 const ACTIVE_MINUTES = Math.max(0.1, Math.min(ACTIVE_MINUTES_REQUESTED, TIMEOUT_MINUTES / 2));
 
-// Ownership/reactivation threshold — separate from ACTIVE_MINUTES on purpose.
-// ACTIVE_MINUTES controls dashboard coloring; REACTIVATE_MINUTES controls when a
-// returning worker loses its previous assignment. Keep aligned with chunk-timeout semantics.
 const REACTIVATE_MINUTES = TIMEOUT_MINUTES;
 
-// New allocator defaults
-const ALLOC_STRATEGY_LEGACY = 'legacy_random_shards_v1';
-const ALLOC_STRATEGY_GLOBAL = 'random_global_blocks_v1';
-const DEFAULT_ALLOC_STRATEGY = process.env.DEFAULT_ALLOC_STRATEGY || ALLOC_STRATEGY_GLOBAL;
+// --- Allocator strategies ---
+const ALLOC_STRATEGY_LEGACY  = 'legacy_random_shards_v1';
+const ALLOC_STRATEGY_VCHUNKS = 'virtual_random_chunks_v1';
+const DEFAULT_ALLOC_STRATEGY = process.env.DEFAULT_ALLOC_STRATEGY || ALLOC_STRATEGY_VCHUNKS;
 
-// Auto-sizing keeps block count <= DEFAULT_TARGET_BLOCKS (2^18) by doubling the
-// minimum block size (2^30) until the target is met. Hard cap at MAX_PRECOMPUTED_BLOCKS.
-const DEFAULT_TARGET_BLOCKS  = 262144;   // 2^18 — target block count
-const MAX_PRECOMPUTED_BLOCKS = 1048576;  // 2^20 — absolute upper limit
+// 1 virtual chunk should be ~1 minute on the slowest client.
+// Default assumes ~500k keys/s slowest worker => 30,000,000 keys.
+const DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS = BigInt(process.env.DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS || '30000000');
 
-// --- Pure helpers (no db dependency) ---
+// We precompute one permutation row per virtual chunk.
+const MAX_PRECOMPUTED_VCHUNKS = 1048576; // 2^20
+
+
+// GPU batch size kept for admin test-chunk default
+const GPU_BATCH_KEYS = 4278190080n;
+
+// --- Pure helpers ---
 
 function isValidHex(s) {
     return typeof s === 'string' && /^(0x)?[0-9a-fA-F]{1,64}$/.test(s);
@@ -48,7 +49,7 @@ function randomBigIntInRange(min, max) {
     const range = max - min;
     if (range <= 0n) return min;
     const hexLen = range.toString(16).length;
-    const byteLen = Math.ceil(hexLen / 2) + 8; // bias < 1/2^64
+    const byteLen = Math.ceil(hexLen / 2) + 8;
     const bytes = crypto.randomBytes(byteLen);
     const n = BigInt('0x' + bytes.toString('hex'));
     return min + (n % range);
@@ -64,47 +65,39 @@ function sha256Hex(s) {
     return crypto.createHash('sha256').update(String(s)).digest('hex');
 }
 
-function defaultAllocSeedForPuzzle(puzzle) {
-    return sha256Hex(`${puzzle.name}|${puzzle.start_hex}|${puzzle.end_hex}|random_global_blocks_v1`);
-}
-
 function bigIntMin(a, b) {
     return a < b ? a : b;
 }
 
+function bigIntMax(a, b) {
+    return a > b ? a : b;
+}
+
+function ceilDiv(a, b) {
+    return (a + b - 1n) / b;
+}
+
+function roundUpToQuantum(value, quantum) {
+    if (quantum <= 1n) return value;
+    return ceilDiv(value, quantum) * quantum;
+}
+
+function parsePositiveBigInt(value, fallback = null) {
+    if (value === undefined || value === null || String(value) === '') return fallback;
+    try {
+        const n = BigInt(String(value));
+        if (n <= 0n) return fallback;
+        return n;
+    } catch (_) {
+        return fallback;
+    }
+}
 
 function normalizedRange(startHex, endHex) {
     const start = BigInt('0x' + startHex);
-    const end = BigInt('0x' + endHex);
+    const end   = BigInt('0x' + endHex);
     if (end <= start) throw new Error('Puzzle range must be > 0');
     return { start, end, range: end - start };
-}
-
-function deriveBlockSizeForRange(range, requestedBlockSize) {
-    let size = requestedBlockSize > 0n ? requestedBlockSize : 1n;
-    if (size > range) size = range;
-    return size;
-}
-
-function computeBlockCount(range, blockSize) {
-    return (range + blockSize - 1n) / blockSize;
-}
-
-function chooseDefaultAllocBlockSize(range) {
-    let size = 1n << 30n;
-    while (computeBlockCount(range, size) > BigInt(DEFAULT_TARGET_BLOCKS)) {
-        size <<= 1n;
-    }
-    return size;
-}
-
-function validateBlockCountOrThrow(blockCountBig, context) {
-    if (blockCountBig > BigInt(MAX_PRECOMPUTED_BLOCKS)) {
-        throw new Error(
-            `${context}: block count ${blockCountBig.toString()} exceeds MAX_PRECOMPUTED_BLOCKS ` +
-            `(${MAX_PRECOMPUTED_BLOCKS}). Use a larger alloc_block_size_keys value.`
-        );
-    }
 }
 
 function makePermutationRng(seedHex) {
@@ -119,8 +112,8 @@ function makePermutationRng(seedHex) {
 
 function buildDeterministicPermutation(count, seedHex) {
     if (count < 0) throw new Error('count must be >= 0');
-    if (count > MAX_PRECOMPUTED_BLOCKS) {
-        throw new Error(`buildDeterministicPermutation: count ${count} exceeds MAX_PRECOMPUTED_BLOCKS (${MAX_PRECOMPUTED_BLOCKS})`);
+    if (count > MAX_PRECOMPUTED_VCHUNKS) {
+        throw new Error(`buildDeterministicPermutation: count ${count} exceeds MAX_PRECOMPUTED_VCHUNKS (${MAX_PRECOMPUTED_VCHUNKS})`);
     }
     const arr = Array.from({ length: count }, (_, i) => i);
     const nextU64 = makePermutationRng(seedHex);
@@ -134,7 +127,66 @@ function buildDeterministicPermutation(count, seedHex) {
     return arr;
 }
 
-// Legacy sector seeding retained for old puzzles / compatibility.
+function defaultAllocSeedForPuzzle(puzzle, strategy = ALLOC_STRATEGY_VCHUNKS) {
+    return sha256Hex(`${puzzle.name}|${puzzle.start_hex}|${puzzle.end_hex}|${strategy}`);
+}
+
+function chooseDefaultVirtualChunkSize(range) {
+    let size = DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS > 0n ? DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS : 1n;
+    if (size > range) size = range;
+
+    // Ensure chunk_count stays under the configured cap.
+    while (ceilDiv(range, size) > BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+        size <<= 1n;
+        if (size > range) {
+            size = range;
+            break;
+        }
+    }
+    return size;
+}
+
+function validateVirtualChunkCountOrThrow(chunkCountBig, context) {
+    if (chunkCountBig > BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+        throw new Error(
+            `${context}: virtual chunk count ${chunkCountBig.toString()} exceeds MAX_PRECOMPUTED_VCHUNKS ` +
+            `(${MAX_PRECOMPUTED_VCHUNKS}). Use a larger virtual_chunk_size_keys value.`
+        );
+    }
+}
+
+
+function computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKeys }) {
+    const targetKeys = hashrateBig * BigInt(TARGET_MINUTES * 60);
+    const minKeys = minChunkKeys && minChunkKeys > 0n ? minChunkKeys : targetKeys;
+    const raw = bigIntMax(targetKeys, minKeys);
+    const quantum = chunkQuantumKeys && chunkQuantumKeys > 0n ? chunkQuantumKeys : 1n;
+    return roundUpToQuantum(raw, quantum);
+}
+
+function normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks) {
+    if (neededChunks >= totalChunks) return 0;
+    let start = candidateIndex;
+    if (start + neededChunks > totalChunks) {
+        start = totalChunks - neededChunks;
+    }
+    if (start < 0) start = 0;
+    return start;
+}
+
+function virtualChunkRangeToHex(puzzle, vchunkStart, vchunkEndExclusive) {
+    const pStart = BigInt('0x' + puzzle.start_hex);
+    const pEnd   = BigInt('0x' + puzzle.end_hex);
+    const size   = BigInt(puzzle.virtual_chunk_size_keys);
+    const start  = pStart + BigInt(vchunkStart) * size;
+    const end    = bigIntMin(pStart + BigInt(vchunkEndExclusive) * size, pEnd);
+    return {
+        startHex: start.toString(16).padStart(64, '0'),
+        endHex:   end.toString(16).padStart(64, '0'),
+    };
+}
+
+// --- Legacy sector seeding retained for rollback compatibility ---
 function seedSectors(db, puzzleId, startHex, endHex) {
     const MIN_SECTOR_SIZE = 1000000000n;
 
@@ -165,62 +217,50 @@ function seedSectors(db, puzzleId, startHex, endHex) {
     console.log(`[System] Seeded ${numSectors} legacy sectors for puzzle ${puzzleId}`);
 }
 
-// New allocator seeding
-function seedGlobalBlocks(db, puzzleId, startHex, endHex, allocSeed, blockSizeKeys) {
-    const { start, end, range } = normalizedRange(startHex, endHex);
-    const blockSize = deriveBlockSizeForRange(range, blockSizeKeys);
-    const blockCountBig = computeBlockCount(range, blockSize);
-    validateBlockCountOrThrow(blockCountBig, 'seedGlobalBlocks');
-    const blockCount = Number(blockCountBig);
+// --- New allocator seeding: virtual chunks ---
+function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChunkSizeKeys) {
+    const { range } = normalizedRange(startHex, endHex);
+    const chunkSize = bigIntMin(
+        virtualChunkSizeKeys && virtualChunkSizeKeys > 0n ? virtualChunkSizeKeys : chooseDefaultVirtualChunkSize(range),
+        range
+    );
+    const chunkCountBig = ceilDiv(range, chunkSize);
+    validateVirtualChunkCountOrThrow(chunkCountBig, 'seedVirtualChunks');
+    const chunkCount = Number(chunkCountBig);
 
-    const permutation = buildDeterministicPermutation(blockCount, allocSeed);
-
-    const insertBlock = db.prepare(`
-        INSERT INTO alloc_blocks (
-            puzzle_id, block_index, start_hex, end_hex, current_hex, status
-        ) VALUES (?, ?, ?, ?, ?, 'open')
-    `);
+    const permutation = buildDeterministicPermutation(chunkCount, allocSeed);
 
     const insertOrder = db.prepare(`
-        INSERT INTO alloc_order (puzzle_id, order_index, block_index)
+        INSERT INTO alloc_order_vchunks (puzzle_id, order_index, chunk_index)
         VALUES (?, ?, ?)
     `);
 
     db.transaction(() => {
-        // Clear any partial state so reseeding is always safe after an interrupted boot.
-        db.prepare("DELETE FROM alloc_order WHERE puzzle_id = ?").run(puzzleId);
-        db.prepare("DELETE FROM alloc_blocks WHERE puzzle_id = ?").run(puzzleId);
+        db.prepare(`DELETE FROM alloc_order_vchunks WHERE puzzle_id = ?`).run(puzzleId);
 
         db.prepare(`
             UPDATE puzzles
             SET alloc_strategy = ?,
                 alloc_seed = ?,
                 alloc_cursor = 0,
-                alloc_block_size_keys = ?,
-                alloc_block_count = ?
+                virtual_chunk_size_keys = ?,
+                virtual_chunk_count = ?,
+                bootstrap_stage = 0
             WHERE id = ?
         `).run(
-            ALLOC_STRATEGY_GLOBAL,
+            ALLOC_STRATEGY_VCHUNKS,
             allocSeed,
-            blockSize.toString(),
-            blockCount,
+            chunkSize.toString(),
+            chunkCount,
             puzzleId
         );
 
-        for (let i = 0; i < blockCount; i++) {
-            const blockStart = start + BigInt(i) * blockSize;
-            const blockEnd = bigIntMin(blockStart + blockSize, end);
-            const blockStartHex = blockStart.toString(16).padStart(64, '0');
-            const blockEndHex = blockEnd.toString(16).padStart(64, '0');
-            insertBlock.run(puzzleId, i, blockStartHex, blockEndHex, blockStartHex);
-        }
-
-        for (let orderIndex = 0; orderIndex < blockCount; orderIndex++) {
+        for (let orderIndex = 0; orderIndex < chunkCount; orderIndex++) {
             insertOrder.run(puzzleId, orderIndex, permutation[orderIndex]);
         }
     })();
 
-    console.log(`[System] Seeded ${blockCount} global blocks for puzzle ${puzzleId} (block size ${blockSize.toString()} keys)`);
+    console.log(`[System] Seeded ${chunkCount} virtual chunks for puzzle ${puzzleId} (virtual chunk size ${chunkSize.toString()} keys)`);
 }
 
 function ensureAllocatorForPuzzle(db, puzzleId) {
@@ -229,26 +269,24 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
 
     const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
 
-    if (strategy === ALLOC_STRATEGY_GLOBAL) {
-        const blockCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ?").get(puzzleId).c;
-        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order WHERE puzzle_id = ?").get(puzzleId).c;
-
-        if (blockCount === 0 || orderCount === 0) {
-            const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle);
+    if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(puzzleId).c;
+        if (orderCount === 0) {
+            const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle, ALLOC_STRATEGY_VCHUNKS);
             const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
-            const blockSize = (() => {
-                if (puzzle.alloc_block_size_keys) {
+            const size = (() => {
+                if (puzzle.virtual_chunk_size_keys) {
                     try {
-                        const stored = BigInt(puzzle.alloc_block_size_keys);
-                        const actual = deriveBlockSizeForRange(range, stored);
-                        if (computeBlockCount(range, actual) <= BigInt(MAX_PRECOMPUTED_BLOCKS)) {
-                            return stored;
+                        const stored = BigInt(puzzle.virtual_chunk_size_keys);
+                        const actual = bigIntMin(stored, range);
+                        if (ceilDiv(range, actual) <= BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+                            return actual;
                         }
                     } catch (_) {}
                 }
-                return chooseDefaultAllocBlockSize(range);
+                return chooseDefaultVirtualChunkSize(range);
             })();
-            seedGlobalBlocks(db, puzzle.id, puzzle.start_hex, puzzle.end_hex, seed, blockSize);
+            seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, size);
         }
     } else {
         const sectorCount = db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(puzzleId).c;
@@ -259,66 +297,68 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
 }
 
 // --- App factory ---
-
 function createApp(db) {
-    // Shared prepared statements
     const stmtWorkerHash = db.prepare("SELECT hashrate FROM workers WHERE name = ?");
     const stmtChunkCount = db.prepare("SELECT COUNT(*) as cnt FROM chunks WHERE puzzle_id = ? AND is_test = 0");
 
     // Legacy allocator statements
-    const stmtOpenSector      = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
-    const stmtOpenSectorAt    = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY id ASC LIMIT 1 OFFSET ?");
-    const stmtSectorDone      = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
-    const stmtSectorAdvance   = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
+    const stmtOpenSector    = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY RANDOM() LIMIT 1");
+    const stmtOpenSectorAt  = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ? AND status = 'open' ORDER BY id ASC LIMIT 1 OFFSET ?");
+    const stmtSectorDone    = db.prepare("UPDATE sectors SET current_hex = end_hex, status = 'done' WHERE id = ?");
+    const stmtSectorAdvance = db.prepare("UPDATE sectors SET current_hex = ? WHERE id = ?");
 
-    // New allocator statements
-    const stmtAllocPuzzle = db.prepare(`
-        SELECT id, alloc_strategy, alloc_seed, alloc_cursor, alloc_block_size_keys, alloc_block_count, bootstrap_done,
-               start_hex, end_hex, name
+    // Virtual-chunk allocator statements
+    const stmtVChunkPuzzle = db.prepare(`
+        SELECT id, name, start_hex, end_hex,
+               alloc_strategy, alloc_seed, alloc_cursor,
+               virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage,
+               test_start_hex, test_end_hex
         FROM puzzles
         WHERE id = ?
     `);
 
-    const stmtAllocOrderAt = db.prepare(`
-        SELECT ao.block_index, ab.id AS alloc_block_id, ab.start_hex, ab.end_hex, ab.current_hex, ab.status
-        FROM alloc_order ao
-        JOIN alloc_blocks ab
-          ON ab.puzzle_id = ao.puzzle_id
-         AND ab.block_index = ao.block_index
-        WHERE ao.puzzle_id = ? AND ao.order_index = ?
+    const stmtVChunkOrderAt = db.prepare(`
+        SELECT chunk_index
+        FROM alloc_order_vchunks
+        WHERE puzzle_id = ? AND order_index = ?
         LIMIT 1
     `);
 
-    const stmtAllocCursorAdvance = db.prepare(`
+    const stmtVChunkCursorSet = db.prepare(`
         UPDATE puzzles
         SET alloc_cursor = ?
-        WHERE id = ? AND alloc_cursor = ?
+        WHERE id = ?
     `);
 
-    const stmtAllocBlockAdvance = db.prepare(`
-        UPDATE alloc_blocks SET current_hex = ? WHERE id = ?
+    const stmtBootstrapStageSet = db.prepare(`
+        UPDATE puzzles
+        SET bootstrap_stage = ?
+        WHERE id = ?
     `);
 
-    const stmtAllocBlockDone = db.prepare(`
-        UPDATE alloc_blocks SET current_hex = end_hex, status = 'done' WHERE id = ?
-    `);
-
-    const stmtAllocBlocksCompleted = db.prepare(`
-        SELECT COUNT(*) AS c FROM alloc_blocks WHERE puzzle_id = ? AND status = 'done'
-    `);
-
-    const stmtAllocPuzzleBootstrapDone = db.prepare(`
-        UPDATE puzzles SET bootstrap_done = 1 WHERE id = ?
+    const stmtVChunkAnyOverlap = db.prepare(`
+        SELECT 1
+        FROM chunks
+        WHERE puzzle_id = ?
+          AND is_test = 0
+          AND status IN ('assigned', 'reclaimed', 'completed', 'FOUND')
+          AND vchunk_start IS NOT NULL
+          AND vchunk_end IS NOT NULL
+          AND vchunk_start < ?
+          AND vchunk_end > ?
+        LIMIT 1
     `);
 
     const stmtInsertChunk = db.prepare(`
         INSERT INTO chunks (
-            puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test, sector_id, alloc_block_id
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, ?, ?)
+            puzzle_id, start_hex, end_hex, status,
+            worker_name, assigned_at, is_test,
+            sector_id, alloc_block_id,
+            vchunk_start, vchunk_end
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?)
     `);
 
-    // Test chunk statements
-    const stmtTestChunkTaken  = db.prepare(`
+    const stmtTestChunkTaken = db.prepare(`
         SELECT id
         FROM chunks
         WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'assigned'
@@ -374,122 +414,167 @@ function createApp(db) {
                 stmtSectorAdvance.run(endHex, sector.id);
             }
 
-            const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, sector.id, null);
+            const info = db.prepare(`
+                INSERT INTO chunks (
+                    puzzle_id, start_hex, end_hex, status,
+                    worker_name, assigned_at, is_test,
+                    sector_id, alloc_block_id, vchunk_start, vchunk_end
+                ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL)
+            `).run(puzzle.id, startHex, endHex, name, sector.id);
+
             return { chunkId: info.lastInsertRowid, startHex, endHex };
         }
     });
 
-    const assignGlobalBlockChunk = db.transaction((name, hashrate, puzzle) => {
-        const freshChunkCount = stmtChunkCount.get(puzzle.id).cnt;
-        const hashrateBig = normalizeHashrate(hashrate || stmtWorkerHash.get(name)?.hashrate);
-        const requestedChunkSize = hashrateBig * BigInt(TARGET_MINUTES * 60);
+    function rangeIsFree(puzzleId, vchunkStart, vchunkEndExclusive) {
+        if (vchunkStart < 0 || vchunkEndExclusive <= vchunkStart) return false;
+        return !stmtVChunkAnyOverlap.get(puzzleId, vchunkEndExclusive, vchunkStart);
+    }
 
-        // Bootstrap: the very first fresh chunk goes to the physical midpoint block
-        // (block_index = floor(blockCount / 2)), preserving the old allocator's
-        // "known mid-keyspace first" behavior so operators can verify end-to-end
-        // scanning. This block is consumed OUTSIDE the randomized alloc_order sequence:
-        // alloc_cursor stays at 0 after bootstrap. When the normal loop later reaches
-        // the position in alloc_order that maps to this same block, it finds
-        // alloc_blocks.current_hex already advanced and continues from there — no gap,
-        // no overlap. bootstrap_done prevents this path from running again.
-        if (!puzzle.bootstrap_done && freshChunkCount === 0) {
-            const storedBlockCount = puzzle.alloc_block_count ? Number(puzzle.alloc_block_count) : 0;
-            let blockIndex = 0;
-            if (storedBlockCount > 1) {
-                blockIndex = Math.floor(storedBlockCount / 2);
+    function findBeginBootstrapRun(puzzleId, totalChunks, neededChunks) {
+        for (let start = 0; start + neededChunks <= totalChunks; start++) {
+            if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+        }
+        return null;
+    }
+
+    function findEndBootstrapRun(puzzleId, totalChunks, neededChunks) {
+        for (let start = totalChunks - neededChunks; start >= 0; start--) {
+            if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+        }
+        return null;
+    }
+
+    function findMidBootstrapRun(puzzleId, totalChunks, neededChunks) {
+        if (totalChunks <= 0) return null;
+        const anchor = Math.floor(totalChunks / 2);
+
+        const tried = new Set();
+        const candidateStarts = [];
+
+        let preferred = normalizeRunStartForCandidate(anchor, neededChunks, totalChunks);
+        candidateStarts.push(preferred);
+
+        for (let dist = 1; dist < totalChunks; dist++) {
+            const leftAnchor = anchor - dist;
+            const rightAnchor = anchor + dist;
+            if (leftAnchor >= 0) candidateStarts.push(normalizeRunStartForCandidate(leftAnchor, neededChunks, totalChunks));
+            if (rightAnchor < totalChunks) candidateStarts.push(normalizeRunStartForCandidate(rightAnchor, neededChunks, totalChunks));
+        }
+
+        for (const start of candidateStarts) {
+            if (tried.has(start)) continue;
+            tried.add(start);
+            if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+        }
+        return null;
+    }
+
+    function assignVirtualChunkRun(name, puzzle, runStart, runCount) {
+        const runEnd = runStart + runCount;
+        const { startHex, endHex } = virtualChunkRangeToHex(puzzle, runStart, runEnd);
+        const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, runStart, runEnd);
+        return { chunkId: info.lastInsertRowid, startHex, endHex, vchunkStart: runStart, vchunkEnd: runEnd };
+    }
+
+    const assignVirtualChunkJob = db.transaction((name, workHints, puzzle) => {
+        const currentPuzzle = stmtVChunkPuzzle.get(puzzle.id);
+        if (!currentPuzzle) return null;
+
+        const totalChunks = Number(currentPuzzle.virtual_chunk_count || 0);
+        if (totalChunks <= 0) return null;
+
+        const hashrateBig = normalizeHashrate(workHints.hashrate || stmtWorkerHash.get(name)?.hashrate);
+        const minChunkKeys = parsePositiveBigInt(workHints.min_chunk_keys, null);
+        const chunkQuantumKeys = parsePositiveBigInt(workHints.chunk_quantum_keys, 1n);
+        const requestedKeys = computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKeys });
+
+        if (!currentPuzzle.virtual_chunk_size_keys) return null;
+        const vchunkSize = BigInt(currentPuzzle.virtual_chunk_size_keys);
+        let neededChunks = Number(ceilDiv(requestedKeys, vchunkSize));
+        if (neededChunks < 1) neededChunks = 1;
+        if (neededChunks > totalChunks) neededChunks = totalChunks;
+
+        const freshChunkCount = stmtChunkCount.get(currentPuzzle.id).cnt;
+        const stage = Number(currentPuzzle.bootstrap_stage || 0);
+
+        // Mandatory 3-step bootstrap for first three fresh jobs only.
+        if (freshChunkCount < 3 && stage < 3) {
+            let runStart = null;
+            if (stage === 0) {
+                runStart = findMidBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
+            } else if (stage === 1) {
+                runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
+            } else if (stage === 2) {
+                runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
             }
 
-            const bootstrapBlock = db.prepare(`
-                SELECT id, block_index, start_hex, end_hex, current_hex, status
-                FROM alloc_blocks
-                WHERE puzzle_id = ? AND block_index = ?
-                LIMIT 1
-            `).get(puzzle.id, blockIndex);
+            if (runStart !== null) {
+                const result = assignVirtualChunkRun(name, currentPuzzle, runStart, neededChunks);
+                stmtBootstrapStageSet.run(stage + 1, currentPuzzle.id);
+                return result;
+            }
 
-            if (bootstrapBlock) {
-                const current = BigInt('0x' + bootstrapBlock.current_hex);
-                const blockEnd = BigInt('0x' + bootstrapBlock.end_hex);
-                const effective = bigIntMin(requestedChunkSize, blockEnd - current);
-
-                if (effective > 0n) {
-                    const startHex = current.toString(16).padStart(64, '0');
-                    const endHex = (current + effective).toString(16).padStart(64, '0');
-
-                    if (current + effective >= blockEnd) {
-                        stmtAllocBlockDone.run(bootstrapBlock.id);
-                    } else {
-                        stmtAllocBlockAdvance.run(endHex, bootstrapBlock.id);
-                    }
-
-                    stmtAllocPuzzleBootstrapDone.run(puzzle.id);
-                    const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, null, bootstrapBlock.id);
-                    return { chunkId: info.lastInsertRowid, startHex, endHex };
+            // If no full bootstrap-sized run fits, try smaller run during bootstrap rather than deadlock.
+            for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
+                if (stage === 0) runStart = findMidBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+                if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+                if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+                if (runStart !== null) {
+                    const result = assignVirtualChunkRun(name, currentPuzzle, runStart, fallback);
+                    stmtBootstrapStageSet.run(stage + 1, currentPuzzle.id);
+                    return result;
                 }
+            }
 
-                // Defensive cleanup if the bootstrap target is already exhausted
-                stmtAllocBlockDone.run(bootstrapBlock.id);
-                stmtAllocPuzzleBootstrapDone.run(puzzle.id);
-            } else {
-                stmtAllocPuzzleBootstrapDone.run(puzzle.id);
+            // Advance bootstrap stage defensively if that region is exhausted.
+            stmtBootstrapStageSet.run(stage + 1, currentPuzzle.id);
+        }
+
+        const rawCursor = Number(currentPuzzle.alloc_cursor || 0);
+        const triedStarts = new Set();
+
+        // Full-size search first
+        for (let offset = 0; offset < totalChunks; offset++) {
+            const orderIndex = (rawCursor + offset) % totalChunks;
+            const row = stmtVChunkOrderAt.get(currentPuzzle.id, orderIndex);
+            if (!row) continue;
+
+            const candidateIndex = Number(row.chunk_index);
+            const runStart = normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks);
+            if (triedStarts.has(runStart)) continue;
+            triedStarts.add(runStart);
+
+            if (rangeIsFree(currentPuzzle.id, runStart, runStart + neededChunks)) {
+                stmtVChunkCursorSet.run((orderIndex + 1) % totalChunks, currentPuzzle.id);
+                const result = assignVirtualChunkRun(name, currentPuzzle, runStart, neededChunks);
+                if (stage < 3) stmtBootstrapStageSet.run(3, currentPuzzle.id);
+                return result;
             }
         }
 
-        const allocPuzzle = stmtAllocPuzzle.get(puzzle.id);
-        if (!allocPuzzle) return null;
+        // Fallback: smaller contiguous run, still discovered via permutation walk.
+        for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
+            triedStarts.clear();
+            for (let offset = 0; offset < totalChunks; offset++) {
+                const orderIndex = (rawCursor + offset) % totalChunks;
+                const row = stmtVChunkOrderAt.get(currentPuzzle.id, orderIndex);
+                if (!row) continue;
 
-        const rawCursor = Number(allocPuzzle.alloc_cursor || 0);
-        const blockCount = Number(allocPuzzle.alloc_block_count || 0);
-        if (blockCount <= 0) return null;
-        if (stmtAllocBlocksCompleted.get(puzzle.id).c >= blockCount) return null;
+                const candidateIndex = Number(row.chunk_index);
+                const runStart = normalizeRunStartForCandidate(candidateIndex, fallback, totalChunks);
+                if (triedStarts.has(runStart)) continue;
+                triedStarts.add(runStart);
 
-        let cursor = rawCursor % blockCount;
-        let attempts = 0;
-
-        while (attempts < blockCount) {
-            const slot = stmtAllocOrderAt.get(puzzle.id, cursor);
-            const nextCursor = (cursor + 1) % blockCount;
-
-            if (!slot) {
-                // Broken order row — skip it defensively and keep rotating.
-                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
-                cursor = nextCursor;
-                attempts++;
-                continue;
+                if (rangeIsFree(currentPuzzle.id, runStart, runStart + fallback)) {
+                    stmtVChunkCursorSet.run((orderIndex + 1) % totalChunks, currentPuzzle.id);
+                    const result = assignVirtualChunkRun(name, currentPuzzle, runStart, fallback);
+                    if (stage < 3) stmtBootstrapStageSet.run(3, currentPuzzle.id);
+                    return result;
+                }
             }
-
-            if (slot.status === 'done') {
-                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
-                cursor = nextCursor;
-                attempts++;
-                continue;
-            }
-
-            const current = BigInt('0x' + slot.current_hex);
-            const blockEnd = BigInt('0x' + slot.end_hex);
-            const effective = bigIntMin(requestedChunkSize, blockEnd - current);
-
-            if (effective <= 0n) {
-                stmtAllocBlockDone.run(slot.alloc_block_id);
-                stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
-                cursor = nextCursor;
-                attempts++;
-                continue;
-            }
-
-            const startHex = current.toString(16).padStart(64, '0');
-            const endHex   = (current + effective).toString(16).padStart(64, '0');
-
-            if (current + effective >= blockEnd) {
-                stmtAllocBlockDone.run(slot.alloc_block_id);
-            } else {
-                stmtAllocBlockAdvance.run(endHex, slot.alloc_block_id);
-            }
-
-            stmtAllocCursorAdvance.run(nextCursor, puzzle.id, rawCursor);
-            stmtAllocPuzzleBootstrapDone.run(puzzle.id);
-            const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, null, slot.alloc_block_id);
-            return { chunkId: info.lastInsertRowid, startHex, endHex };
         }
+
         return null;
     });
 
@@ -520,10 +605,12 @@ function createApp(db) {
     // --- API Endpoints ---
 
     app.post('/api/v1/work', (req, res) => {
-        const { name, hashrate, version } = req.body;
+        const { name, hashrate, version, min_chunk_keys, chunk_quantum_keys } = req.body;
         if (!name) return res.status(400).json({ error: 'Missing name' });
 
         const hashrateNum = Number(normalizeHashrate(hashrate));
+        const minChunkKeys = parsePositiveBigInt(min_chunk_keys, null);
+        const chunkQuantumKeys = parsePositiveBigInt(chunk_quantum_keys, null);
 
         const prevWorker = db.prepare(
             `SELECT CASE WHEN last_seen < datetime('now', '-${REACTIVATE_MINUTES} minutes') THEN 1 ELSE 0 END AS inactive FROM workers WHERE name = ?`
@@ -539,13 +626,21 @@ function createApp(db) {
         }
 
         db.prepare(`
-            INSERT INTO workers (name, hashrate, last_seen, version)
-            VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+            INSERT INTO workers (name, hashrate, last_seen, version, min_chunk_keys, chunk_quantum_keys)
+            VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE
             SET hashrate = excluded.hashrate,
                 last_seen = CURRENT_TIMESTAMP,
-                version = COALESCE(excluded.version, workers.version)
-        `).run(name, hashrateNum, version || null);
+                version = COALESCE(excluded.version, workers.version),
+                min_chunk_keys = COALESCE(excluded.min_chunk_keys, workers.min_chunk_keys),
+                chunk_quantum_keys = COALESCE(excluded.chunk_quantum_keys, workers.chunk_quantum_keys)
+        `).run(
+            name,
+            hashrateNum,
+            version || null,
+            minChunkKeys ? minChunkKeys.toString() : null,
+            chunkQuantumKeys ? chunkQuantumKeys.toString() : null
+        );
 
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
         if (!puzzle) return res.status(503).json({ error: 'No active puzzle configured' });
@@ -571,7 +666,8 @@ function createApp(db) {
         }
 
         const reclaimed = isReactivating ? null : db.prepare(`
-            UPDATE chunks SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+            UPDATE chunks
+            SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
             WHERE id = (
                 SELECT id
                 FROM chunks
@@ -591,8 +687,12 @@ function createApp(db) {
             let result = null;
             const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
 
-            if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                result = assignGlobalBlockChunk.immediate(name, hashrate, puzzle);
+            if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                result = assignVirtualChunkJob.immediate(name, {
+                    hashrate,
+                    min_chunk_keys,
+                    chunk_quantum_keys
+                }, puzzle);
             } else {
                 result = assignLegacyRandomChunk.immediate(name, hashrate, puzzle);
             }
@@ -771,7 +871,7 @@ function createApp(db) {
         const pid = puzzle ? puzzle.id : null;
 
         const visibleWorkers = pid ? db.prepare(`
-            SELECT w.name, w.hashrate, w.last_seen, w.version,
+            SELECT w.name, w.hashrate, w.last_seen, w.version, w.min_chunk_keys, w.chunk_quantum_keys,
                    CASE WHEN w.last_seen >= datetime('now', '-${ACTIVE_MINUTES} minutes')
                    THEN 1 ELSE 0 END AS fresh,
                    CASE WHEN EXISTS (
@@ -857,24 +957,15 @@ function createApp(db) {
 
         const finders = pid ? db.prepare(`
             SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-                   CASE WHEN c.alloc_block_id IS NOT NULL THEN c.id
-                        WHEN c.sector_id IS NOT NULL THEN c.id
-                        ELSE NULL
-                   END AS chunk_global,
+                   c.id AS chunk_global,
                    CASE
-                       WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM chunks c2 WHERE c2.alloc_block_id = c.alloc_block_id AND c2.id < c.id)
-                       WHEN c.sector_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM chunks c2 WHERE c2.sector_id = c.sector_id AND c2.id < c.id)
+                       WHEN c.vchunk_start IS NOT NULL THEN c.vchunk_start
                        ELSE NULL
-                   END AS chunk,
+                   END AS vchunk_start,
                    CASE
-                       WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT ab.block_index FROM alloc_blocks ab WHERE ab.id = c.alloc_block_id)
-                       WHEN c.sector_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
+                       WHEN c.vchunk_end IS NOT NULL THEN c.vchunk_end
                        ELSE NULL
-                   END AS shard
+                   END AS vchunk_end
             FROM findings f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE c.puzzle_id = ? AND c.is_test = 0
@@ -882,32 +973,18 @@ function createApp(db) {
         `).all(pid) : [];
 
         const assignedNow = puzzle ? db.prepare(`
-            SELECT c.id, c.worker_name,
-                   CASE
-                       WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT ab.block_index FROM alloc_blocks ab WHERE ab.id = c.alloc_block_id)
-                       WHEN c.sector_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM sectors s2 WHERE s2.puzzle_id = c.puzzle_id AND s2.id < c.sector_id)
-                       ELSE NULL
-                   END AS unit_num,
-                   CASE
-                       WHEN c.alloc_block_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM chunks c2 WHERE c2.alloc_block_id = c.alloc_block_id AND c2.id < c.id)
-                       WHEN c.sector_id IS NOT NULL THEN
-                           (SELECT COUNT(*) FROM chunks c2 WHERE c2.sector_id = c.sector_id AND c2.id < c.id)
-                       ELSE NULL
-                   END AS chunk_in_shard
+            SELECT c.id, c.worker_name, c.vchunk_start, c.vchunk_end
             FROM chunks c
             WHERE c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
         `).all(puzzle.id) : [];
 
         const workerChunkMap = {};
-        const workerShardMap = {};
-        const workerChunkInShardMap = {};
+        const workerRunMap = {};
         for (const c of assignedNow) {
             workerChunkMap[c.worker_name] = c.id;
-            workerShardMap[c.worker_name] = c.unit_num;
-            workerChunkInShardMap[c.worker_name] = c.chunk_in_shard;
+            workerRunMap[c.worker_name] = (c.vchunk_start !== null && c.vchunk_end !== null)
+                ? `${c.vchunk_start}..${c.vchunk_end - 1}`
+                : null;
         }
 
         const workers = visibleWorkers.map(w => ({
@@ -916,8 +993,7 @@ function createApp(db) {
             assigned_here: w.assigned_here === 1,
             active: w.active === 1,
             current_chunk: workerChunkMap[w.name] ?? null,
-            current_shard: workerShardMap[w.name] ?? null,
-            current_chunk_in_shard: workerChunkInShardMap[w.name] ?? null,
+            current_vchunk_run: workerRunMap[w.name] ?? null,
         }));
 
         let chunks_vis = [];
@@ -939,50 +1015,55 @@ function createApp(db) {
                 return {
                     id: c.id,
                     st: c.status,
-                    w: c.worker_name,
-                    s: Number(cs * 1000000n / pRange) / 1000000,
-                    e: Number(ce * 1000000n / pRange) / 1000000,
+                    w:  c.worker_name,
+                    s:  Number(cs * 1000000n / pRange) / 1000000,
+                    e:  Number(ce * 1000000n / pRange) / 1000000,
                 };
             });
         }
 
         const allPuzzles = db.prepare("SELECT id, name, active FROM puzzles ORDER BY id ASC").all();
 
-        const shardsTotal = pid
+        const virtualChunksTotal = pid
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
-                if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                    return puzzle.alloc_block_count || 0;
-                }
+                if (strategy === ALLOC_STRATEGY_VCHUNKS) return puzzle.virtual_chunk_count || 0;
                 return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(pid).c;
             })()
             : 0;
 
-        const shardsCompleted = pid
+        const virtualChunksStarted = pid
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
-                if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                    return stmtAllocBlocksCompleted.get(pid).c;
-                }
-                return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ? AND status = 'done'").get(pid).c;
-            })()
-            : 0;
-
-        const shardsStarted = pid
-            ? (() => {
-                const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
-                if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                    return db.prepare(`
-                        SELECT COUNT(DISTINCT alloc_block_id) AS c
+                if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                    const row = db.prepare(`
+                        SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) AS c
                         FROM chunks
-                        WHERE puzzle_id = ? AND is_test = 0 AND alloc_block_id IS NOT NULL
-                    `).get(pid).c;
+                        WHERE puzzle_id = ? AND is_test = 0 AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                    `).get(pid);
+                    return row.c || 0;
                 }
                 return db.prepare(`
                     SELECT COUNT(DISTINCT sector_id) AS c
                     FROM chunks
                     WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL
                 `).get(pid).c;
+            })()
+            : 0;
+
+        const virtualChunksCompleted = pid
+            ? (() => {
+                const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
+                if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                    const row = db.prepare(`
+                        SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) AS c
+                        FROM chunks
+                        WHERE puzzle_id = ? AND is_test = 0 AND status IN ('completed', 'FOUND')
+                          AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                    `).get(pid);
+                    return row.c || 0;
+                }
+                return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ? AND status = 'done'").get(pid).c;
             })()
             : 0;
 
@@ -997,14 +1078,13 @@ function createApp(db) {
                 total_keys: (BigInt('0x' + puzzle.end_hex) - BigInt('0x' + puzzle.start_hex)).toString(),
                 test_chunk: puzzle.test_start_hex ? {
                     start_hex: puzzle.test_start_hex,
-                    end_hex: puzzle.test_end_hex,
+                    end_hex:   puzzle.test_end_hex,
                 } : null,
                 alloc_strategy: puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY,
                 alloc_cursor: puzzle.alloc_cursor || 0,
-                alloc_block_count: puzzle.alloc_block_count || null,
-                alloc_blocks_completed: (puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY) === ALLOC_STRATEGY_GLOBAL
-                    ? stmtAllocBlocksCompleted.get(puzzle.id).c
-                    : null,
+                virtual_chunk_size_keys: puzzle.virtual_chunk_size_keys || null,
+                virtual_chunk_count: puzzle.virtual_chunk_count || null,
+                bootstrap_stage: puzzle.bootstrap_stage || 0,
             } : null,
             active_workers_count: visibleWorkers.filter(w => w.active).length,
             inactive_workers_count: visibleWorkers.filter(w => !w.active).length,
@@ -1012,7 +1092,17 @@ function createApp(db) {
             completed_chunks: completedChunks,
             reclaimed_chunks: reclaimedChunks,
             total_keys_completed: totalKeysCompleted.toString(),
-            shards: { total: shardsTotal, started: shardsStarted, completed: shardsCompleted },
+            virtual_chunks: {
+                total: virtualChunksTotal,
+                started: virtualChunksStarted,
+                completed: virtualChunksCompleted,
+            },
+            // Backward-compatible alias for the old dashboard
+            shards: {
+                total: virtualChunksTotal,
+                started: virtualChunksStarted,
+                completed: virtualChunksCompleted,
+            },
             workers,
             scores,
             finders,
@@ -1041,7 +1131,14 @@ function createApp(db) {
     });
 
     app.post('/api/v1/admin/set-puzzle', (req, res) => {
-        const { name, start_hex, end_hex, alloc_strategy, alloc_seed, alloc_block_size_keys } = req.body;
+        const {
+            name,
+            start_hex,
+            end_hex,
+            alloc_strategy,
+            alloc_seed,
+            virtual_chunk_size_keys
+        } = req.body;
 
         if (!name || !start_hex || !end_hex) {
             return res.status(400).json({ error: 'Missing name, start_hex, or end_hex' });
@@ -1051,8 +1148,8 @@ function createApp(db) {
         }
 
         const strategy = alloc_strategy || DEFAULT_ALLOC_STRATEGY;
-        if (strategy !== ALLOC_STRATEGY_LEGACY && strategy !== ALLOC_STRATEGY_GLOBAL) {
-            return res.status(400).json({ error: `alloc_strategy must be ${ALLOC_STRATEGY_LEGACY} or ${ALLOC_STRATEGY_GLOBAL}` });
+        if (strategy !== ALLOC_STRATEGY_LEGACY && strategy !== ALLOC_STRATEGY_VCHUNKS) {
+            return res.status(400).json({ error: `alloc_strategy must be ${ALLOC_STRATEGY_LEGACY} or ${ALLOC_STRATEGY_VCHUNKS}` });
         }
 
         const startNorm = start_hex.replace(/^0x/i, '').padStart(64, '0').toLowerCase();
@@ -1063,16 +1160,12 @@ function createApp(db) {
         }
 
         const puzzleRange = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
-        let blockSize;
-        if (alloc_block_size_keys !== undefined && alloc_block_size_keys !== null && String(alloc_block_size_keys) !== '') {
-            try {
-                blockSize = BigInt(String(alloc_block_size_keys));
-                if (blockSize <= 0n) throw new Error('bad');
-            } catch (_) {
-                return res.status(400).json({ error: 'alloc_block_size_keys must be a positive integer string' });
-            }
-        } else {
-            blockSize = chooseDefaultAllocBlockSize(puzzleRange);
+
+        let vchunkSize = null;
+        if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+            const parsed = parsePositiveBigInt(virtual_chunk_size_keys, null);
+            vchunkSize = parsed ? bigIntMin(parsed, puzzleRange) : chooseDefaultVirtualChunkSize(puzzleRange);
+            validateVirtualChunkCountOrThrow(ceilDiv(puzzleRange, vchunkSize), 'set-puzzle');
         }
 
         db.transaction(() => {
@@ -1081,18 +1174,17 @@ function createApp(db) {
             const existing = db.prepare("SELECT * FROM puzzles WHERE name = ?").get(name);
             let puzzleId;
 
-            const seed = alloc_seed || defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm });
-            const seedMatches = !existing || existing.alloc_seed === seed;
-            const blockSizeMatches = !existing || !existing.alloc_block_size_keys ||
-                existing.alloc_block_size_keys === blockSize.toString();
+            const seed = alloc_seed || defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm }, strategy);
+            const sameSeed = !existing || existing.alloc_seed === seed;
+            const sameVChunkSize = !existing || !existing.virtual_chunk_size_keys || existing.virtual_chunk_size_keys === (vchunkSize ? vchunkSize.toString() : null);
 
             if (
                 existing &&
                 existing.start_hex === startNorm &&
                 existing.end_hex === endNorm &&
                 (existing.alloc_strategy || ALLOC_STRATEGY_LEGACY) === strategy &&
-                seedMatches &&
-                blockSizeMatches
+                sameSeed &&
+                sameVChunkSize
             ) {
                 db.prepare("UPDATE puzzles SET active = 1 WHERE id = ?").run(existing.id);
                 puzzleId = existing.id;
@@ -1101,7 +1193,8 @@ function createApp(db) {
                 const info = db.prepare(`
                     INSERT INTO puzzles (
                         name, start_hex, end_hex, active,
-                        alloc_strategy, alloc_seed, alloc_cursor, alloc_block_size_keys, alloc_block_count, bootstrap_done
+                        alloc_strategy, alloc_seed, alloc_cursor,
+                        virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
                     )
                     VALUES (?, ?, ?, 1, ?, ?, 0, ?, NULL, 0)
                 `).run(
@@ -1110,13 +1203,13 @@ function createApp(db) {
                     endNorm,
                     strategy,
                     seed,
-                    strategy === ALLOC_STRATEGY_GLOBAL ? blockSize.toString() : null
+                    vchunkSize ? vchunkSize.toString() : null
                 );
 
                 puzzleId = info.lastInsertRowid;
 
-                if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                    seedGlobalBlocks(db, puzzleId, startNorm, endNorm, seed, blockSize);
+                if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                    seedVirtualChunks(db, puzzleId, startNorm, endNorm, seed, vchunkSize);
                 } else {
                     seedSectors(db, puzzleId, startNorm, endNorm);
                 }
@@ -1127,8 +1220,6 @@ function createApp(db) {
         console.log(`[Admin] Active puzzle set to: ${puzzle.name} [${puzzle.start_hex} .. ${puzzle.end_hex}] strategy=${puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY}`);
         res.json({ ok: true, puzzle });
     });
-
-    const GPU_BATCH_KEYS = 4278190080n;
 
     app.post('/api/v1/admin/set-test-chunk', (req, res) => {
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE active = 1 LIMIT 1").get();
@@ -1198,8 +1289,9 @@ function createApp(db) {
 
     app.get('/api/v1/admin/puzzles', (req, res) => {
         const puzzles = db.prepare(`
-            SELECT id, name, active, start_hex, end_hex, alloc_strategy, alloc_seed,
-                   alloc_cursor, alloc_block_size_keys, alloc_block_count, bootstrap_done
+            SELECT id, name, active, start_hex, end_hex,
+                   alloc_strategy, alloc_seed, alloc_cursor,
+                   virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
             FROM puzzles
             ORDER BY id ASC
         `).all();
@@ -1270,47 +1362,38 @@ if (require.main === module) {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key);
 
-      CREATE TABLE IF NOT EXISTS alloc_blocks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        puzzle_id INTEGER NOT NULL,
-        block_index INTEGER NOT NULL,
-        start_hex TEXT NOT NULL,
-        end_hex TEXT NOT NULL,
-        current_hex TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'open'
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_blocks_unique ON alloc_blocks (puzzle_id, block_index);
-      CREATE INDEX IF NOT EXISTS idx_alloc_blocks_puzzle_status ON alloc_blocks (puzzle_id, status);
-      CREATE INDEX IF NOT EXISTS idx_alloc_blocks_puzzle_id ON alloc_blocks (puzzle_id, id);
-
-      CREATE TABLE IF NOT EXISTS alloc_order (
+      CREATE TABLE IF NOT EXISTS alloc_order_vchunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         puzzle_id INTEGER NOT NULL,
         order_index INTEGER NOT NULL,
-        block_index INTEGER NOT NULL
+        chunk_index INTEGER NOT NULL
       );
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_unique_order ON alloc_order (puzzle_id, order_index);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_unique_block ON alloc_order (puzzle_id, block_index);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_vchunks_order ON alloc_order_vchunks (puzzle_id, order_index);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_vchunks_chunk ON alloc_order_vchunks (puzzle_id, chunk_index);
     `);
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex TEXT").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks ADD COLUMN sector_id INTEGER").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE workers ADD COLUMN version TEXT").run(); } catch (_) {}
-
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_strategy TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_seed TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_cursor INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_block_size_keys TEXT").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_block_count INTEGER").run(); } catch (_) {}
-    try { db.prepare("ALTER TABLE puzzles ADD COLUMN bootstrap_done INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_size_keys TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_count INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN bootstrap_stage INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+
+    try { db.prepare("ALTER TABLE workers ADD COLUMN version TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE workers ADD COLUMN min_chunk_keys TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE workers ADD COLUMN chunk_quantum_keys TEXT").run(); } catch (_) {}
+
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
+    try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)").run(); } catch (_) {}
 
     try {
         db.prepare(`
@@ -1335,6 +1418,7 @@ if (require.main === module) {
         `).run(ALLOC_STRATEGY_LEGACY);
     } catch (_) {}
 
+    // Seed from KEYSPACE_<NAME>=<start_hex>:<end_hex>
     for (const [key, value] of Object.entries(process.env)) {
         if (!key.startsWith('KEYSPACE_')) continue;
 
@@ -1357,14 +1441,19 @@ if (require.main === module) {
         const existing = db.prepare("SELECT id FROM puzzles WHERE name = ?").get(name);
         if (!existing) {
             const strategy = DEFAULT_ALLOC_STRATEGY;
-            const seed = defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm });
-            const ksRange = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
-            const ksBlockSize = strategy === ALLOC_STRATEGY_GLOBAL ? chooseDefaultAllocBlockSize(ksRange) : null;
+            const seed = defaultAllocSeedForPuzzle({ name, start_hex: startNorm, end_hex: endNorm }, strategy);
+
+            let virtualChunkSize = null;
+            if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                const range = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
+                virtualChunkSize = chooseDefaultVirtualChunkSize(range);
+            }
 
             const info = db.prepare(`
                 INSERT INTO puzzles (
                     name, start_hex, end_hex, active,
-                    alloc_strategy, alloc_seed, alloc_cursor, alloc_block_size_keys, alloc_block_count, bootstrap_done
+                    alloc_strategy, alloc_seed, alloc_cursor,
+                    virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
                 )
                 VALUES (?, ?, ?, 0, ?, ?, 0, ?, NULL, 0)
             `).run(
@@ -1373,12 +1462,12 @@ if (require.main === module) {
                 endNorm,
                 strategy,
                 seed,
-                ksBlockSize ? ksBlockSize.toString() : null
+                virtualChunkSize ? virtualChunkSize.toString() : null
             );
 
             console.log(`[Config] Seeded keyspace: ${name}`);
-            if (strategy === ALLOC_STRATEGY_GLOBAL) {
-                seedGlobalBlocks(db, info.lastInsertRowid, startNorm, endNorm, seed, ksBlockSize);
+            if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                seedVirtualChunks(db, info.lastInsertRowid, startNorm, endNorm, seed, virtualChunkSize);
             } else {
                 seedSectors(db, info.lastInsertRowid, startNorm, endNorm);
             }
@@ -1391,14 +1480,19 @@ if (require.main === module) {
         const endHex   = '07fffffffffffffffff'.padStart(64, '0');
         const name = 'Puzzle #71';
         const strategy = DEFAULT_ALLOC_STRATEGY;
-        const seed = defaultAllocSeedForPuzzle({ name, start_hex: startHex, end_hex: endHex });
-        const p71Range = BigInt('0x' + endHex) - BigInt('0x' + startHex);
-        const p71BlockSize = strategy === ALLOC_STRATEGY_GLOBAL ? chooseDefaultAllocBlockSize(p71Range) : null;
+        const seed = defaultAllocSeedForPuzzle({ name, start_hex: startHex, end_hex: endHex }, strategy);
+
+        let virtualChunkSize = null;
+        if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+            const range = BigInt('0x' + endHex) - BigInt('0x' + startHex);
+            virtualChunkSize = chooseDefaultVirtualChunkSize(range);
+        }
 
         const info = db.prepare(`
             INSERT INTO puzzles (
                 name, start_hex, end_hex, active,
-                alloc_strategy, alloc_seed, alloc_cursor, alloc_block_size_keys, alloc_block_count, bootstrap_done
+                alloc_strategy, alloc_seed, alloc_cursor,
+                virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
             )
             VALUES (?, ?, ?, 1, ?, ?, 0, ?, NULL, 0)
         `).run(
@@ -1407,12 +1501,12 @@ if (require.main === module) {
             endHex,
             strategy,
             seed,
-            p71BlockSize ? p71BlockSize.toString() : null
+            virtualChunkSize ? virtualChunkSize.toString() : null
         );
 
         console.log('[Init] Seeded Puzzle #71 as active puzzle.');
-        if (strategy === ALLOC_STRATEGY_GLOBAL) {
-            seedGlobalBlocks(db, info.lastInsertRowid, startHex, endHex, seed, p71BlockSize);
+        if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+            seedVirtualChunks(db, info.lastInsertRowid, startHex, endHex, seed, virtualChunkSize);
         } else {
             seedSectors(db, info.lastInsertRowid, startHex, endHex);
         }
@@ -1465,14 +1559,14 @@ module.exports = {
     randomBigIntInRange,
     normalizeHashrate,
     seedSectors,
-    seedGlobalBlocks,
+    seedVirtualChunks,
     buildDeterministicPermutation,
     defaultAllocSeedForPuzzle,
-    chooseDefaultAllocBlockSize,
+    chooseDefaultVirtualChunkSize,
     ACTIVE_MINUTES,
     REACTIVATE_MINUTES,
     ALLOC_STRATEGY_LEGACY,
-    ALLOC_STRATEGY_GLOBAL,
-    DEFAULT_TARGET_BLOCKS,
-    MAX_PRECOMPUTED_BLOCKS,
+    ALLOC_STRATEGY_VCHUNKS,
+    DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS,
+    MAX_PRECOMPUTED_VCHUNKS,
 };

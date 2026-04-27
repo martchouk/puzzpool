@@ -665,7 +665,7 @@
             <div class="frontier-label" id="puzzle-name">Active Puzzle</div>
             <div id="frontier" class="frontier-value">Loading...</div>
             <div id="puzzle-total-keys" class="stat-subtext"></div>
-            <div id="puzzle-shards" class="stat-subtext"></div>
+            <div id="puzzle-vchunks" class="stat-subtext"></div>
             <div id="puzzle-alloc" class="stat-subtext"></div>
             <div id="puzzle-eta" class="stat-subtext"></div>
         </div>
@@ -695,7 +695,7 @@
         <div class="section-title">Visible Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th id="worker-unit-th">Shard</th><th>Last Seen</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Version</th><th>Speed</th><th>Chunk</th><th>Virtual Chunk Run</th><th>Last Seen</th></tr></thead>
                 <tbody id="worker-list"></tbody>
             </table>
         </div>
@@ -711,7 +711,7 @@
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">
             <table>
-                <thead><tr><th>Worker</th><th>Address</th><th id="finder-unit-th">Shard</th><th>Chunk</th><th>Job ID</th><th>Datetime</th></tr></thead>
+                <thead><tr><th>Worker</th><th>Address</th><th>Virtual Chunk Start</th><th>Virtual Chunk End</th><th>Job ID</th><th>Datetime</th></tr></thead>
                 <tbody id="finder-list"></tbody>
             </table>
         </div>
@@ -724,26 +724,29 @@
         </div>
 
         <div class="section-title">API Reference</div>
+
         <div class="api-block">
             <div class="api-header"><span class="method method-post">POST</span><span class="api-path">/api/v1/work</span><span class="api-desc">Request a chunk of keyspace to scan</span></div>
             <div class="api-body">
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request">{
-  "name":     "rig-01",   <span class="comment">// worker id (any unique string)</span>
-  "hashrate": 5000000,    <span class="comment">// keys/s, used to size the chunk</span>
-  "version":  "1.2.1"     <span class="comment">// optional; displayed in Visible Workers table</span>
+  "name":              "rig-01",      <span class="comment">// worker id (any unique string)</span>
+  "hashrate":          5000000,       <span class="comment">// keys/s, used to size the job</span>
+  "version":           "1.2.9",       <span class="comment">// optional; shown on dashboard</span>
+  "min_chunk_keys":    "30000000",    <span class="comment">// optional; minimum desired job size</span>
+  "chunk_quantum_keys":"1048576"      <span class="comment">// optional; round job size up to this quantum</span>
 }</pre>
                 </div>
                 <div class="api-panel">
                     <div class="api-panel-label">Response</div>
                     <pre>{
   "job_id":    42,         <span class="comment">// echo back in submit / heartbeat</span>
-  "start_key": "0x...00", <span class="comment">// inclusive range start (hex)</span>
-  "end_key":   "0x...1c"  <span class="comment">// exclusive range end   (hex)</span>
+  "start_key": "0x...00",  <span class="comment">// inclusive range start</span>
+  "end_key":   "0x...1c"   <span class="comment">// exclusive range end</span>
 }
 <span class="comment">// scan [start_key, end_key)</span>
-<span class="comment">// If the worker already has an assigned chunk in the currently active puzzle,</span>
+<span class="comment">// If the worker already has an assigned job in the active puzzle,</span>
 <span class="comment">// the same job is returned.</span></pre>
                 </div>
             </div>
@@ -755,20 +758,19 @@
                 <div class="api-panel">
                     <div class="api-panel-label">Request</div>
                     <pre class="request"><span class="comment">// Chunk completed normally:</span>
-{ 
-  "name": "rig-01", 
-  "job_id": 42, 
-  "status": "done", 
-  "keys_scanned": 300000000 
+{
+  "name": "rig-01",
+  "job_id": 42,
+  "status": "done",
+  "keys_scanned": 300000000
 }
-<span class="comment">// keys_scanned required. If &lt; chunk size: chunk is reclaimed.
-// Values &gt;= chunk size accepted (clients may overshoot due to batch granularity).</span>
+<span class="comment">// If keys_scanned &lt; expected job size: chunk becomes reclaimed.</span>
 
 <span class="comment">// Key found:</span>
 {
-  "name":     "rig-01",
-  "job_id":   42,
-  "status":   "FOUND",
+  "name": "rig-01",
+  "job_id": 42,
+  "status": "FOUND",
   "findings": [
     { "found_key": "0x...", "found_address": "bc1..." }
   ]
@@ -859,6 +861,12 @@
                 hour: '2-digit', minute: '2-digit', second: '2-digit',
                 hour12: false
             });
+        }
+
+        function formatRun(start, endExclusive) {
+            if (start == null || endExclusive == null) return '—';
+            const endInclusive = Number(endExclusive) - 1;
+            return `${start}..${endInclusive}`;
         }
 
         let _stageSet = false;
@@ -1239,28 +1247,22 @@
         });
         resizeObserver.observe(document.querySelector('.container'));
 
-        function allocatorLabel(strategy) {
-            if (strategy === 'random_global_blocks_v1') return 'Blocks';
-            return 'Shards';
-        }
-
-        function unitLabel(strategy) {
-            if (strategy === 'random_global_blocks_v1') return 'Block';
-            return 'Shard';
-        }
-
         function allocatorFriendlyName(strategy) {
-            if (strategy === 'random_global_blocks_v1') return 'Global random blocks';
+            if (strategy === 'virtual_random_chunks_v1') return 'Virtual random chunks';
             if (strategy === 'legacy_random_shards_v1') return 'Legacy random shards';
-            return strategy;
+            return strategy || 'Unknown';
         }
 
         function allocatorDiagnosticsHtml(puzzle) {
-            if (!puzzle || puzzle.alloc_strategy !== 'random_global_blocks_v1') return '';
-            const cursor = puzzle.alloc_cursor ?? '—';
-            const total = puzzle.alloc_block_count ?? '—';
-            const done = puzzle.alloc_blocks_completed ?? '—';
-            return `Allocator: <span style="color:var(--accent-cyan)">${allocatorFriendlyName(puzzle.alloc_strategy)}</span> · cursor: <span style="color:var(--accent-amber)">${cursor}</span> · blocks: <span style="color:var(--accent-cyan)">${total}</span> · done: <span style="color:var(--accent-green)">${done}</span>`;
+            if (!puzzle) return '';
+            if (puzzle.alloc_strategy === 'virtual_random_chunks_v1') {
+                const cursor = puzzle.alloc_cursor ?? '—';
+                const total = puzzle.virtual_chunk_count ?? '—';
+                const size = puzzle.virtual_chunk_size_keys ? formatBigInt(puzzle.virtual_chunk_size_keys) : '—';
+                const stage = puzzle.bootstrap_stage ?? '—';
+                return `Allocator: <span style="color:var(--accent-cyan)">${allocatorFriendlyName(puzzle.alloc_strategy)}</span> · cursor: <span style="color:var(--accent-amber)">${cursor}</span> · virtual chunks: <span style="color:var(--accent-cyan)">${total}</span> · size: <span style="color:var(--accent-cyan)">${size}</span> · bootstrap stage: <span style="color:var(--accent-green)">${stage}</span>`;
+            }
+            return `Allocator: <span style="color:var(--accent-cyan)">${allocatorFriendlyName(puzzle.alloc_strategy)}</span>`;
         }
 
         async function updateDashboard() {
@@ -1308,21 +1310,20 @@
                     document.getElementById('puzzle-total-keys').innerHTML =
                         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
 
-                    const unit = allocatorLabel(data.puzzle.alloc_strategy);
-                    const uLabel = unitLabel(data.puzzle.alloc_strategy);
-                    document.getElementById('worker-unit-th').textContent = uLabel;
-                    document.getElementById('finder-unit-th').textContent = uLabel;
-                    if (data.shards && data.shards.total > 0) {
-                        document.getElementById('puzzle-shards').innerHTML =
-                            `${unit} total: ${a(data.shards.total.toLocaleString())} · started: ${c(data.shards.started.toLocaleString())} · completed: ${g(data.shards.completed.toLocaleString())}`;
+                    const vchunks = data.virtual_chunks || data.shards || { total: 0, started: 0, completed: 0 };
+                    if (vchunks.total > 0) {
+                        document.getElementById('puzzle-vchunks').innerHTML =
+                            `Virtual chunks total: ${a(vchunks.total.toLocaleString())} · started: ${c(vchunks.started.toLocaleString())} · completed: ${g(vchunks.completed.toLocaleString())}`;
                     } else {
-                        document.getElementById('puzzle-shards').textContent = '';
+                        document.getElementById('puzzle-vchunks').textContent = '';
                     }
 
                     document.getElementById('puzzle-alloc').innerHTML = allocatorDiagnosticsHtml(data.puzzle);
                     document.getElementById('puzzle-eta').innerHTML = `ETA: ${a(eta)}`;
                 } else {
+                    document.getElementById('puzzle-vchunks').textContent = '';
                     document.getElementById('puzzle-alloc').textContent = '';
+                    document.getElementById('puzzle-eta').textContent = '';
                 }
 
                 g_chunks_vis = data.chunks_vis || [];
@@ -1343,7 +1344,7 @@
                             <td class="td-mono">${w.version || 'unknown'}</td>
                             <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                             <td class="td-chunks">${w.current_chunk ? '#'+w.current_chunk : '—'}</td>
-                            <td class="td-chunks">${w.current_shard != null ? (w.current_chunk_in_shard != null ? `${w.current_shard}/${w.current_chunk_in_shard}` : w.current_shard) : '—'}</td>
+                            <td class="td-chunks">${w.current_vchunk_run || '—'}</td>
                             <td class="td-time">${fmtUtc(w.last_seen)}</td>
                         </tr>`;
                     }).join('');
@@ -1368,8 +1369,8 @@
                     ftbody.innerHTML = data.finders.map(f => `<tr>
                         <td class="td-finder">${f.worker_name}</td>
                         <td class="td-addr">${f.found_address || 'Unknown'}</td>
-                        <td class="td-key">${f.shard ?? '—'}</td>
-                        <td class="td-key">${f.chunk ?? '—'}</td>
+                        <td class="td-key">${f.vchunk_start ?? '—'}</td>
+                        <td class="td-key">${f.vchunk_end != null ? (Number(f.vchunk_end) - 1) : '—'}</td>
                         <td class="td-key">${f.chunk_global != null ? '#'+f.chunk_global : '—'}</td>
                         <td class="td-time">${fmtUtc(f.created_at)}</td>
                     </tr>`).join('');
