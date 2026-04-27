@@ -15,7 +15,7 @@ Request the next keyspace chunk to scan.
 
 **Request**
 ```json
-{ "name": "worker-hostname", "hashrate": 8000000, "version": "1.2.1" }
+{ "name": "worker-hostname", "hashrate": 8000000, "version": "1.2.1", "min_chunk_keys": "17045651456", "chunk_quantum_keys": "4261412864" }
 ```
 
 | Field | Type | Required | Description |
@@ -23,6 +23,15 @@ Request the next keyspace chunk to scan.
 | `name` | string | yes | Unique worker identifier (hostname recommended) |
 | `hashrate` | number | no | Current scan speed in keys/s. Used to size chunks. Defaults to last known hashrate or 1,000,000. |
 | `version` | string | no | Client version string (e.g. from `APP_VERSION`). Displayed in the Active Workers dashboard. |
+| `min_chunk_keys` | string | no | Minimum efficient job size for this worker. Prevents pathologically small jobs for GPUs. Stored as a decimal integer string. |
+| `chunk_quantum_keys` | string | no | Smallest meaningful increment for this worker. The job size is rounded up to a multiple of this value. Stored as a decimal integer string. |
+
+**Job size calculation**
+
+1. `target_keys = hashrate × TARGET_MINUTES × 60`
+2. `requested_keys = max(target_keys, min_chunk_keys)` (if `min_chunk_keys` is provided)
+3. `requested_keys = round_up(requested_keys, chunk_quantum_keys)` (if `chunk_quantum_keys` is provided)
+4. `requested_virtual_chunks = ceil(requested_keys / virtual_chunk_size_keys)`, minimum 1
 
 **Response 200**
 ```json
@@ -131,7 +140,12 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "start_hex": "000...0400000000000000000",
     "end_hex":   "000...07fffffffffffffffff",
     "total_keys": "2361183241434822606848",
-    "test_chunk": null
+    "test_chunk": null,
+    "alloc_strategy": "virtual_random_chunks_v1",
+    "alloc_cursor": 10452,
+    "virtual_chunk_size_keys": "30000000",
+    "virtual_chunk_count": 78706,
+    "bootstrap_stage": 3
   },
   "active_workers_count": 3,
   "inactive_workers_count": 1,
@@ -139,14 +153,19 @@ Dashboard data — polled every 3 seconds by `index.html`.
   "completed_chunks": 187,
   "reclaimed_chunks": 3,
   "total_keys_completed": "12345678901234567890",
+  "virtual_chunks": {
+    "total": 78706,
+    "started": 200,
+    "completed": 187
+  },
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_shard": 3, "current_chunk_in_shard": 2 }
+    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_vchunk_run": "223735..223744", "min_chunk_keys": "17045651456", "chunk_quantum_keys": "4261412864" }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
   "finders": [
-    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "shard": 32768, "chunk": 3, "chunk_global": 42 }
+    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": 223735, "vchunk_end": 223745 }
   ],
   "chunks_vis": [
     { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
@@ -162,10 +181,31 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `hashrate` | number | Last reported scan speed in keys/s |
 | `version` | string\|null | Client version string sent via `/work`; null if not reported |
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
-| `active` | boolean | `true` if last seen within 3 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
+| `active` | boolean | `true` if last seen within ~1.2 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
-| `current_shard` | number\|null | 0-based index of the sector the current chunk belongs to; null if no chunk or pre-migration chunk |
-| `current_chunk_in_shard` | number\|null | 0-based serial number of the current chunk within its sector (chunk creation order); null if no chunk or pre-migration chunk without a sector |
+| `current_vchunk_run` | string\|null | Virtual chunk range of the current job as `"start..end-1"` (e.g. `"223735..223744"`); null if no chunk assigned. |
+| `min_chunk_keys` | string\|null | Worker's reported minimum job size (decimal integer string); null if not reported |
+| `chunk_quantum_keys` | string\|null | Worker's reported job size quantum (decimal integer string); null if not reported |
+
+**`virtual_chunks` field**
+
+```json
+{ "virtual_chunks": { "total": 78706, "started": 200, "completed": 187 } }
+```
+
+For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle, `started` is the count of virtual chunks covered by any live or completed job, `completed` is the count covered by completed or FOUND jobs.
+
+For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks` and the backward-compatible `shards` alias).
+
+**`puzzle` allocator fields** (present when a puzzle is active)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `alloc_strategy` | string | Active allocator: `"virtual_random_chunks_v1"` or `"legacy_random_shards_v1"` |
+| `alloc_cursor` | number | Next position in the randomized permutation to allocate from |
+| `virtual_chunk_size_keys` | string\|null | Size of each virtual chunk in keys (decimal integer string); `virtual_random_chunks_v1` only |
+| `virtual_chunk_count` | number\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
+| `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations.
@@ -183,10 +223,28 @@ Create or activate a puzzle. Deactivates any currently active puzzle.
 
 **Request**
 ```json
-{ "name": "Puzzle #71", "start_hex": "0x400000000000000000", "end_hex": "0x7FFFFFFFFFFFFFFFFF" }
+{
+  "name": "Puzzle #71",
+  "start_hex": "0x400000000000000000",
+  "end_hex": "0x7FFFFFFFFFFFFFFFFF",
+  "alloc_strategy": "virtual_random_chunks_v1",
+  "virtual_chunk_size_keys": "30000000",
+  "alloc_seed": "optional-hex-seed"
+}
 ```
 
 Hex strings may include an optional `0x` prefix; they are normalised server-side.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Puzzle name |
+| `start_hex` | string | yes | Keyspace start (inclusive) |
+| `end_hex` | string | yes | Keyspace end (exclusive) |
+| `alloc_strategy` | string | no | `"virtual_random_chunks_v1"` (default) or `"legacy_random_shards_v1"` |
+| `virtual_chunk_size_keys` | string | no | Virtual chunk size in keys as a decimal integer string. Defaults to `30000000`. Ignored for legacy strategy. |
+| `alloc_seed` | string | no | Override the deterministic allocation seed. Immutable after first fresh allocation. |
+
+If a puzzle with the same `name`, `start_hex`, `end_hex`, `alloc_strategy`, and `virtual_chunk_size_keys` already exists, it is reactivated without creating a new row.
 
 **Response 200**
 ```json

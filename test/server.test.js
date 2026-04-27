@@ -1,7 +1,17 @@
 'use strict';
 
 const request = require('supertest');
-const { createApp, ACTIVE_MINUTES, REACTIVATE_MINUTES } = require('../server');
+const {
+    createApp,
+    ACTIVE_MINUTES,
+    REACTIVATE_MINUTES,
+    buildDeterministicPermutation,
+    seedVirtualChunks,
+    defaultAllocSeedForPuzzle,
+    chooseDefaultVirtualChunkSize,
+    ALLOC_STRATEGY_LEGACY,
+    ALLOC_STRATEGY_VCHUNKS,
+} = require('../server');
 const { createTestDb, seedPuzzle } = require('./helpers');
 
 const STALE_MINUTES          = (ACTIVE_MINUTES    || 1)  + 1; // stale for dashboard color
@@ -323,35 +333,34 @@ describe('GET /api/v1/stats', () => {
         expect(oldChunk.status).toBe('reclaimed');
     });
 
-    test('current_chunk_in_shard is 0 for first chunk and 1 for second chunk in same shard', async () => {
-        seedPuzzle(db);
-        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
-        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
+    test('current_vchunk_run shows correct range string for assigned worker', async () => {
+        // 10 vchunks of 600 keys; hashrate=1 → neededChunks=1
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
 
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
         const res = await request(app).get('/api/v1/stats').expect(200);
         const w1 = res.body.workers.find(w => w.name === 'w1');
-        const w2 = res.body.workers.find(w => w.name === 'w2');
 
-        expect(w1.current_shard).toBe(0);
-        expect(w1.current_chunk_in_shard).toBe(0);
-        expect(w2.current_shard).toBe(0);
-        expect(w2.current_chunk_in_shard).toBe(1);
+        expect(typeof w1.current_vchunk_run).toBe('string');
+        expect(w1.current_vchunk_run).toMatch(/^\d+\.\.\d+$/);
     });
 
-    test('finders entry includes shard, chunk, and chunk_global', async () => {
-        seedPuzzle(db);
-        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+    test('finders entry includes chunk_global, vchunk_start and vchunk_end', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
         const { job_id } = r.body;
         await request(app).post('/api/v1/submit')
             .send({ name: 'w1', job_id, status: 'FOUND', findings: [{ found_key: '0'.repeat(64), found_address: '1Test' }] });
         const stats = await request(app).get('/api/v1/stats');
         const finder = stats.body.finders[0];
         expect(typeof finder.chunk_global).toBe('number');
-        expect(typeof finder.chunk).toBe('number');
-        expect(typeof finder.shard).toBe('number');
         expect(finder.chunk_global).toBe(job_id);
-        expect(finder.chunk).toBe(0);   // first chunk in its sector
-        expect(finder.shard).toBe(0);   // first sector
+        expect(typeof finder.vchunk_start).toBe('number');
+        expect(typeof finder.vchunk_end).toBe('number');
+        expect(finder.vchunk_end).toBeGreaterThan(finder.vchunk_start);
     });
 
     test('total_keys_completed reflects submitted chunks', async () => {
@@ -451,7 +460,7 @@ describe('Sharded Frontier Allocator', () => {
     test('0. first work request without test chunk targets sector #32768', async () => {
         // Puzzle with exactly 65536 sectors (range = 65536 × MIN_SECTOR_SIZE = 65536 × 1B)
         const end = (65536n * 1_000_000_000n).toString(16).padStart(64, '0');
-        seedPuzzle(db, { name: 'Large', end_hex: end });
+        seedPuzzle(db, { name: 'Large', end_hex: end, strategy: ALLOC_STRATEGY_LEGACY });
 
         const res = await request(app).post('/api/v1/work')
             .send({ name: 'w1', hashrate: 1e6 }).expect(200);
@@ -465,7 +474,7 @@ describe('Sharded Frontier Allocator', () => {
         seedPuzzle(db);
         const chunks = [];
         for (let i = 0; i < 3; i++) {
-            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1000000 });
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
             if (r.status === 200) chunks.push(r.body);
         }
         expect(chunks.length).toBe(3);
@@ -481,9 +490,9 @@ describe('Sharded Frontier Allocator', () => {
     });
 
     test('2. sector boundary: chunk capped at sector end, next starts exactly there', async () => {
-        // hashrate=1 → chunk = 1 × 5 × 60 = 300 keys; puzzle range = 1000 → 2 chunks fit
+        // legacy allocator fills sectors sequentially; hashrate=1 → chunk = 600 keys, range = 1000
         const end = (1000n).toString(16).padStart(64, '0');
-        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, strategy: ALLOC_STRATEGY_LEGACY });
 
         const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
         const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
@@ -504,7 +513,7 @@ describe('Sharded Frontier Allocator', () => {
         expect(r.body.error).toMatch(/all keyspace/i);
     });
 
-    test('4. reclaim priority: reclaimed chunk offered before fresh sector allocation', async () => {
+    test('4. reclaim priority: reclaimed chunk offered before fresh allocation', async () => {
         seedPuzzle(db);
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
         const reclaimedInfo = db.prepare(`
@@ -512,12 +521,14 @@ describe('Sharded Frontier Allocator', () => {
             VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP)
         `).run(puzzle.id, '0'.repeat(64), (1n).toString(16).padStart(64, '0'));
 
+        const cursorBefore = db.prepare("SELECT alloc_cursor FROM puzzles WHERE id = ?").get(puzzle.id).alloc_cursor;
+
         const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         expect(r.body.job_id).toBe(reclaimedInfo.lastInsertRowid);
 
-        // Sector frontier must not have moved — reclaim took priority
-        const sector = db.prepare("SELECT * FROM sectors WHERE puzzle_id = ?").get(puzzle.id);
-        expect(sector.current_hex).toBe(sector.start_hex);
+        // Allocator cursor must not have advanced — reclaim took priority over fresh allocation
+        const cursorAfter = db.prepare("SELECT alloc_cursor FROM puzzles WHERE id = ?").get(puzzle.id).alloc_cursor;
+        expect(cursorAfter).toBe(cursorBefore);
     });
 
     test('5. progress accounting: overlapping done chunks not double-counted', async () => {
@@ -541,8 +552,8 @@ describe('Sharded Frontier Allocator', () => {
         await request(app).post('/api/v1/admin/set-puzzle')
             .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
         const p1 = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
-        const p1Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p1.id).c;
-        expect(p1Sectors).toBe(1);
+        const p1VChunks = db.prepare("SELECT COUNT(*) as c FROM alloc_order_vchunks WHERE puzzle_id=?").get(p1.id).c;
+        expect(p1VChunks).toBe(1);
 
         // Change range → new puzzle row
         await request(app).post('/api/v1/admin/set-puzzle')
@@ -551,8 +562,8 @@ describe('Sharded Frontier Allocator', () => {
 
         expect(p2.id).not.toBe(p1.id);
         expect(p2.start_hex).toContain('3');   // normalized 0x300
-        const p2Sectors = db.prepare("SELECT COUNT(*) as c FROM sectors WHERE puzzle_id=?").get(p2.id).c;
-        expect(p2Sectors).toBe(1);
+        const p2VChunks = db.prepare("SELECT COUNT(*) as c FROM alloc_order_vchunks WHERE puzzle_id=?").get(p2.id).c;
+        expect(p2VChunks).toBe(1);
         // Old row still exists and is inactive
         const p1Row = db.prepare("SELECT * FROM puzzles WHERE id=?").get(p1.id);
         expect(p1Row).toBeTruthy();
@@ -560,7 +571,7 @@ describe('Sharded Frontier Allocator', () => {
     });
 
     test('7. consecutive allocations return non-overlapping sequential ranges', async () => {
-        seedPuzzle(db);
+        seedPuzzle(db, { strategy: ALLOC_STRATEGY_LEGACY });
         const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
         const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1000000 });
         expect(r1.status).toBe(200);
@@ -754,5 +765,387 @@ describe('ADMIN_TOKEN middleware', () => {
             .get('/api/v1/admin/puzzles')
             .set('X-Admin-Token', 'wrongtoken')
             .expect(401);
+    });
+});
+
+// ─── Global Block Allocator ───────────────────────────────────────────────────
+
+describe('buildDeterministicPermutation', () => {
+    test('produces a full permutation with no duplicates', () => {
+        const n = 500;
+        const perm = buildDeterministicPermutation(n, 'test-seed-abc');
+        expect(perm).toHaveLength(n);
+        const set = new Set(perm);
+        expect(set.size).toBe(n);
+        for (const v of perm) expect(v >= 0 && v < n).toBe(true);
+    });
+
+    test('is deterministic: same seed produces identical output', () => {
+        const p1 = buildDeterministicPermutation(200, 'fixed-seed');
+        const p2 = buildDeterministicPermutation(200, 'fixed-seed');
+        expect(p1).toEqual(p2);
+    });
+
+    test('different seeds produce different orderings', () => {
+        const p1 = buildDeterministicPermutation(200, 'seed-A');
+        const p2 = buildDeterministicPermutation(200, 'seed-B');
+        expect(p1).not.toEqual(p2);
+    });
+
+    test('handles edge cases: count=0 and count=1', () => {
+        expect(buildDeterministicPermutation(0, 'seed')).toEqual([]);
+        expect(buildDeterministicPermutation(1, 'seed')).toEqual([0]);
+    });
+});
+
+describe('Virtual Chunk Allocator — seeding', () => {
+    test('seedVirtualChunks creates correct number of entries in alloc_order_vchunks', () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
+
+        const rows = db.prepare(
+            "SELECT * FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(puzzle.id);
+
+        expect(rows).toHaveLength(10);
+        expect(puzzle.virtual_chunk_count).toBe(10);
+    });
+
+    test('alloc_order_vchunks is a full permutation of all chunk indices', () => {
+        const end = (500n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
+
+        const rows = db.prepare(
+            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(puzzle.id);
+
+        expect(rows).toHaveLength(5);
+        const sorted = rows.map(r => r.chunk_index).sort((a, b) => a - b);
+        expect(sorted).toEqual([0, 1, 2, 3, 4]);
+    });
+
+    test('allocation order is deterministic: same puzzle parameters and seed produce same order', () => {
+        const start = '0'.repeat(64);
+        const end   = (1000n).toString(16).padStart(64, '0');
+        const seed  = 'determinism-test-seed';
+
+        const p1 = seedPuzzle(db, { name: 'P1', start_hex: start, end_hex: end, virtual_chunk_size_keys: 100, seed });
+        db.prepare("UPDATE puzzles SET active = 0").run();
+        const p2 = seedPuzzle(db, { name: 'P2', start_hex: start, end_hex: end, virtual_chunk_size_keys: 100, seed });
+
+        const order1 = db.prepare(
+            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(p1.id).map(r => r.chunk_index);
+
+        const order2 = db.prepare(
+            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
+        ).all(p2.id).map(r => r.chunk_index);
+
+        expect(order1).toEqual(order2);
+    });
+
+    test('puzzle range smaller than virtual chunk size produces exactly one chunk', () => {
+        const end = (500n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
+
+        const rows = db.prepare("SELECT * FROM alloc_order_vchunks WHERE puzzle_id = ?").all(puzzle.id);
+        expect(rows).toHaveLength(1);
+        expect(puzzle.virtual_chunk_count).toBe(1);
+    });
+
+    test('seedVirtualChunks is idempotent — calling twice replaces state cleanly', () => {
+        const end = (1000n).toString(16).padStart(64, '0');
+        const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
+
+        // Simulate partial state: delete alloc_order_vchunks (as if a boot was interrupted)
+        db.prepare("DELETE FROM alloc_order_vchunks WHERE puzzle_id = ?").run(puzzle.id);
+
+        // Should not throw — seedVirtualChunks clears the table before inserting
+        expect(() => {
+            seedVirtualChunks(db, puzzle.id, '0'.repeat(64), end,
+                defaultAllocSeedForPuzzle(puzzle, ALLOC_STRATEGY_VCHUNKS), 100n);
+        }).not.toThrow();
+
+        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(puzzle.id).c;
+        expect(orderCount).toBe(10);
+    });
+});
+
+describe('Virtual Chunk Allocator — fresh allocation', () => {
+    test('bootstrap: first fresh assignment is at the midpoint of keyspace', async () => {
+        // 10 vchunks of 600 keys; hashrate=1 → targetKeys=600 → neededChunks=1
+        // midpoint anchor = chunk 5, start key = 5 * 600 = 3000
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        expect(r.status).toBe(200);
+        expect(BigInt('0x' + r.body.start_key)).toBe(3000n);
+
+        const puzzle = db.prepare("SELECT bootstrap_stage FROM puzzles WHERE active=1").get();
+        expect(puzzle.bootstrap_stage).toBe(1);
+    });
+
+    test('bootstrap: second fresh assignment starts at beginning of keyspace', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const r = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        expect(r.status).toBe(200);
+        expect(BigInt('0x' + r.body.start_key)).toBe(0n);
+
+        const puzzle = db.prepare("SELECT bootstrap_stage FROM puzzles WHERE active=1").get();
+        expect(puzzle.bootstrap_stage).toBe(2);
+    });
+
+    test('bootstrap: third fresh assignment covers end of keyspace', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        const r = await request(app).post('/api/v1/work').send({ name: 'w3', hashrate: 1 });
+        expect(r.status).toBe(200);
+        expect(BigInt('0x' + r.body.end_key)).toBe(6000n);
+
+        const puzzle = db.prepare("SELECT bootstrap_stage FROM puzzles WHERE active=1").get();
+        expect(puzzle.bootstrap_stage).toBe(3);
+    });
+
+    test('no overlap between consecutive fresh allocations', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const chunks = [];
+        for (let i = 0; i < 5; i++) {
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            expect(r.status).toBe(200);
+            chunks.push({ s: BigInt('0x' + r.body.start_key), e: BigInt('0x' + r.body.end_key) });
+        }
+
+        for (let i = 0; i < chunks.length; i++) {
+            for (let j = i + 1; j < chunks.length; j++) {
+                expect(chunks[i].s < chunks[j].e && chunks[j].s < chunks[i].e).toBe(false);
+            }
+        }
+    });
+
+    test('full allocation exhausts puzzle keyspace exactly and then returns 503', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const chunks = [];
+        for (let i = 0; i < 10; i++) {
+            const r = await request(app).post('/api/v1/work').send({ name: `w${i}`, hashrate: 1 });
+            expect(r.status).toBe(200);
+            chunks.push({ s: BigInt('0x' + r.body.start_key), e: BigInt('0x' + r.body.end_key) });
+        }
+
+        // No pairwise overlaps
+        for (let i = 0; i < chunks.length; i++) {
+            for (let j = i + 1; j < chunks.length; j++) {
+                expect(chunks[i].s < chunks[j].e && chunks[j].s < chunks[i].e).toBe(false);
+            }
+        }
+
+        // Union equals full keyspace
+        const sorted = [...chunks].sort((a, b) => (a.s < b.s ? -1 : 1));
+        const totalCovered = sorted.reduce((acc, c) => acc + (c.e - c.s), 0n);
+        expect(totalCovered).toBe(6000n);
+
+        // 11th request: exhausted
+        const last = await request(app).post('/api/v1/work').send({ name: 'w_last', hashrate: 1 });
+        expect(last.status).toBe(503);
+    }, 30000);
+
+    test('reclaimed chunk reissued before fresh allocation, no overlap with subsequent fresh chunk', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r1 = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        db.prepare(
+            "UPDATE chunks SET status='reclaimed', prev_worker_name=worker_name, worker_name=NULL WHERE id=?"
+        ).run(r1.body.job_id);
+
+        // w2 should receive the reclaimed chunk
+        const r2 = await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+        expect(r2.body.job_id).toBe(r1.body.job_id);
+
+        // w3 gets a fresh chunk with no overlap against the reclaimed one
+        const r3 = await request(app).post('/api/v1/work').send({ name: 'w3', hashrate: 1 });
+        expect(r3.status).toBe(200);
+        expect(r3.body.job_id).not.toBe(r1.body.job_id);
+
+        const aS = BigInt('0x' + r2.body.start_key), aE = BigInt('0x' + r2.body.end_key);
+        const bS = BigInt('0x' + r3.body.start_key), bE = BigInt('0x' + r3.body.end_key);
+        expect(aS < bE && bS < aE).toBe(false);
+    });
+
+    test('vchunk_start and vchunk_end saved on chunk row', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const chunk = db.prepare("SELECT vchunk_start, vchunk_end FROM chunks WHERE id = ?").get(r.body.job_id);
+        expect(typeof chunk.vchunk_start).toBe('number');
+        expect(typeof chunk.vchunk_end).toBe('number');
+        expect(chunk.vchunk_end).toBeGreaterThan(chunk.vchunk_start);
+    });
+});
+
+describe('Virtual Chunk Allocator — stats and API', () => {
+    test('stats puzzle object includes virtual chunk diagnostic fields', async () => {
+        seedPuzzle(db);
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        const p = res.body.puzzle;
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_VCHUNKS);
+        expect(typeof p.virtual_chunk_size_keys).toBe('string');
+        expect(typeof p.virtual_chunk_count).toBe('number');
+        expect(p.virtual_chunk_count).toBeGreaterThan(0);
+        expect(typeof p.alloc_cursor).toBe('number');
+        expect(typeof p.bootstrap_stage).toBe('number');
+    });
+
+    test('virtual_chunks.total reflects virtual_chunk_count for vchunks strategy', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(res.body.virtual_chunks.total).toBe(10);
+        expect(res.body.virtual_chunks.completed).toBe(0);
+    });
+
+    test('virtual_chunks.completed increments after submitting done', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const { job_id } = r.body;
+
+        let stats = await request(app).get('/api/v1/stats');
+        expect(stats.body.virtual_chunks.completed).toBe(0);
+
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'w1', job_id, status: 'done', keys_scanned: chunkSize(db, job_id) });
+
+        stats = await request(app).get('/api/v1/stats');
+        expect(stats.body.virtual_chunks.completed).toBe(1);
+    });
+
+    test('set-puzzle creates virtual chunk puzzle by default', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'NewPuzzle', start_hex: '0x0', end_hex: '0x3e8' })
+            .expect(200);
+
+        const p = db.prepare("SELECT * FROM puzzles WHERE active = 1").get();
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_VCHUNKS);
+        const vchunkCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(p.id).c;
+        expect(vchunkCount).toBeGreaterThan(0);
+    });
+
+    test('set-puzzle accepts explicit alloc_strategy=legacy and creates sectors not vchunks', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Legacy', start_hex: '0x100', end_hex: '0x200', alloc_strategy: ALLOC_STRATEGY_LEGACY })
+            .expect(200);
+
+        const p = db.prepare("SELECT * FROM puzzles WHERE active = 1").get();
+        expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_LEGACY);
+        const sectors = db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(p.id).c;
+        expect(sectors).toBeGreaterThan(0);
+        const vchunks = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(p.id).c;
+        expect(vchunks).toBe(0);
+    });
+
+    test('set-puzzle accepts custom virtual_chunk_size_keys and populates correct chunk count', async () => {
+        // 0x3e8 = 1000 keys / 100 per chunk = 10 chunks
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Custom', start_hex: '0x0', end_hex: '0x3e8', virtual_chunk_size_keys: '100' })
+            .expect(200);
+
+        const p = db.prepare("SELECT virtual_chunk_count FROM puzzles WHERE active = 1").get();
+        expect(p.virtual_chunk_count).toBe(10);
+    });
+
+    test('set-puzzle rejects unknown alloc_strategy', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'Bad', start_hex: '0x100', end_hex: '0x200', alloc_strategy: 'bogus_strategy' })
+            .expect(400);
+    });
+
+    test('set-puzzle creates new puzzle row when virtual chunk size differs from existing', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', virtual_chunk_size_keys: '100' })
+            .expect(200);
+        const first = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        // Same name/range/strategy, different chunk size — should create a new row
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', virtual_chunk_size_keys: '200' })
+            .expect(200);
+        const second = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        expect(second.id).not.toBe(first.id);
+        const newPuzzle = db.prepare("SELECT virtual_chunk_count FROM puzzles WHERE id = ?").get(second.id);
+        expect(newPuzzle.virtual_chunk_count).toBe(5); // 1000 / 200 = 5 chunks
+    });
+
+    test('set-puzzle reuses existing puzzle when virtual chunk size is unchanged', async () => {
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', virtual_chunk_size_keys: '100' })
+            .expect(200);
+        const first = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        // Same everything — should reuse
+        await request(app)
+            .post('/api/v1/admin/set-puzzle')
+            .send({ name: 'P1', start_hex: '0x0', end_hex: '0x3e8', virtual_chunk_size_keys: '100' })
+            .expect(200);
+        const second = db.prepare("SELECT id FROM puzzles WHERE active = 1").get();
+
+        expect(second.id).toBe(first.id);
+    });
+
+    test('current_vchunk_run and finders vchunk fields are consistent', async () => {
+        // 10 vchunks of 600 keys; hashrate=1 → 1 vchunk per job; midpoint = chunk 5
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        const job_id = r.body.job_id;
+
+        // Worker holds chunk at midpoint — current_vchunk_run should be "5..5"
+        const statsBeforeSubmit = await request(app).get('/api/v1/stats');
+        const worker = statsBeforeSubmit.body.workers.find(w => w.name === 'w1');
+        expect(worker.current_vchunk_run).toBe('5..5');
+
+        // Submit FOUND so the chunk appears in finders
+        await request(app).post('/api/v1/submit')
+            .send({ name: 'w1', job_id, status: 'FOUND', findings: [{ found_key: '0'.repeat(64) }] });
+
+        const statsAfterSubmit = await request(app).get('/api/v1/stats');
+        const finder = statsAfterSubmit.body.finders[0];
+        expect(finder.vchunk_start).toBe(5);
+        expect(finder.vchunk_end).toBe(6);
+    });
+
+    test('two workers in different vchunk ranges show distinct current_vchunk_run values', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+        await request(app).post('/api/v1/work').send({ name: 'w2', hashrate: 1 });
+
+        const stats = await request(app).get('/api/v1/stats');
+        const w1 = stats.body.workers.find(w => w.name === 'w1');
+        const w2 = stats.body.workers.find(w => w.name === 'w2');
+
+        expect(w1.current_vchunk_run).not.toBe(w2.current_vchunk_run);
     });
 });
