@@ -34,9 +34,14 @@ const DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS = BigInt(process.env.DEFAULT_VIRTUAL_CHUNK
 // first use. This is useful when an older test DB still contains oversized chunks.
 const AUTO_RESEED_EMPTY_VCHUNK_PUZZLES = process.env.AUTO_RESEED_EMPTY_VCHUNK_PUZZLES === '1';
 
-// We precompute one permutation row per virtual chunk.
-const MAX_PRECOMPUTED_VCHUNKS = 1048576; // 2^20
+// Virtual chunk universe is mathematical, not materialized in DB.
+// Still keep counts/indexes within JS safe integer range because they are
+// stored in SQLite INTEGER columns and read back into JS numbers.
+const MAX_STORED_VCHUNKS = BigInt(Number.MAX_SAFE_INTEGER);
 
+// Allocation does not scan the full universe. It probes a bounded number of
+// pseudo-random candidate positions each request.
+const MAX_ALLOC_PROBES = parseInt(process.env.MAX_ALLOC_PROBES || '8192', 10);
 
 // GPU batch size kept for admin test-chunk default
 const GPU_BATCH_KEYS = 4278190080n;
@@ -106,31 +111,38 @@ function normalizedRange(startHex, endHex) {
     return { start, end, range: end - start };
 }
 
-function makePermutationRng(seedHex) {
-    let counter = 0n;
-    return function nextU64() {
-        const material = `${seedHex}:${counter.toString()}`;
-        counter++;
-        const h = crypto.createHash('sha256').update(material).digest('hex');
-        return BigInt('0x' + h.slice(0, 16));
-    };
+function gcdBigInt(a, b) {
+    a = a < 0n ? -a : a;
+    b = b < 0n ? -b : b;
+    while (b !== 0n) {
+        const t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
 }
 
-function buildDeterministicPermutation(count, seedHex) {
-    if (count < 0) throw new Error('count must be >= 0');
-    if (count > MAX_PRECOMPUTED_VCHUNKS) {
-        throw new Error(`buildDeterministicPermutation: count ${count} exceeds MAX_PRECOMPUTED_VCHUNKS (${MAX_PRECOMPUTED_VCHUNKS})`);
-    }
-    const arr = Array.from({ length: count }, (_, i) => i);
-    const nextU64 = makePermutationRng(seedHex);
+function deriveAffinePermutationParams(seedHex, n) {
+    if (n <= 1n) return { a: 1n, b: 0n };
 
-    for (let i = count - 1; i > 0; i--) {
-        const j = Number(nextU64() % BigInt(i + 1));
-        const tmp = arr[i];
-        arr[i] = arr[j];
-        arr[j] = tmp;
+    let counter = 0n;
+    let a = 1n;
+    while (true) {
+        const ha = sha256Hex(`${seedHex}:a:${counter.toString()}`);
+        a = BigInt('0x' + ha) % n;
+        if (a === 0n) a = 1n;
+        if (gcdBigInt(a, n) === 1n) break;
+        counter++;
     }
-    return arr;
+
+    const hb = sha256Hex(`${seedHex}:b`);
+    const b = BigInt('0x' + hb) % n;
+
+    return { a, b };
+}
+
+function permuteIndexAffine(orderIndex, n, a, b) {
+    return (a * orderIndex + b) % n;
 }
 
 function defaultAllocSeedForPuzzle(puzzle, strategy = ALLOC_STRATEGY_VCHUNKS) {
@@ -141,8 +153,8 @@ function chooseDefaultVirtualChunkSize(range) {
     let size = DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS > 0n ? DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS : 1n;
     if (size > range) size = range;
 
-    // Ensure chunk_count stays under the configured cap.
-    while (ceilDiv(range, size) > BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+    // Keep count storable / safely readable in JS.
+    while (ceilDiv(range, size) > MAX_STORED_VCHUNKS) {
         size <<= 1n;
         if (size > range) {
             size = range;
@@ -153,14 +165,13 @@ function chooseDefaultVirtualChunkSize(range) {
 }
 
 function validateVirtualChunkCountOrThrow(chunkCountBig, context) {
-    if (chunkCountBig > BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+    if (chunkCountBig > MAX_STORED_VCHUNKS) {
         throw new Error(
-            `${context}: virtual chunk count ${chunkCountBig.toString()} exceeds MAX_PRECOMPUTED_VCHUNKS ` +
-            `(${MAX_PRECOMPUTED_VCHUNKS}). Use a larger virtual_chunk_size_keys value.`
+            `${context}: virtual chunk count ${chunkCountBig.toString()} exceeds MAX_STORED_VCHUNKS ` +
+            `(${MAX_STORED_VCHUNKS.toString()}). Use a larger virtual_chunk_size_keys value.`
         );
     }
 }
-
 
 function computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKeys }) {
     const targetKeys = hashrateBig * BigInt(TARGET_MINUTES * 60);
@@ -234,16 +245,7 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
     validateVirtualChunkCountOrThrow(chunkCountBig, 'seedVirtualChunks');
     const chunkCount = Number(chunkCountBig);
 
-    const permutation = buildDeterministicPermutation(chunkCount, allocSeed);
-
-    const insertOrder = db.prepare(`
-        INSERT INTO alloc_order_vchunks (puzzle_id, order_index, chunk_index)
-        VALUES (?, ?, ?)
-    `);
-
     db.transaction(() => {
-        db.prepare(`DELETE FROM alloc_order_vchunks WHERE puzzle_id = ?`).run(puzzleId);
-
         db.prepare(`
             UPDATE puzzles
             SET alloc_strategy = ?,
@@ -260,10 +262,6 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
             chunkCount,
             puzzleId
         );
-
-        for (let orderIndex = 0; orderIndex < chunkCount; orderIndex++) {
-            insertOrder.run(puzzleId, orderIndex, permutation[orderIndex]);
-        }
     })();
 
     console.log(`[System] Seeded ${chunkCount} virtual chunks for puzzle ${puzzleId} (virtual chunk size ${chunkSize.toString()} keys)`);
@@ -276,8 +274,10 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
     const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
 
     if (strategy === ALLOC_STRATEGY_VCHUNKS) {
-        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(puzzleId).c;
-        const issuedCount = db.prepare("SELECT COUNT(*) AS c FROM chunks WHERE puzzle_id = ? AND is_test = 0").get(puzzleId).c;
+        const issuedCount = db.prepare(
+            "SELECT COUNT(*) AS c FROM chunks WHERE puzzle_id = ? AND is_test = 0"
+        ).get(puzzleId).c;
+
         const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle, ALLOC_STRATEGY_VCHUNKS);
         const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
         const desiredDefaultSize = chooseDefaultVirtualChunkSize(range);
@@ -287,7 +287,7 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
                 try {
                     const stored = BigInt(puzzle.virtual_chunk_size_keys);
                     const actual = bigIntMin(stored, range);
-                    if (ceilDiv(range, actual) <= BigInt(MAX_PRECOMPUTED_VCHUNKS)) {
+                    if (ceilDiv(range, actual) <= MAX_STORED_VCHUNKS) {
                         return actual;
                     }
                 } catch (_) {}
@@ -295,7 +295,10 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
             return desiredDefaultSize;
         })();
 
-        if (orderCount === 0) {
+        const expectedCount = ceilDiv(range, size);
+        const storedCount = parsePositiveBigInt(puzzle.virtual_chunk_count, null);
+
+        if (!storedCount || storedCount !== expectedCount) {
             seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, size);
         } else if (
             AUTO_RESEED_EMPTY_VCHUNK_PUZZLES &&
@@ -335,13 +338,6 @@ function createApp(db) {
                test_start_hex, test_end_hex
         FROM puzzles
         WHERE id = ?
-    `);
-
-    const stmtVChunkOrderAt = db.prepare(`
-        SELECT chunk_index
-        FROM alloc_order_vchunks
-        WHERE puzzle_id = ? AND order_index = ?
-        LIMIT 1
     `);
 
     const stmtVChunkCursorSet = db.prepare(`
@@ -500,20 +496,21 @@ function createApp(db) {
     const assignVirtualChunkJob = db.transaction((name, workHints, puzzle) => {
         const currentPuzzle = stmtVChunkPuzzle.get(puzzle.id);
         if (!currentPuzzle) return null;
+        if (!currentPuzzle.virtual_chunk_size_keys || !currentPuzzle.virtual_chunk_count) return null;
 
-        const totalChunks = Number(currentPuzzle.virtual_chunk_count || 0);
-        if (totalChunks <= 0) return null;
+        const totalChunksBig = BigInt(currentPuzzle.virtual_chunk_count);
+        if (totalChunksBig <= 0n) return null;
 
+        const totalChunks = Number(totalChunksBig);
         const hashrateBig = normalizeHashrate(workHints.hashrate || stmtWorkerHash.get(name)?.hashrate);
         const minChunkKeys = parsePositiveBigInt(workHints.min_chunk_keys, null);
         const chunkQuantumKeys = parsePositiveBigInt(workHints.chunk_quantum_keys, 1n);
         const requestedKeys = computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKeys });
 
-        if (!currentPuzzle.virtual_chunk_size_keys) return null;
         const vchunkSize = BigInt(currentPuzzle.virtual_chunk_size_keys);
         let neededChunks = Number(ceilDiv(requestedKeys, vchunkSize));
         if (neededChunks < 1) neededChunks = 1;
-        if (neededChunks > totalChunks) neededChunks = totalChunks;
+        if (BigInt(neededChunks) > totalChunksBig) neededChunks = totalChunks;
 
         console.log(
             `[Alloc] ${name} requested ${requestedKeys.toString()} keys ` +
@@ -524,19 +521,15 @@ function createApp(db) {
         );
 
         const freshChunkCount = stmtChunkCount.get(currentPuzzle.id).cnt;
-
         const stage = Number(currentPuzzle.bootstrap_stage || 0);
 
         // Mandatory 3-step bootstrap for first three fresh jobs only.
         if (freshChunkCount < 3 && stage < 3) {
             let runStart = null;
-            if (stage === 0) {
-                runStart = findMidBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
-            } else if (stage === 1) {
-                runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
-            } else if (stage === 2) {
-                runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
-            }
+
+            if (stage === 0) runStart = findMidBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
+            else if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
+            else if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, neededChunks);
 
             if (runStart !== null) {
                 const result = assignVirtualChunkRun(name, currentPuzzle, runStart, neededChunks);
@@ -549,11 +542,11 @@ function createApp(db) {
                 return result;
             }
 
-            // If no full bootstrap-sized run fits, try smaller run during bootstrap rather than deadlock.
             for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
                 if (stage === 0) runStart = findMidBootstrapRun(currentPuzzle.id, totalChunks, fallback);
-                if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, fallback);
-                if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+                else if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+                else if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, totalChunks, fallback);
+
                 if (runStart !== null) {
                     const result = assignVirtualChunkRun(name, currentPuzzle, runStart, fallback);
                     console.log(
@@ -566,29 +559,31 @@ function createApp(db) {
                 }
             }
 
-            // Advance bootstrap stage defensively if that region is exhausted.
             stmtBootstrapStageSet.run(stage + 1, currentPuzzle.id);
         }
 
-        const rawCursor = Number(currentPuzzle.alloc_cursor || 0);
-        const triedStarts = new Set();
+        const seed = currentPuzzle.alloc_seed || defaultAllocSeedForPuzzle(currentPuzzle, ALLOC_STRATEGY_VCHUNKS);
+        const { a, b } = deriveAffinePermutationParams(seed, totalChunksBig);
+        const rawCursorBig = BigInt(currentPuzzle.alloc_cursor || 0);
+        const probeLimit = Math.min(totalChunks, MAX_ALLOC_PROBES);
 
-        // Full-size search first
-        for (let offset = 0; offset < totalChunks; offset++) {
-            const orderIndex = (rawCursor + offset) % totalChunks;
-            const row = stmtVChunkOrderAt.get(currentPuzzle.id, orderIndex);
-            if (!row) continue;
-
-            const candidateIndex = Number(row.chunk_index);
+        // Full-size search first.
+        let triedStarts = new Set();
+        for (let offset = 0; offset < probeLimit; offset++) {
+            const orderIndex = (rawCursorBig + BigInt(offset)) % totalChunksBig;
+            const candidateIndex = Number(permuteIndexAffine(orderIndex, totalChunksBig, a, b));
             const runStart = normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks);
+
             if (triedStarts.has(runStart)) continue;
             triedStarts.add(runStart);
 
             if (rangeIsFree(currentPuzzle.id, runStart, runStart + neededChunks)) {
-                stmtVChunkCursorSet.run((orderIndex + 1) % totalChunks, currentPuzzle.id);
+                const nextCursor = Number((orderIndex + 1n) % totalChunksBig);
+                stmtVChunkCursorSet.run(nextCursor, currentPuzzle.id);
+
                 const result = assignVirtualChunkRun(name, currentPuzzle, runStart, neededChunks);
                 console.log(
-                    `[Alloc] permutation full-run -> assigned ${name} ` +
+                    `[Alloc] affine full-run -> assigned ${name} ` +
                     `vchunks ${result.vchunkStart}..${result.vchunkEnd - 1} ` +
                     `(${result.startHex} .. ${result.endHex})`
                 );
@@ -597,24 +592,25 @@ function createApp(db) {
             }
         }
 
-        // Fallback: smaller contiguous run, still discovered via permutation walk.
+        // Fallback: smaller contiguous run.
         for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
-            triedStarts.clear();
-            for (let offset = 0; offset < totalChunks; offset++) {
-                const orderIndex = (rawCursor + offset) % totalChunks;
-                const row = stmtVChunkOrderAt.get(currentPuzzle.id, orderIndex);
-                if (!row) continue;
+            triedStarts = new Set();
 
-                const candidateIndex = Number(row.chunk_index);
+            for (let offset = 0; offset < probeLimit; offset++) {
+                const orderIndex = (rawCursorBig + BigInt(offset)) % totalChunksBig;
+                const candidateIndex = Number(permuteIndexAffine(orderIndex, totalChunksBig, a, b));
                 const runStart = normalizeRunStartForCandidate(candidateIndex, fallback, totalChunks);
+
                 if (triedStarts.has(runStart)) continue;
                 triedStarts.add(runStart);
 
                 if (rangeIsFree(currentPuzzle.id, runStart, runStart + fallback)) {
-                    stmtVChunkCursorSet.run((orderIndex + 1) % totalChunks, currentPuzzle.id);
+                    const nextCursor = Number((orderIndex + 1n) % totalChunksBig);
+                    stmtVChunkCursorSet.run(nextCursor, currentPuzzle.id);
+
                     const result = assignVirtualChunkRun(name, currentPuzzle, runStart, fallback);
                     console.log(
-                        `[Alloc] permutation fallback -> assigned ${name} ` +
+                        `[Alloc] affine fallback -> assigned ${name} ` +
                         `vchunks ${result.vchunkStart}..${result.vchunkEnd - 1} ` +
                         `(${result.startHex} .. ${result.endHex})`
                     );
@@ -624,6 +620,10 @@ function createApp(db) {
             }
         }
 
+        console.log(
+            `[Alloc] no free run found for ${name} after ${probeLimit} probes ` +
+            `(need=${neededChunks}, total=${totalChunks})`
+        );
         return null;
     });
 
@@ -1410,16 +1410,6 @@ if (require.main === module) {
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key);
-
-      CREATE TABLE IF NOT EXISTS alloc_order_vchunks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        puzzle_id INTEGER NOT NULL,
-        order_index INTEGER NOT NULL,
-        chunk_index INTEGER NOT NULL
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_vchunks_order ON alloc_order_vchunks (puzzle_id, order_index);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_alloc_order_vchunks_chunk ON alloc_order_vchunks (puzzle_id, chunk_index);
     `);
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
@@ -1609,7 +1599,8 @@ module.exports = {
     normalizeHashrate,
     seedSectors,
     seedVirtualChunks,
-    buildDeterministicPermutation,
+    deriveAffinePermutationParams,
+    permuteIndexAffine,
     defaultAllocSeedForPuzzle,
     chooseDefaultVirtualChunkSize,
     ACTIVE_MINUTES,
@@ -1617,5 +1608,6 @@ module.exports = {
     ALLOC_STRATEGY_LEGACY,
     ALLOC_STRATEGY_VCHUNKS,
     DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS,
-    MAX_PRECOMPUTED_VCHUNKS,
+    MAX_STORED_VCHUNKS,
+    MAX_ALLOC_PROBES,
 };
