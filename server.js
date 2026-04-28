@@ -460,8 +460,9 @@ function createApp(db) {
             puzzle_id, start_hex, end_hex, status,
             worker_name, assigned_at, heartbeat_at, is_test,
             sector_id, alloc_block_id,
-            vchunk_start, vchunk_end
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?)
+            vchunk_start, vchunk_end,
+            alloc_generation
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?, ?)
     `);
 
     const stmtTestChunkTaken = db.prepare(`
@@ -487,8 +488,11 @@ function createApp(db) {
     `);
 
     const stmtTestChunkInsert = db.prepare(`
-        INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, heartbeat_at, is_test)
-        VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
+        INSERT INTO chunks (
+            puzzle_id, start_hex, end_hex, status, worker_name,
+            assigned_at, heartbeat_at, is_test, alloc_generation
+        )
+        VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 'test')
         RETURNING *
     `);
 
@@ -527,8 +531,9 @@ function createApp(db) {
                 INSERT INTO chunks (
                     puzzle_id, start_hex, end_hex, status,
                     worker_name, assigned_at, heartbeat_at, is_test,
-                    sector_id, alloc_block_id, vchunk_start, vchunk_end
-                ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL)
+                    sector_id, alloc_block_id, vchunk_start, vchunk_end,
+                    alloc_generation
+                ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL, 'legacy')
             `).run(puzzle.id, startHex, endHex, name, sector.id);
 
             return { chunkId: info.lastInsertRowid, startHex, endHex };
@@ -602,7 +607,8 @@ function createApp(db) {
     function assignVirtualChunkRun(name, puzzle, runStart, runCount) {
         const runEnd = runStart + runCount;
         const { startHex, endHex } = virtualChunkRangeToHex(puzzle, runStart, runEnd);
-        const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, runStart, runEnd);
+        const generation = (PERMUTATION_MODE === 'feistel') ? 'feistel' : 'affine';
+        const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, runStart, runEnd, generation);
         return { chunkId: info.lastInsertRowid, startHex, endHex, vchunkStart: runStart, vchunkEnd: runEnd };
     }
 
@@ -1224,7 +1230,7 @@ function createApp(db) {
             const pRange = pEnd - pStart;
 
             const rawChunks = db.prepare(`
-                SELECT id, status, worker_name, start_hex, end_hex
+                SELECT id, status, worker_name, start_hex, end_hex, alloc_generation
                 FROM chunks
                 WHERE puzzle_id = ? AND is_test = 0
                 ORDER BY id ASC
@@ -1237,6 +1243,7 @@ function createApp(db) {
                     id: c.id,
                     st: c.status,
                     w:  c.worker_name,
+                    g:  c.alloc_generation || null,
                     s:  Number(cs * 1000000n / pRange) / 1000000,
                     e:  Number(ce * 1000000n / pRange) / 1000000,
                 };
@@ -1608,6 +1615,7 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_generation TEXT").run(); } catch (_) {}
     try {
         db.prepare("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL").run();
     } catch (_) {}
