@@ -809,6 +809,9 @@
 
         <div class="section-title">Allocator Diagnostics</div>
         <div class="heatmap-wrap" id="allocator-diagnostics-wrap">
+            <div id="alloc-generation-summary" class="stat-subtext" style="margin-bottom:0.75rem;">
+                Generation counts: —
+            </div>
             <div style="display:grid; gap:1rem;">
                 <div>
                     <div class="section-title" style="margin-bottom:0.5rem;">Assignment Order → Virtual Chunk Start</div>
@@ -2100,6 +2103,14 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                 drawHeatmap();
                 drawAllocatorDiagnostics();
                 drawHilbert();
+
+                const gens = data.alloc_generations || { legacy: 0, affine: 0, feistel: 0 };
+
+                document.getElementById('alloc-generation-summary').innerHTML =
+                    `Generation counts: ` +
+                    `legacy <span style="color:var(--accent-amber)">${formatIntegerDots(gens.legacy)}</span> · ` +
+                    `affine <span style="color:var(--accent-cyan)">${formatIntegerDots(gens.affine)}</span> · ` +
+                    `feistel <span style="color:var(--accent-green)">${formatIntegerDots(gens.feistel)}</span>`;
 
                 const tbody = document.getElementById('worker-list');
                 if ((data.workers || []).length === 0) {
