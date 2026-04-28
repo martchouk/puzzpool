@@ -368,10 +368,10 @@ function createApp(db) {
     const stmtInsertChunk = db.prepare(`
         INSERT INTO chunks (
             puzzle_id, start_hex, end_hex, status,
-            worker_name, assigned_at, is_test,
+            worker_name, assigned_at, heartbeat_at, is_test,
             sector_id, alloc_block_id,
             vchunk_start, vchunk_end
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?)
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?)
     `);
 
     const stmtTestChunkTaken = db.prepare(`
@@ -383,7 +383,10 @@ function createApp(db) {
 
     const stmtTestChunkReclaim = db.prepare(`
         UPDATE chunks
-        SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+        SET status = 'assigned',
+            worker_name = ?,
+            assigned_at = CURRENT_TIMESTAMP,
+            heartbeat_at = CURRENT_TIMESTAMP
         WHERE id = (
             SELECT id
             FROM chunks
@@ -394,8 +397,8 @@ function createApp(db) {
     `);
 
     const stmtTestChunkInsert = db.prepare(`
-        INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, is_test)
-        VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 1)
+        INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, heartbeat_at, is_test)
+        VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
         RETURNING *
     `);
 
@@ -433,9 +436,9 @@ function createApp(db) {
             const info = db.prepare(`
                 INSERT INTO chunks (
                     puzzle_id, start_hex, end_hex, status,
-                    worker_name, assigned_at, is_test,
+                    worker_name, assigned_at, heartbeat_at, is_test,
                     sector_id, alloc_block_id, vchunk_start, vchunk_end
-                ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL)
+                ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL)
             `).run(puzzle.id, startHex, endHex, name, sector.id);
 
             return { chunkId: info.lastInsertRowid, startHex, endHex };
@@ -736,7 +739,10 @@ function createApp(db) {
 
         const reclaimed = isReactivating ? null : db.prepare(`
             UPDATE chunks
-            SET status = 'assigned', worker_name = ?, assigned_at = CURRENT_TIMESTAMP
+            SET status = 'assigned',
+                worker_name = ?,
+                assigned_at = CURRENT_TIMESTAMP,
+                heartbeat_at = CURRENT_TIMESTAMP
             WHERE id = (
                 SELECT id
                 FROM chunks
@@ -1042,28 +1048,59 @@ function createApp(db) {
         `).all(pid) : [];
 
         const assignedNow = puzzle ? db.prepare(`
-            SELECT c.id, c.worker_name, c.vchunk_start, c.vchunk_end
+            SELECT
+                c.id,
+                c.worker_name,
+                c.vchunk_start,
+                c.vchunk_end,
+                c.assigned_at,
+                c.heartbeat_at,
+                c.start_hex,
+                c.end_hex
             FROM chunks c
             WHERE c.status = 'assigned' AND c.puzzle_id = ? AND c.is_test = 0
         `).all(puzzle.id) : [];
 
-        const workerChunkMap = {};
-        const workerRunMap = {};
+        const workerAssignedMap = {};
         for (const c of assignedNow) {
-            workerChunkMap[c.worker_name] = c.id;
-            workerRunMap[c.worker_name] = (c.vchunk_start !== null && c.vchunk_end !== null)
-                ? `${c.vchunk_start}..${c.vchunk_end - 1}`
-                : null;
+            const currentJobKeys =
+                c.start_hex && c.end_hex
+                    ? (BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex)).toString()
+                    : null;
+
+            workerAssignedMap[c.worker_name] = {
+                current_chunk: c.id,
+                current_vchunk_run: (c.vchunk_start !== null && c.vchunk_end !== null)
+                    ? `${c.vchunk_start}..${c.vchunk_end - 1}`
+                    : null,
+                current_vchunk_run_start: c.vchunk_start ?? null,
+                current_vchunk_run_end: c.vchunk_end ?? null, // exclusive
+                assigned_at: c.assigned_at ?? null,
+                heartbeat_at: c.heartbeat_at ?? null,
+                current_job_start_hex: c.start_hex ?? null,
+                current_job_end_hex: c.end_hex ?? null,
+                current_job_keys: currentJobKeys,
+            };
         }
 
-        const workers = visibleWorkers.map(w => ({
-            ...w,
-            fresh: w.fresh === 1,
-            assigned_here: w.assigned_here === 1,
-            active: w.active === 1,
-            current_chunk: workerChunkMap[w.name] ?? null,
-            current_vchunk_run: workerRunMap[w.name] ?? null,
-        }));
+        const workers = visibleWorkers.map(w => {
+            const assigned = workerAssignedMap[w.name] || {};
+            return {
+                ...w,
+                fresh: w.fresh === 1,
+                assigned_here: w.assigned_here === 1,
+                active: w.active === 1,
+                current_chunk: assigned.current_chunk ?? null,
+                current_vchunk_run: assigned.current_vchunk_run ?? null,
+                current_vchunk_run_start: assigned.current_vchunk_run_start ?? null,
+                current_vchunk_run_end: assigned.current_vchunk_run_end ?? null,
+                assigned_at: assigned.assigned_at ?? null,
+                heartbeat_at: assigned.heartbeat_at ?? null,
+                current_job_start_hex: assigned.current_job_start_hex ?? null,
+                current_job_end_hex: assigned.current_job_end_hex ?? null,
+                current_job_keys: assigned.current_job_keys ?? null,
+            };
+        });
 
         let chunks_vis = [];
         if (puzzle) {
@@ -1138,6 +1175,9 @@ function createApp(db) {
 
         res.json({
             stage: process.env.STAGE || 'PROD',
+            target_minutes: TARGET_MINUTES,
+            timeout_minutes: TIMEOUT_MINUTES,
+            active_minutes: ACTIVE_MINUTES,
             puzzles: allPuzzles,
             puzzle: puzzle ? {
                 id: puzzle.id,
@@ -1192,7 +1232,8 @@ function createApp(db) {
         `).run(name);
 
         db.prepare(`
-            UPDATE chunks SET assigned_at = CURRENT_TIMESTAMP
+            UPDATE chunks
+            SET heartbeat_at = CURRENT_TIMESTAMP
             WHERE id = ? AND worker_name = ? AND status = 'assigned'
         `).run(job_id, name);
 
@@ -1450,6 +1491,7 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)").run(); } catch (_) {}
@@ -1595,9 +1637,11 @@ if (require.main === module) {
     setInterval(() => {
         const info = db.prepare(`
             UPDATE chunks
-            SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL
+            SET status = 'reclaimed',
+                prev_worker_name = worker_name,
+                worker_name = NULL
             WHERE status = 'assigned'
-              AND assigned_at < datetime('now', '-${TIMEOUT_MINUTES} minutes')
+              AND COALESCE(heartbeat_at, assigned_at) < datetime('now', '-${TIMEOUT_MINUTES} minutes')
         `).run();
 
         if (info.changes > 0) {

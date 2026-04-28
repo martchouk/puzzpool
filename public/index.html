@@ -1128,6 +1128,40 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             return out;
         }
 
+        function formatIntDots(n) {
+            return formatBigInt(String(n ?? '0'));
+        }
+
+        function formatRunShort(start, endExclusive) {
+            if (start == null || endExclusive == null) return '—';
+            const len = Number(endExclusive) - Number(start);
+            if (!Number.isFinite(len) || len <= 0) return String(start);
+            return `${formatIntDots(start)} + ${formatIntDots(len - 1)}`;
+        }
+
+        function computeWorkerProgressPercent(worker, stats) {
+            if (!worker || !worker.assigned_at || !worker.current_job_keys || !worker.hashrate) return null;
+
+            const assignedMs = new Date(worker.assigned_at + 'Z').getTime();
+            if (!Number.isFinite(assignedMs)) return null;
+
+            const total = Number(worker.current_job_keys);
+            const speed = Number(worker.hashrate);
+            if (!(total > 0) || !(speed > 0)) return null;
+
+            const elapsedSec = Math.max(0, (Date.now() - assignedMs) / 1000);
+            const estimatedDone = elapsedSec * speed;
+            const pct = Math.max(0, Math.min(100, (estimatedDone / total) * 100));
+            return pct;
+        }
+
+        function formatWorkerProgress(worker, stats) {
+            const pct = computeWorkerProgressPercent(worker, stats);
+            if (pct == null || !Number.isFinite(pct)) return '—';
+            const clamped = Math.max(0, Math.min(100, pct));
+            return `${Math.round(clamped)} %`;
+        }
+
         function formatIntegerDots(value) {
             if (value == null || value === '') return '0';
             if (typeof value === 'number' && Number.isFinite(value)) {
@@ -1600,6 +1634,21 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             return `${pct} %`;
         }
 
+        function computeWorkerProgressPercent(worker, stats) {
+            if (!worker.assigned_at || !worker.current_job_keys || !worker.hashrate) return null;
+
+            const assignedMs = new Date(worker.assigned_at + 'Z').getTime();
+            if (!Number.isFinite(assignedMs)) return null;
+
+            const elapsedSec = Math.max(0, (Date.now() - assignedMs) / 1000);
+            const estimatedDone = elapsedSec * Number(worker.hashrate);
+            const total = Number(worker.current_job_keys);
+            if (!(total > 0)) return null;
+
+            const pct = Math.max(0, Math.min(100, (estimatedDone / total) * 100));
+            return pct;
+        }
+
         async function updateDashboard() {
             try {
                 const url = selectedId !== null ? `/api/v1/stats?puzzle_id=${selectedId}` : '/api/v1/stats';
@@ -1685,14 +1734,14 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                             }
                         }
 
-                        const progress = computeWorkerProgress(w, data.puzzle);
+                        const progress = formatWorkerProgress(w, data);
 
                         return `<tr${dim}>
                             <td>${dot}</td>
                             <td class="td-name">${w.name}</td>
                             <td class="td-mono">${w.version || 'unknown'}</td>
                             <td class="td-speed">${formatHashrate(w.hashrate)}</td>
-                            <td class="td-chunks">${w.current_chunk ? '#'+formatIntegerDots(w.current_chunk) : '—'}</td>
+                            <td class="td-chunks">${w.current_chunk != null ? '#'+formatIntegerDots(w.current_chunk) : '—'}</td>
                             <td class="td-chunks">${runDisplay}</td>
                             <td class="td-progress">${progress}</td>
                             <td class="td-time">${fmtUtc(w.last_seen)}</td>
