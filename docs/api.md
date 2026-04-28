@@ -147,6 +147,10 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "virtual_chunk_count": 78706,
     "bootstrap_stage": 3
   },
+  "stage": "PROD",
+  "target_minutes": 10,
+  "timeout_minutes": 15,
+  "active_minutes": 1.167,
   "active_workers_count": 3,
   "inactive_workers_count": 1,
   "total_hashrate": 24500000,
@@ -159,7 +163,17 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "completed": 187
   },
   "workers": [
-    { "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56", "version": "1.2.1", "active": true, "current_chunk": 42, "current_vchunk_run": "223735..223744", "min_chunk_keys": "17045651456", "chunk_quantum_keys": "4261412864" }
+    {
+      "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56",
+      "version": "1.2.1", "active": true,
+      "current_chunk": 42, "current_vchunk_run": "223735..223744",
+      "current_vchunk_run_start": 223735, "current_vchunk_run_end": 223745,
+      "assigned_at": "2024-01-15 12:30:00", "heartbeat_at": "2024-01-15 12:34:30",
+      "current_job_start_hex": "000...06000000000", "current_job_end_hex": "000...060002bf200",
+      "current_job_keys": "900000000",
+      "current_job_elapsed_seconds": 270, "current_job_progress_percent": 24.0,
+      "min_chunk_keys": "17045651456", "chunk_quantum_keys": "4261412864"
+    }
   ],
   "scores": [
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
@@ -181,11 +195,35 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `hashrate` | number | Last reported scan speed in keys/s |
 | `version` | string\|null | Client version string sent via `/work`; null if not reported |
 | `last_seen` | string | UTC timestamp of last `/work` or `/heartbeat` call |
-| `active` | boolean | `true` if last seen within ~1.2 minutes AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
+| `active` | boolean | `true` if last seen within `ACTIVE_MINUTES` AND holds an assigned chunk in this puzzle (green dot); `false` if within `TIMEOUT_MINUTES` grace period but stale or unassigned (gray dot) |
 | `current_chunk` | number\|null | ID of the currently assigned chunk; null if none |
-| `current_vchunk_run` | string\|null | Virtual chunk range of the current job as `"start..end-1"` (e.g. `"223735..223744"`); null if no chunk assigned. |
+| `current_vchunk_run` | string\|null | Virtual chunk range as `"start..end-1"` (e.g. `"223735..223744"`); null if no chunk assigned |
+| `current_vchunk_run_start` | number\|null | First virtual chunk index of the current job; null if no chunk assigned |
+| `current_vchunk_run_end` | number\|null | Exclusive end virtual chunk index of the current job; null if no chunk assigned |
+| `assigned_at` | string\|null | UTC timestamp when the current chunk was assigned; null if no chunk |
+| `heartbeat_at` | string\|null | UTC timestamp of the last heartbeat for the current chunk; null if no chunk |
+| `current_job_start_hex` | string\|null | `start_hex` of the currently assigned chunk; null if no chunk |
+| `current_job_end_hex` | string\|null | `end_hex` of the currently assigned chunk; null if no chunk |
+| `current_job_keys` | string\|null | Size of the current job in keys (decimal integer string); null if no chunk |
+| `current_job_elapsed_seconds` | number\|null | Seconds elapsed since the current chunk was assigned; null if no chunk |
+| `current_job_progress_percent` | number\|null | Estimated scan progress 0–100 based on `hashrate × elapsed / job_keys`; null if no chunk or no hashrate |
 | `min_chunk_keys` | string\|null | Worker's reported minimum job size (decimal integer string); null if not reported |
 | `chunk_quantum_keys` | string\|null | Worker's reported job size quantum (decimal integer string); null if not reported |
+
+**Top-level stats fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `stage` | string | Deployment stage: `"PROD"` or `"TEST"` (from `STAGE` env var) |
+| `target_minutes` | number | Configured chunk target duration in minutes (`TARGET_MINUTES`) |
+| `timeout_minutes` | number | Configured reclaim timeout in minutes (`TIMEOUT_MINUTES`) |
+| `active_minutes` | number | Configured active-worker threshold in minutes (`ACTIVE_MINUTES`) |
+| `active_workers_count` | number | Workers currently active (green) |
+| `inactive_workers_count` | number | Workers visible but not active (gray) |
+| `total_hashrate` | number | Sum of hashrates of active workers |
+| `completed_chunks` | number | Chunks with `status='completed'` or `'FOUND'` (excluding test chunks) |
+| `reclaimed_chunks` | number | Chunks with `status='reclaimed'` |
+| `total_keys_completed` | string | Total keys covered by completed/FOUND chunks (decimal string) |
 
 **`virtual_chunks` field**
 

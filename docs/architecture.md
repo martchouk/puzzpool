@@ -25,6 +25,7 @@ and visualises it on a live dashboard.
                                         │  puzzles    │
                                         │  workers    │
                                         │  chunks     │
+                                        │  sectors    │
                                         │  findings   │
                                         └─────────────┘
 
@@ -61,10 +62,11 @@ and visualises it on a live dashboard.
   Generate random chunk within puzzle range  ──▶  INSERT chunks  ──▶  return {job_id}
 
   Background (every 60 s):
-    chunks WHERE status='assigned' AND assigned_at < NOW()-15min  →  status='reclaimed'
+    chunks WHERE status='assigned'
+      AND COALESCE(heartbeat_at, assigned_at) < NOW()-TIMEOUT_MINUTES  →  status='reclaimed'
 
   /heartbeat:
-    UPDATE chunks SET assigned_at = NOW()  (resets reclaim timer)
+    UPDATE chunks SET heartbeat_at = NOW()  (resets reclaim timer)
 
   /submit status='done':
     UPDATE chunks SET status='completed'
@@ -86,10 +88,13 @@ and visualises it on a live dashboard.
 with ≤100 workers this is simpler and more correct (no async race conditions on chunk
 assignment) than an async driver.
 
-**No frontier cursor** — The `start_hex` for new chunks is chosen randomly within the
-puzzle range, not sequentially from a stored cursor. This means chunks cover the space
-with uniform probability over time and the server can restart without losing position.
-Trade-off: some keyspace may be scanned twice before full coverage.
+**Deterministic affine permutation** — The `virtual_random_chunks_v1` allocator divides
+the keyspace into fixed-size virtual chunks and visits them in a pseudo-random order
+determined by an affine permutation (`i → (a·i + b) mod n`) derived from a SHA-256 seed.
+The `alloc_cursor` in the `puzzles` table advances with each assignment. Every virtual
+chunk is visited exactly once before any chunk is repeated, giving deterministic full
+coverage. The legacy `legacy_random_shards_v1` allocator (sharded sector frontiers) is
+retained for backward compatibility.
 
 **Worker identity by name** — No registration or authentication. Workers are identified
 only by the `name` string they send with each request. Chunk ownership is enforced by
