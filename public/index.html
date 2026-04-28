@@ -673,6 +673,60 @@
             height: 220px;
         }
 
+                .alloc-filter-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .alloc-filter-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .alloc-filter-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-default);
+            border-radius: 999px;
+            padding: 0.25rem;
+        }
+
+        .alloc-filter-btn {
+            appearance: none;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            padding: 0.38rem 0.8rem;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .alloc-filter-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.04);
+        }
+
+        .alloc-filter-btn.active {
+            color: var(--accent-cyan);
+            border-color: rgba(0,255,255,0.28);
+            background: rgba(0,255,255,0.10);
+            box-shadow: 0 0 12px rgba(0,255,255,0.10);
+        }
+
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
         @media (max-width: 900px) {
@@ -809,7 +863,17 @@
 
         <div class="section-title">Allocator Diagnostics</div>
         <div class="heatmap-wrap" id="allocator-diagnostics-wrap">
-            <div id="alloc-generation-summary" class="stat-subtext" style="margin-bottom:0.75rem;">
+            <div class="alloc-filter-row">
+                <div class="alloc-filter-label">Generation</div>
+                <div class="alloc-filter-group" id="alloc-generation-filter">
+                    <button class="alloc-filter-btn active" data-gen="all">All</button>
+                    <button class="alloc-filter-btn" data-gen="legacy">Legacy</button>
+                    <button class="alloc-filter-btn" data-gen="affine">Affine</button>
+                    <button class="alloc-filter-btn" data-gen="feistel">Feistel</button>
+                </div>
+            </div>
+
+            <div style="display:grid; gap:1rem;">
                 Generation counts: —
             </div>
             <div style="display:grid; gap:1rem;">
@@ -1469,6 +1533,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         };
 
         let g_chunks_vis = [];
+        let g_allocGenerationFilter = 'all';
         const MAP_COLS = 512;
         const MAP_ROWS = 128;
         const HILBERT_N = 256;
@@ -1637,10 +1702,17 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         }
 
         function getAllocatorChunks() {
-            return (g_chunks_vis || [])
+            return getFilteredAllocatorChunks()
                 .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
                 .slice()
                 .sort((a, b) => Number(a.id) - Number(b.id));
+        }
+
+        function getFilteredAllocatorChunks() {
+            const chunks = Array.isArray(g_chunks_vis) ? g_chunks_vis : [];
+            if (g_allocGenerationFilter === 'all') return chunks;
+
+            return chunks.filter(c => (c.g || 'legacy') === g_allocGenerationFilter);
         }
 
         function drawAllocatorScatter() {
@@ -1813,6 +1885,50 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             drawAllocatorScatter();
             drawAllocatorGapHistogram();
             drawAllocatorResidueMap();
+        }
+
+        function initAllocatorGenerationFilter() {
+            const root = document.getElementById('alloc-generation-filter');
+            if (!root) return;
+
+            root.querySelectorAll('.alloc-filter-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const next = btn.dataset.gen || 'all';
+                    if (next === g_allocGenerationFilter) return;
+
+                    g_allocGenerationFilter = next;
+
+                    root.querySelectorAll('.alloc-filter-btn').forEach(b => {
+                        b.classList.toggle('active', b.dataset.gen === next);
+                    });
+
+                    drawAllocatorDiagnostics();
+                });
+            });
+        }
+
+        function updateAllocatorGenerationFilterCounts() {
+            const root = document.getElementById('alloc-generation-filter');
+            if (!root) return;
+
+            const counts = { all: 0, legacy: 0, affine: 0, feistel: 0 };
+
+            for (const c of (g_chunks_vis || [])) {
+                counts.all++;
+                const g = c.g || 'legacy';
+                if (counts[g] !== undefined) counts[g]++;
+            }
+
+            root.querySelectorAll('.alloc-filter-btn').forEach(btn => {
+                const gen = btn.dataset.gen || 'all';
+                const base =
+                    gen === 'all' ? 'All' :
+                    gen === 'legacy' ? 'Legacy' :
+                    gen === 'affine' ? 'Affine' :
+                    gen === 'feistel' ? 'Feistel' : gen;
+
+                btn.textContent = `${base} (${counts[gen] || 0})`;
+            });
         }
 
         function getHilbertXY(n, d) {
@@ -2099,6 +2215,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                 }
 
                 g_chunks_vis = data.chunks_vis || [];
+                updateAllocatorGenerationFilterCounts();
                 draw1DBar();
                 drawHeatmap();
                 drawAllocatorDiagnostics();
@@ -2194,6 +2311,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         }
 
         requestAnimationFrame(() => {
+            initAllocatorGenerationFilter();
             updateDashboard();
             setInterval(updateDashboard, 5000);
         });
