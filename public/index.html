@@ -1640,6 +1640,11 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             showTooltip(e, hits);
         });
 
+        document.getElementById('heatmap-canvas').addEventListener('mousemove', () => {
+            tooltip.style.display = 'none';
+        });
+
+        /*
         document.getElementById('heatmap-canvas').addEventListener('mousemove', (e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             const px = e.clientX - rect.left;
@@ -1655,7 +1660,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
 
             const hits = g_chunks_vis.filter(c => c.s <= cell_e && c.e >= cell_s);
             showTooltip(e, hits);
-        });
+        });*/
 
         document.getElementById('hilbert-canvas').addEventListener('mousemove', (e) => {
             const rect = e.currentTarget.getBoundingClientRect();

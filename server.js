@@ -46,6 +46,8 @@ const MAX_ALLOC_PROBES = parseInt(process.env.MAX_ALLOC_PROBES || '8192', 10);
 // GPU batch size kept for admin test-chunk default
 const GPU_BATCH_KEYS = 4278190080n;
 
+const PERMUTATION_MODE = process.env.PERMUTATION_MODE || 'feistel';
+
 // --- Pure helpers ---
 
 function isValidHex(s) {
@@ -76,6 +78,10 @@ function sha256Hex(s) {
     return crypto.createHash('sha256').update(String(s)).digest('hex');
 }
 
+function hmacSha256Hex(key, msg) {
+    return crypto.createHmac('sha256', String(key)).update(String(msg)).digest('hex');
+}
+
 function bigIntMin(a, b) {
     return a < b ? a : b;
 }
@@ -87,6 +93,67 @@ function bigIntMax(a, b) {
 function ceilDiv(a, b) {
     return (a + b - 1n) / b;
 }
+
+function bitLengthBigInt(n) {
+    let x = n < 0n ? -n : n;
+    let bits = 0;
+    while (x > 0n) {
+        x >>= 1n;
+        bits++;
+    }
+    return bits;
+}
+
+function nextEven(n) {
+    return (n % 2 === 0) ? n : (n + 1);
+}
+
+function feistelRoundValue(right, roundKey, mask) {
+    const hex = hmacSha256Hex(roundKey, right.toString());
+    return BigInt('0x' + hex) & mask;
+}
+
+function permutePow2Feistel(x, bits, key) {
+    const halfBits = bits / 2;
+    const halfMask = (1n << BigInt(halfBits)) - 1n;
+
+    let left  = (x >> BigInt(halfBits)) & halfMask;
+    let right = x & halfMask;
+
+    const ROUNDS = 6;
+
+    for (let round = 0; round < ROUNDS; round++) {
+        const f = feistelRoundValue(
+            right,
+            `${key}:round:${round}`,
+            halfMask
+        );
+        const newLeft = right;
+        const newRight = (left ^ f) & halfMask;
+        left = newLeft;
+        right = newRight;
+    }
+
+    return ((left & halfMask) << BigInt(halfBits)) | (right & halfMask);
+}
+
+function permuteIndexFeistel(orderIndex, n, key) {
+    if (n <= 1n) return 0n;
+    if (orderIndex < 0n || orderIndex >= n) {
+        throw new Error(`permuteIndexFeistel: orderIndex ${orderIndex.toString()} out of range for n=${n.toString()}`);
+    }
+
+    const bits = nextEven(Math.max(1, bitLengthBigInt(n - 1n)));
+    let x = orderIndex;
+
+    // Cycle walking on the enclosing power-of-two domain.
+    for (;;) {
+        x = permutePow2Feistel(x, bits, key);
+        if (x < n) return x;
+    }
+}
+
+
 
 function roundUpToQuantum(value, quantum) {
     if (quantum <= 1n) return value;
@@ -610,16 +677,27 @@ function createApp(db) {
             stmtBootstrapStageSet.run(stage + 1, currentPuzzle.id);
         }
 
-        const seed = currentPuzzle.alloc_seed || defaultAllocSeedForPuzzle(currentPuzzle, ALLOC_STRATEGY_VCHUNKS);
-        const { a, b } = deriveAffinePermutationParams(seed, totalChunksBig);
+        const permKey = currentPuzzle.alloc_seed || defaultAllocSeedForPuzzle(currentPuzzle, ALLOC_STRATEGY_VCHUNKS);
         const rawCursorBig = BigInt(currentPuzzle.alloc_cursor || 0);
         const probeLimit = Math.min(totalChunks, MAX_ALLOC_PROBES);
+
+        let a = null;
+        let b = null;
+        if (PERMUTATION_MODE === 'affine') {
+            const affine = deriveAffinePermutationParams(permKey, totalChunksBig);
+            a = affine.a;
+            b = affine.b;
+        }
 
         // Full-size search first.
         let triedStarts = new Set();
         for (let offset = 0; offset < probeLimit; offset++) {
             const orderIndex = (rawCursorBig + BigInt(offset)) % totalChunksBig;
-            const candidateIndex = Number(permuteIndexAffine(orderIndex, totalChunksBig, a, b));
+            const candidateIndex = Number(
+                PERMUTATION_MODE === 'affine'
+                    ? permuteIndexAffine(orderIndex, totalChunksBig, a, b)
+                    : permuteIndexFeistel(orderIndex, totalChunksBig, permKey)
+            );
             const runStart = normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks);
 
             if (triedStarts.has(runStart)) continue;
@@ -631,7 +709,7 @@ function createApp(db) {
 
                 const result = assignVirtualChunkRun(name, currentPuzzle, runStart, neededChunks);
                 console.log(
-                    `[Alloc] affine full-run -> assigned ${name} ` +
+                    `[Alloc] ${PERMUTATION_MODE} full-run -> assigned ${name} ` +
                     `vchunks ${result.vchunkStart}..${result.vchunkEnd - 1} ` +
                     `(${result.startHex} .. ${result.endHex})`
                 );
@@ -646,7 +724,11 @@ function createApp(db) {
 
             for (let offset = 0; offset < probeLimit; offset++) {
                 const orderIndex = (rawCursorBig + BigInt(offset)) % totalChunksBig;
-                const candidateIndex = Number(permuteIndexAffine(orderIndex, totalChunksBig, a, b));
+                const candidateIndex = Number(
+                    PERMUTATION_MODE === 'affine'
+                        ? permuteIndexAffine(orderIndex, totalChunksBig, a, b)
+                        : permuteIndexFeistel(orderIndex, totalChunksBig, permKey)
+                );
                 const runStart = normalizeRunStartForCandidate(candidateIndex, fallback, totalChunks);
 
                 if (triedStarts.has(runStart)) continue;
@@ -658,7 +740,7 @@ function createApp(db) {
 
                     const result = assignVirtualChunkRun(name, currentPuzzle, runStart, fallback);
                     console.log(
-                        `[Alloc] affine fallback -> assigned ${name} ` +
+                        `[Alloc] ${PERMUTATION_MODE} fallback -> assigned ${name} ` +
                         `vchunks ${result.vchunkStart}..${result.vchunkEnd - 1} ` +
                         `(${result.startHex} .. ${result.endHex})`
                     );
