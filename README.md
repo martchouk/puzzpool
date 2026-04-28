@@ -58,13 +58,14 @@ design decisions.
 
 ## Database Schema
 
-Four tables — all created automatically on first run.
+Five tables — all created automatically on first run.
 
 | Table | Purpose |
 |-------|---------|
-| `puzzles` | Puzzle definitions (keyspace range, active flag, test chunk) |
+| `puzzles` | Puzzle definitions (keyspace range, allocator config, test chunk) |
 | `workers` | Registered workers (name, hashrate, version, last seen) |
 | `chunks` | Work units (assigned / completed / reclaimed / FOUND) |
+| `sectors` | Sharded keyspace frontiers (legacy allocator) |
 | `findings` | Audit log of discovered private keys |
 
 See [docs/database.md](docs/database.md) for full schema, ER diagram, and migration notes.
@@ -102,6 +103,8 @@ cp .env.example .env
 | `DB_PATH` | `pool.db` | SQLite database file path |
 | `TARGET_MINUTES` | `5` | Expected time to complete one chunk |
 | `TIMEOUT_MINUTES` | `15` | Minutes before an inactive chunk is reclaimed |
+| `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
+| `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
 | `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
 | `KEYSPACE_<NAME>` | *(unset)* | Seed a keyspace on startup: `KEYSPACE_ALL_BTC=<start_hex>:<end_hex>`. Underscores in the variable name become spaces in the puzzle name. Multiple variables are supported. |
 

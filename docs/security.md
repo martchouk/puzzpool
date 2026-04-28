@@ -14,7 +14,7 @@ financial transactions in the application layer. The primary security concerns a
 
 ## Admin Route Protection
 
-**Risk:** The three admin endpoints (`/api/v1/admin/*`) can change the active puzzle,
+**Risk:** The four admin endpoints (`/api/v1/admin/*`) can change the active puzzle,
 inject test chunks, and read all puzzle state. If left unprotected, any internet user
 could redirect the pool to a different puzzle.
 
@@ -76,7 +76,8 @@ small keyspace region.
 | `name` | Presence check; no length limit (cosmetic) |
 | `start_hex`, `end_hex` | `isValidHex()` — must match `/^(0x)?[0-9a-fA-F]+$/` |
 | `job_id` | Used directly in parameterised SQL — no injection risk |
-| `found_key`, `found_address` | Stored as-is; no format validation (by design) |
+| `found_key` | Validated as a hex string; rejected if malformed |
+| `found_address` | Stored as-is; no format validation (by design) |
 
 All database queries use **parameterised statements** (`db.prepare(...).run(params)`).
 SQL injection is not possible.

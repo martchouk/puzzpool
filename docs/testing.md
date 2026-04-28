@@ -21,7 +21,7 @@ No network or file I/O — safe to run in CI.
 | POST /submit done | Chunk status → `completed` |
 | POST /submit FOUND | Chunk status → `FOUND`; row inserted in `findings` |
 | POST /submit wrong worker | Update is no-op (ownership check) |
-| POST /heartbeat | `assigned_at` reset; worker `last_seen` updated |
+| POST /heartbeat | `heartbeat_at` reset; worker `last_seen` updated |
 | POST /heartbeat missing fields | Returns 400 |
 | GET /stats | Returns expected shape; `total_keys_completed` matches submitted chunks |
 | GET /stats no puzzle | Returns `puzzle: null` |
@@ -61,10 +61,10 @@ curl -s -X POST $BASE_URL/api/v1/heartbeat \
   -H 'Content-Type: application/json' \
   -d '{"name":"testworker","job_id":1}' | jq .
 
-# 3. Submit completion
+# 3. Submit completion (keys_scanned is required)
 curl -s -X POST $BASE_URL/api/v1/submit \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker","job_id":1,"status":"done"}' | jq .
+  -d '{"name":"testworker","job_id":1,"status":"done","keys_scanned":500000000}' | jq .
 
 # 4. Verify stats updated
 curl -s $BASE_URL/api/v1/stats | jq '.completed_chunks, .total_keys_completed'
@@ -98,8 +98,12 @@ curl -s -X POST $BASE_URL/api/v1/submit \
     "name":"testworker",
     "job_id":1,
     "status":"FOUND",
-    "found_key":"0000000000000000000000000000000000000000000000000000000000000042",
-    "found_address":"1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf"
+    "findings": [
+      {
+        "found_key":"0000000000000000000000000000000000000000000000000000000000000042",
+        "found_address":"1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf"
+      }
+    ]
   }' | jq .
 
 # Verify it appears in stats
