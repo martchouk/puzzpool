@@ -1455,37 +1455,75 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             }
         }
 
+        function hash32Mix(a, b = 0, c = 0, d = 0) {
+            let x = (a | 0) ^ 0x9e3779b9;
+            x = Math.imul(x ^ (b | 0), 0x85ebca6b);
+            x = Math.imul(x ^ (c | 0), 0xc2b2ae35);
+            x = Math.imul(x ^ (d | 0), 0x27d4eb2f);
+            x ^= x >>> 15;
+            x = Math.imul(x, 0x85ebca6b);
+            x ^= x >>> 13;
+            x = Math.imul(x, 0xc2b2ae35);
+            x ^= x >>> 16;
+            return x >>> 0;
+        }
+
+        function chunkHashPoint(c, totalCells) {
+            const id = Number.isFinite(Number(c.id)) ? Number(c.id) : 0;
+
+            const sScaled = Number.isFinite(c.s) ? Math.floor(c.s * 0x7fffffff) : 0;
+            const eScaled = Number.isFinite(c.e) ? Math.floor(c.e * 0x7fffffff) : 0;
+
+            const h1 = hash32Mix(id, sScaled, eScaled, 0x1234abcd);
+            const h2 = hash32Mix(id, eScaled, sScaled, 0x9e3779b9);
+
+            return {
+                index: h1 % totalCells,
+                sizeJitter: h2
+            };
+        }
+
         function drawHeatmap() {
             const canvas = document.getElementById('heatmap-canvas');
             const W = canvas.offsetWidth, H = canvas.offsetHeight;
             if (W === 0 || H === 0) return;
-            canvas.width = W; canvas.height = H;
-            const ctx = canvas.getContext('2d');
 
+            canvas.width = W;
+            canvas.height = H;
+
+            const ctx = canvas.getContext('2d');
             const totalCells = MAP_COLS * MAP_ROWS;
             const cellW = W / MAP_COLS;
             const cellH = H / MAP_ROWS;
 
             ctx.fillStyle = '#0a0a0a';
             ctx.fillRect(0, 0, W, H);
-            ctx.globalCompositeOperation = "lighter";
+            ctx.globalCompositeOperation = 'lighter';
 
             const order = ['reclaimed', 'assigned', 'completed', 'FOUND'];
+
             for (const status of order) {
                 ctx.fillStyle = CHUNK_GLOW_COLORS[status];
+
                 for (const c of g_chunks_vis) {
                     if (c.st !== status) continue;
-                    const index = Math.floor(c.s * totalCells);
+
+                    const hp = chunkHashPoint(c, totalCells);
+                    const index = hp.index;
+
                     const x = (index % MAP_COLS) * cellW;
                     const y = Math.floor(index / MAP_COLS) * cellH;
 
+                    const rBase = Math.min(4, Math.max(1.5, cellW * 1.2));
+                    const r = rBase * (0.85 + ((hp.sizeJitter & 0xff) / 255) * 0.4);
+
                     ctx.beginPath();
-                    ctx.arc(x + cellW/2, y + cellH/2, Math.min(4, Math.max(1.5, cellW * 1.2)), 0, Math.PI * 2);
+                    ctx.arc(x + cellW / 2, y + cellH / 2, r, 0, Math.PI * 2);
                     ctx.fill();
                 }
             }
 
-            ctx.globalCompositeOperation = "source-over";
+            ctx.globalCompositeOperation = 'source-over';
         }
 
         function getHilbertXY(n, d) {
