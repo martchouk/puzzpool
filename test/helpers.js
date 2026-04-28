@@ -47,6 +47,7 @@ function createTestDb() {
             worker_name TEXT,
             prev_worker_name TEXT,
             assigned_at DATETIME,
+            heartbeat_at DATETIME,
             found_key TEXT,
             found_address TEXT,
             is_test INTEGER NOT NULL DEFAULT 0,

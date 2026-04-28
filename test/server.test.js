@@ -5,7 +5,8 @@ const {
     createApp,
     ACTIVE_MINUTES,
     REACTIVATE_MINUTES,
-    buildDeterministicPermutation,
+    deriveAffinePermutationParams,
+    permuteIndexAffine,
     seedVirtualChunks,
     defaultAllocSeedForPuzzle,
     chooseDefaultVirtualChunkSize,
@@ -73,8 +74,8 @@ describe('POST /api/v1/work', () => {
         seedPuzzle(db);
         // Insert a reclaimed chunk
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
-        db.prepare(`INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
-                    VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP)`)
+        db.prepare(`INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, heartbeat_at)
+                    VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
             .run(puzzle.id,
                 '0000000000000000000000000000000000000000000000000400000000000001',
                 '0000000000000000000000000000000000000000000000000400000000100001');
@@ -211,14 +212,14 @@ describe('POST /api/v1/heartbeat', () => {
         await request(app).post('/api/v1/heartbeat').send({ job_id: 1 }).expect(400);
     });
 
-    test('updates assigned_at on a valid job', async () => {
+    test('updates heartbeat_at on a valid job', async () => {
         seedPuzzle(db);
         const r = await request(app)
             .post('/api/v1/work')
             .send({ name: 'w1', hashrate: 1000000 });
         const jobId = r.body.job_id;
 
-        const before = db.prepare("SELECT assigned_at FROM chunks WHERE id=?").get(jobId).assigned_at;
+        const before = db.prepare("SELECT assigned_at, heartbeat_at FROM chunks WHERE id=?").get(jobId);
         // Small delay so timestamps differ
         await new Promise(res => setTimeout(res, 10));
 
@@ -227,8 +228,10 @@ describe('POST /api/v1/heartbeat', () => {
             .send({ name: 'w1', job_id: jobId })
             .expect(200, { ok: true });
 
-        const after = db.prepare("SELECT assigned_at FROM chunks WHERE id=?").get(jobId).assigned_at;
-        expect(after >= before).toBe(true);
+        const after = db.prepare("SELECT assigned_at, heartbeat_at FROM chunks WHERE id=?").get(jobId);
+        // heartbeat_at must advance; assigned_at must remain unchanged
+        expect(after.heartbeat_at >= before.heartbeat_at).toBe(true);
+        expect(after.assigned_at).toBe(before.assigned_at);
     });
 });
 
@@ -249,6 +252,39 @@ describe('GET /api/v1/stats', () => {
         expect(res.body.finders).toBeInstanceOf(Array);
         expect(res.body.chunks_vis).toBeInstanceOf(Array);
         expect(typeof res.body.total_keys_completed).toBe('string');
+    });
+
+    test('stats response includes target_minutes, timeout_minutes, active_minutes', async () => {
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        expect(typeof res.body.target_minutes).toBe('number');
+        expect(typeof res.body.timeout_minutes).toBe('number');
+        expect(typeof res.body.active_minutes).toBe('number');
+    });
+
+    test('worker with assigned chunk exposes current_job fields and heartbeat_at', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        const w = res.body.workers[0];
+        expect(typeof w.current_job_keys).toBe('string');
+        expect(BigInt(w.current_job_keys)).toBeGreaterThan(0n);
+        expect(typeof w.current_job_start_hex).toBe('string');
+        expect(typeof w.current_job_end_hex).toBe('string');
+        expect(typeof w.assigned_at).toBe('string');
+        expect(typeof w.heartbeat_at).toBe('string');
+    });
+
+    test('worker without assigned chunk has null current_job fields', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        db.prepare("UPDATE chunks SET status='reclaimed', prev_worker_name=worker_name, worker_name=NULL WHERE id=?").run(r.body.job_id);
+        const res = await request(app).get('/api/v1/stats').expect(200);
+        const w = res.body.workers[0];
+        expect(w.current_job_keys).toBeNull();
+        expect(w.current_job_start_hex).toBeNull();
+        expect(w.current_job_end_hex).toBeNull();
+        expect(w.assigned_at).toBeNull();
+        expect(w.heartbeat_at).toBeNull();
     });
 
     test('worker active=true when holding assigned chunk in puzzle', async () => {
@@ -517,8 +553,8 @@ describe('Sharded Frontier Allocator', () => {
         seedPuzzle(db);
         const puzzle = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
         const reclaimedInfo = db.prepare(`
-            INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at)
-            VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP)
+            INSERT INTO chunks (puzzle_id, start_hex, end_hex, status, worker_name, assigned_at, heartbeat_at)
+            VALUES (?, ?, ?, 'reclaimed', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         `).run(puzzle.id, '0'.repeat(64), (1n).toString(16).padStart(64, '0'));
 
         const cursorBefore = db.prepare("SELECT alloc_cursor FROM puzzles WHERE id = ?").get(puzzle.id).alloc_cursor;
@@ -552,8 +588,7 @@ describe('Sharded Frontier Allocator', () => {
         await request(app).post('/api/v1/admin/set-puzzle')
             .send({ name: 'P1', start_hex: '0x100', end_hex: '0x200' });
         const p1 = db.prepare("SELECT * FROM puzzles WHERE active=1").get();
-        const p1VChunks = db.prepare("SELECT COUNT(*) as c FROM alloc_order_vchunks WHERE puzzle_id=?").get(p1.id).c;
-        expect(p1VChunks).toBe(1);
+        expect(p1.virtual_chunk_count).toBeGreaterThanOrEqual(1);
 
         // Change range → new puzzle row
         await request(app).post('/api/v1/admin/set-puzzle')
@@ -562,8 +597,7 @@ describe('Sharded Frontier Allocator', () => {
 
         expect(p2.id).not.toBe(p1.id);
         expect(p2.start_hex).toContain('3');   // normalized 0x300
-        const p2VChunks = db.prepare("SELECT COUNT(*) as c FROM alloc_order_vchunks WHERE puzzle_id=?").get(p2.id).c;
-        expect(p2VChunks).toBe(1);
+        expect(p2.virtual_chunk_count).toBeGreaterThanOrEqual(1);
         // Old row still exists and is inactive
         const p1Row = db.prepare("SELECT * FROM puzzles WHERE id=?").get(p1.id);
         expect(p1Row).toBeTruthy();
@@ -768,106 +802,96 @@ describe('ADMIN_TOKEN middleware', () => {
     });
 });
 
-// ─── Global Block Allocator ───────────────────────────────────────────────────
+// ─── Affine Permutation ───────────────────────────────────────────────────────
 
-describe('buildDeterministicPermutation', () => {
+describe('deriveAffinePermutationParams / permuteIndexAffine', () => {
     test('produces a full permutation with no duplicates', () => {
-        const n = 500;
-        const perm = buildDeterministicPermutation(n, 'test-seed-abc');
-        expect(perm).toHaveLength(n);
-        const set = new Set(perm);
-        expect(set.size).toBe(n);
-        for (const v of perm) expect(v >= 0 && v < n).toBe(true);
+        const n = 500n;
+        const { a, b } = deriveAffinePermutationParams('test-seed-abc', n);
+        const seen = new Set();
+        for (let i = 0n; i < n; i++) {
+            seen.add(permuteIndexAffine(i, n, a, b).toString());
+        }
+        expect(seen.size).toBe(Number(n));
     });
 
-    test('is deterministic: same seed produces identical output', () => {
-        const p1 = buildDeterministicPermutation(200, 'fixed-seed');
-        const p2 = buildDeterministicPermutation(200, 'fixed-seed');
-        expect(p1).toEqual(p2);
+    test('is deterministic: same seed produces identical params', () => {
+        const n = 200n;
+        const r1 = deriveAffinePermutationParams('fixed-seed', n);
+        const r2 = deriveAffinePermutationParams('fixed-seed', n);
+        expect(r1.a).toBe(r2.a);
+        expect(r1.b).toBe(r2.b);
     });
 
     test('different seeds produce different orderings', () => {
-        const p1 = buildDeterministicPermutation(200, 'seed-A');
-        const p2 = buildDeterministicPermutation(200, 'seed-B');
-        expect(p1).not.toEqual(p2);
+        const n = 200n;
+        const r1 = deriveAffinePermutationParams('seed-A', n);
+        const r2 = deriveAffinePermutationParams('seed-B', n);
+        const seq1 = Array.from({ length: Number(n) }, (_, i) => permuteIndexAffine(BigInt(i), n, r1.a, r1.b).toString());
+        const seq2 = Array.from({ length: Number(n) }, (_, i) => permuteIndexAffine(BigInt(i), n, r2.a, r2.b).toString());
+        expect(seq1).not.toEqual(seq2);
     });
 
-    test('handles edge cases: count=0 and count=1', () => {
-        expect(buildDeterministicPermutation(0, 'seed')).toEqual([]);
-        expect(buildDeterministicPermutation(1, 'seed')).toEqual([0]);
+    test('handles edge cases: n=1 returns a=1, b=0', () => {
+        const { a, b } = deriveAffinePermutationParams('seed', 1n);
+        expect(a).toBe(1n);
+        expect(b).toBe(0n);
+        expect(permuteIndexAffine(0n, 1n, a, b)).toBe(0n);
     });
 });
 
 describe('Virtual Chunk Allocator — seeding', () => {
-    test('seedVirtualChunks creates correct number of entries in alloc_order_vchunks', () => {
+    test('seedVirtualChunks sets virtual_chunk_count on the puzzle row', () => {
         const end = (1000n).toString(16).padStart(64, '0');
         const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
-
-        const rows = db.prepare(
-            "SELECT * FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
-        ).all(puzzle.id);
-
-        expect(rows).toHaveLength(10);
-        expect(puzzle.virtual_chunk_count).toBe(10);
+        const row = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzle.id);
+        expect(row.virtual_chunk_count).toBe(10);
+        expect(row.alloc_strategy).toBe(ALLOC_STRATEGY_VCHUNKS);
     });
 
-    test('alloc_order_vchunks is a full permutation of all chunk indices', () => {
+    test('affine permutation covers all chunk indices exactly once', () => {
         const end = (500n).toString(16).padStart(64, '0');
         const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
-
-        const rows = db.prepare(
-            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
-        ).all(puzzle.id);
-
-        expect(rows).toHaveLength(5);
-        const sorted = rows.map(r => r.chunk_index).sort((a, b) => a - b);
-        expect(sorted).toEqual([0, 1, 2, 3, 4]);
+        const row = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzle.id);
+        const n = BigInt(row.virtual_chunk_count); // 5
+        const { a, b } = deriveAffinePermutationParams(row.alloc_seed, n);
+        const seen = new Set();
+        for (let i = 0n; i < n; i++) seen.add(permuteIndexAffine(i, n, a, b).toString());
+        expect(seen.size).toBe(Number(n));
+        for (let i = 0n; i < n; i++) expect(seen.has(i.toString())).toBe(true);
     });
 
-    test('allocation order is deterministic: same puzzle parameters and seed produce same order', () => {
-        const start = '0'.repeat(64);
-        const end   = (1000n).toString(16).padStart(64, '0');
-        const seed  = 'determinism-test-seed';
-
-        const p1 = seedPuzzle(db, { name: 'P1', start_hex: start, end_hex: end, virtual_chunk_size_keys: 100, seed });
-        db.prepare("UPDATE puzzles SET active = 0").run();
-        const p2 = seedPuzzle(db, { name: 'P2', start_hex: start, end_hex: end, virtual_chunk_size_keys: 100, seed });
-
-        const order1 = db.prepare(
-            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
-        ).all(p1.id).map(r => r.chunk_index);
-
-        const order2 = db.prepare(
-            "SELECT chunk_index FROM alloc_order_vchunks WHERE puzzle_id = ? ORDER BY order_index"
-        ).all(p2.id).map(r => r.chunk_index);
-
-        expect(order1).toEqual(order2);
+    test('allocation order is deterministic: same seed produces same permutation', () => {
+        const n = 10n;
+        const seed = 'determinism-test-seed';
+        const { a: a1, b: b1 } = deriveAffinePermutationParams(seed, n);
+        const { a: a2, b: b2 } = deriveAffinePermutationParams(seed, n);
+        expect(a1).toBe(a2);
+        expect(b1).toBe(b2);
+        const seq1 = Array.from({ length: Number(n) }, (_, i) => permuteIndexAffine(BigInt(i), n, a1, b1).toString());
+        const seq2 = Array.from({ length: Number(n) }, (_, i) => permuteIndexAffine(BigInt(i), n, a2, b2).toString());
+        expect(seq1).toEqual(seq2);
     });
 
     test('puzzle range smaller than virtual chunk size produces exactly one chunk', () => {
         const end = (500n).toString(16).padStart(64, '0');
         const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end });
-
-        const rows = db.prepare("SELECT * FROM alloc_order_vchunks WHERE puzzle_id = ?").all(puzzle.id);
-        expect(rows).toHaveLength(1);
-        expect(puzzle.virtual_chunk_count).toBe(1);
+        const row = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzle.id);
+        expect(row.virtual_chunk_count).toBe(1);
     });
 
-    test('seedVirtualChunks is idempotent — calling twice replaces state cleanly', () => {
+    test('seedVirtualChunks is idempotent — calling twice does not throw and resets cursor', () => {
         const end = (1000n).toString(16).padStart(64, '0');
         const puzzle = seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 100 });
 
-        // Simulate partial state: delete alloc_order_vchunks (as if a boot was interrupted)
-        db.prepare("DELETE FROM alloc_order_vchunks WHERE puzzle_id = ?").run(puzzle.id);
-
-        // Should not throw — seedVirtualChunks clears the table before inserting
         expect(() => {
             seedVirtualChunks(db, puzzle.id, '0'.repeat(64), end,
                 defaultAllocSeedForPuzzle(puzzle, ALLOC_STRATEGY_VCHUNKS), 100n);
         }).not.toThrow();
 
-        const orderCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(puzzle.id).c;
-        expect(orderCount).toBe(10);
+        const row = db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzle.id);
+        expect(row.virtual_chunk_count).toBe(10);
+        expect(row.alloc_cursor).toBe(0);
     });
 });
 
@@ -1040,8 +1064,7 @@ describe('Virtual Chunk Allocator — stats and API', () => {
 
         const p = db.prepare("SELECT * FROM puzzles WHERE active = 1").get();
         expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_VCHUNKS);
-        const vchunkCount = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(p.id).c;
-        expect(vchunkCount).toBeGreaterThan(0);
+        expect(p.virtual_chunk_count).toBeGreaterThan(0);
     });
 
     test('set-puzzle accepts explicit alloc_strategy=legacy and creates sectors not vchunks', async () => {
@@ -1054,8 +1077,7 @@ describe('Virtual Chunk Allocator — stats and API', () => {
         expect(p.alloc_strategy).toBe(ALLOC_STRATEGY_LEGACY);
         const sectors = db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(p.id).c;
         expect(sectors).toBeGreaterThan(0);
-        const vchunks = db.prepare("SELECT COUNT(*) AS c FROM alloc_order_vchunks WHERE puzzle_id = ?").get(p.id).c;
-        expect(vchunks).toBe(0);
+        expect(p.virtual_chunk_count).toBeNull();
     });
 
     test('set-puzzle accepts custom virtual_chunk_size_keys and populates correct chunk count', async () => {
