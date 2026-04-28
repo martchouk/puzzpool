@@ -181,10 +181,21 @@ function computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKey
     return roundUpToQuantum(raw, quantum);
 }
 
+function parseUtcDateMs(value) {
+    if (!value || typeof value !== 'string') return null;
+    let s = value.trim();
+    if (!s) return null;
+    if (!s.includes('T')) s = s.replace(' ', 'T');
+    if (!/[zZ]$|[+\-]\d{2}:\d{2}$/.test(s)) s += 'Z';
+    const ms = Date.parse(s);
+    return Number.isFinite(ms) ? ms : null;
+}
+
 function computeWorkerProgressPercent(assignedAt, hashrate, jobKeys) {
     if (!assignedAt || !hashrate || !jobKeys) return null;
-    const isoString = assignedAt.includes('T') ? assignedAt : assignedAt.replace(' ', 'T') + 'Z';
-    const elapsedSeconds = (Date.now() - new Date(isoString).getTime()) / 1000;
+    const assignedMs = parseUtcDateMs(assignedAt);
+    if (assignedMs === null) return null;
+    const elapsedSeconds = (Date.now() - assignedMs) / 1000;
     if (elapsedSeconds < 0) return null;
     const jobKeysBig = typeof jobKeys === 'string' ? BigInt(jobKeys) : BigInt(Math.round(Number(jobKeys)));
     if (jobKeysBig === 0n) return null;
@@ -738,6 +749,9 @@ function createApp(db) {
             LIMIT 1
         `).get(name, puzzle.id);
         if (existing) {
+            // Strict liveness model: only POST /heartbeat resets the reclaim timer.
+            // A repeated /work call for an already-assigned chunk re-issues the job_id
+            // but does NOT update heartbeat_at. Workers must call /heartbeat to stay alive.
             return res.json({ job_id: existing.id, start_key: existing.start_hex, end_key: existing.end_hex });
         }
 
@@ -1079,9 +1093,8 @@ function createApp(db) {
                 c.start_hex && c.end_hex
                     ? (BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex)).toString()
                     : null;
-            const elapsedSeconds = c.assigned_at
-                ? Math.max(0, (Date.now() - new Date(c.assigned_at.includes('T') ? c.assigned_at : c.assigned_at.replace(' ', 'T') + 'Z').getTime()) / 1000)
-                : null;
+            const assignedMs = parseUtcDateMs(c.assigned_at);
+            const elapsedSeconds = assignedMs !== null ? Math.max(0, (Date.now() - assignedMs) / 1000) : null;
 
             workerAssignedMap[c.worker_name] = {
                 current_chunk: c.id,
