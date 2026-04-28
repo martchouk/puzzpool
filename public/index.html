@@ -643,30 +643,35 @@
             width: 100%;
         }
 
+        .progress-wrap {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
         .progress-bar {
             flex: 1 1 auto;
-            height: 8px;               /* about 2 mm on most screens */
+            min-width: 0;
+            height: 8px;
             background: var(--text-secondary);
             opacity: 0.35;
             border-radius: 999px;
             overflow: hidden;
-            position: relative;
         }
 
         .progress-bar-fill {
             height: 100%;
             border-radius: 999px;
-            transition: width 0.3s ease;
-            min-width: 0;
         }
 
         .progress-label {
-            flex: 0 0 auto;
+            flex: 0 0 44px;   /* fixed width */
+            text-align: right;
             font-family: var(--font-mono);
-            font-size: 0.8rem;
-            font-weight: 600;
+            font-size: 0.78rem;
             white-space: nowrap;
-        }    
+        } 
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
@@ -1213,11 +1218,11 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             }
 
             return `
-                <div class="progress-cell">
-                    <div class="progress-bar">
-                        <div class="progress-bar-fill" style="width:${clamped}%; background:${color};"></div>
-                    </div>
-                    <span class="progress-label" style="color:${color};">${rounded}%</span>
+                <div class="progress-wrap">
+                  <div class="progress-bar">
+                    <div class="progress-bar-fill" style="width: ${rounded}%; background:${color};"></div>
+                  </div>
+                  <span class="progress-label" style="color:${color};">${rounded}%</span>
                 </div>
             `;
         }
