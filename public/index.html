@@ -773,8 +773,9 @@
                         <th>Worker</th>
                         <th>Version</th>
                         <th>Speed</th>
-                        <th>Chunk</th>
-                        <th>Virtual Chunk Run</th>
+                        <th>Job</th>
+                        <th>Start Chunk</th>
+                        <th>Chunks</th>
                         <th>Progress</th>
                         <th>Last Seen</th>
                     </tr>
@@ -1813,25 +1814,35 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
 
                 const tbody = document.getElementById('worker-list');
                 if ((data.workers || []).length === 0) {
-                    tbody.innerHTML = emptyRow(8, 'No visible workers');
+                    tbody.innerHTML = emptyRow(9, 'No visible workers');
                 } else {
                     tbody.innerHTML = data.workers.map(w => {
                         const dim = w.active ? '' : ' class="worker-dim"';
                         const dot = `<span class="worker-dot ${w.active ? 'worker-dot-on' : 'worker-dot-off'}"></span>`;
 
-                        let runDisplay = '—';
+                        let runStart = '—';
+                        let runCount = '—';
                         if (w.current_vchunk_run_start != null && w.current_vchunk_run_end != null) {
-                            runDisplay = formatRunCompact(w.current_vchunk_run_start, w.current_vchunk_run_end);
+                            const s = Number(w.current_vchunk_run_start);
+                            const e = Number(w.current_vchunk_run_end);
+                            if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+                                runStart = formatIntegerDots(s);
+                                runCount = formatIntegerDots(e - s);
+                            }
                         } else if (w.current_vchunk_start != null && w.current_vchunk_end != null) {
-                            runDisplay = formatRunCompact(w.current_vchunk_start, w.current_vchunk_end);
+                            const s = Number(w.current_vchunk_start);
+                            const e = Number(w.current_vchunk_end);
+                            if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+                                runStart = formatIntegerDots(s);
+                                runCount = formatIntegerDots(e - s);
+                            }
                         } else if (typeof w.current_vchunk_run === 'string') {
                             const m = w.current_vchunk_run.match(/^(\d+)\.\.(\d+)$/);
                             if (m) {
-                                const start = Number(m[1]);
+                                const s = Number(m[1]);
                                 const endInclusive = Number(m[2]);
-                                runDisplay = formatRunCompact(start, endInclusive + 1);
-                            } else {
-                                runDisplay = w.current_vchunk_run || '—';
+                                runStart = formatIntegerDots(s);
+                                runCount = formatIntegerDots(endInclusive - s + 1);
                             }
                         }
 
@@ -1843,7 +1854,8 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                             <td class="td-mono">${w.version || 'unknown'}</td>
                             <td class="td-speed">${formatHashrate(w.hashrate)}</td>
                             <td class="td-chunks">${w.current_chunk != null ? '#'+formatIntegerDots(w.current_chunk) : '—'}</td>
-                            <td class="td-chunks">${runDisplay}</td>
+                            <td class="td-chunks">${runStart}</td>
+                            <td class="td-chunks">${runCount}</td>
                             <td class="td-progress">${progress}</td>
                             <td class="td-time">${fmtUtc(w.last_seen)}</td>
                         </tr>`;
