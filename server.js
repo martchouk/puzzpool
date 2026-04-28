@@ -46,7 +46,11 @@ const MAX_ALLOC_PROBES = parseInt(process.env.MAX_ALLOC_PROBES || '8192', 10);
 // GPU batch size kept for admin test-chunk default
 const GPU_BATCH_KEYS = 4278190080n;
 
-const PERMUTATION_MODE = process.env.PERMUTATION_MODE || 'feistel';
+const PERMUTATION_MODE_RAW = process.env.PERMUTATION_MODE || 'feistel';
+const PERMUTATION_MODE =
+    PERMUTATION_MODE_RAW === 'affine' || PERMUTATION_MODE_RAW === 'feistel'
+        ? PERMUTATION_MODE_RAW
+        : (() => { throw new Error(`Invalid PERMUTATION_MODE: ${PERMUTATION_MODE_RAW}`); })();
 
 // --- Pure helpers ---
 
@@ -607,7 +611,7 @@ function createApp(db) {
     function assignVirtualChunkRun(name, puzzle, runStart, runCount) {
         const runEnd = runStart + runCount;
         const { startHex, endHex } = virtualChunkRangeToHex(puzzle, runStart, runEnd);
-        const generation = (PERMUTATION_MODE === 'feistel') ? 'feistel' : 'affine';
+        const generation = PERMUTATION_MODE;
         const info = stmtInsertChunk.run(puzzle.id, startHex, endHex, name, runStart, runEnd, generation);
         return { chunkId: info.lastInsertRowid, startHex, endHex, vchunkStart: runStart, vchunkEnd: runEnd };
     }
@@ -1295,6 +1299,26 @@ function createApp(db) {
             })()
             : 0;
 
+        const allocGenerationRows = pid ? db.prepare(`
+            SELECT alloc_generation, COUNT(*) AS count
+            FROM chunks
+            WHERE puzzle_id = ? AND is_test = 0
+            GROUP BY alloc_generation
+            ORDER BY alloc_generation
+        `).all(pid) : [];
+
+        const allocGenerationCounts = {
+            legacy: 0,
+            affine: 0,
+            feistel: 0,
+        };
+
+        for (const row of allocGenerationRows) {
+            if (row.alloc_generation === 'legacy')  allocGenerationCounts.legacy  = row.count;
+            if (row.alloc_generation === 'affine')  allocGenerationCounts.affine  = row.count;
+            if (row.alloc_generation === 'feistel') allocGenerationCounts.feistel = row.count;
+        }
+
         res.json({
             stage: process.env.STAGE || 'PROD',
             target_minutes: TARGET_MINUTES,
@@ -1338,6 +1362,7 @@ function createApp(db) {
             scores,
             finders,
             chunks_vis,
+            alloc_generations: allocGenerationCounts,
         });
     });
 
@@ -1796,6 +1821,12 @@ module.exports = {
     permuteIndexAffine,
     defaultAllocSeedForPuzzle,
     chooseDefaultVirtualChunkSize,
+    bitLengthBigInt,
+    nextEven,
+    feistelRoundValue,
+    permutePow2Feistel,
+    permuteIndexFeistel,
+    PERMUTATION_MODE,
     ACTIVE_MINUTES,
     REACTIVATE_MINUTES,
     ALLOC_STRATEGY_LEGACY,
