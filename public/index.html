@@ -866,14 +866,14 @@
             <div class="alloc-filter-row">
                 <div class="alloc-filter-label">Generation</div>
                 <div class="alloc-filter-group" id="alloc-generation-filter">
-                    <button class="alloc-filter-btn active" data-gen="all">All</button>
+                    <button class="alloc-filter-btn" data-gen="all">All</button>
                     <button class="alloc-filter-btn" data-gen="legacy">Legacy</button>
                     <button class="alloc-filter-btn" data-gen="affine">Affine</button>
-                    <button class="alloc-filter-btn" data-gen="feistel">Feistel</button>
+                    <button class="alloc-filter-btn active" data-gen="feistel">Feistel</button>
                 </div>
             </div>
 
-            <div style="display:grid; gap:1rem;">
+            <div class="stat-subtext" id="alloc-generation-summary" style="margin-bottom:1rem;">
                 Generation counts: —
             </div>
             <div style="display:grid; gap:1rem;">
@@ -1533,7 +1533,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         };
 
         let g_chunks_vis = [];
-        let g_allocGenerationFilter = 'all';
+        let g_allocGenerationFilter = 'feistel';
         const MAP_COLS = 512;
         const MAP_ROWS = 128;
         const HILBERT_N = 256;
@@ -1891,17 +1891,21 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             const root = document.getElementById('alloc-generation-filter');
             if (!root) return;
 
+            function syncButtons() {
+                root.querySelectorAll('.alloc-filter-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.gen === g_allocGenerationFilter);
+                });
+            }
+
+            syncButtons();
+
             root.querySelectorAll('.alloc-filter-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const next = btn.dataset.gen || 'all';
                     if (next === g_allocGenerationFilter) return;
 
                     g_allocGenerationFilter = next;
-
-                    root.querySelectorAll('.alloc-filter-btn').forEach(b => {
-                        b.classList.toggle('active', b.dataset.gen === next);
-                    });
-
+                    syncButtons();
                     drawAllocatorDiagnostics();
                 });
             });
@@ -2141,21 +2145,6 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
 
             const pct = Math.max(0, Math.min(100, Math.round((elapsedSec / targetSec) * 100)));
             return `${pct} %`;
-        }
-
-        function computeWorkerProgressPercent(worker, stats) {
-            if (!worker.assigned_at || !worker.current_job_keys || !worker.hashrate) return null;
-
-            const assignedMs = new Date(worker.assigned_at + 'Z').getTime();
-            if (!Number.isFinite(assignedMs)) return null;
-
-            const elapsedSec = Math.max(0, (Date.now() - assignedMs) / 1000);
-            const estimatedDone = elapsedSec * Number(worker.hashrate);
-            const total = Number(worker.current_job_keys);
-            if (!(total > 0)) return null;
-
-            const pct = Math.max(0, Math.min(100, (estimatedDone / total) * 100));
-            return pct;
         }
 
         async function updateDashboard() {
