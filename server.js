@@ -183,7 +183,8 @@ function computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKey
 
 function computeWorkerProgressPercent(assignedAt, hashrate, jobKeys) {
     if (!assignedAt || !hashrate || !jobKeys) return null;
-    const elapsedSeconds = (Date.now() - new Date(assignedAt + ' UTC').getTime()) / 1000;
+    const isoString = assignedAt.includes('T') ? assignedAt : assignedAt.replace(' ', 'T') + 'Z';
+    const elapsedSeconds = (Date.now() - new Date(isoString).getTime()) / 1000;
     if (elapsedSeconds < 0) return null;
     const jobKeysBig = typeof jobKeys === 'string' ? BigInt(jobKeys) : BigInt(Math.round(Number(jobKeys)));
     if (jobKeysBig === 0n) return null;
@@ -703,7 +704,7 @@ function createApp(db) {
         if (isReactivating) {
             db.prepare(`
                 UPDATE chunks
-                SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL
+                SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL, heartbeat_at = NULL
                 WHERE worker_name = ? AND status = 'assigned'
             `).run(name);
         }
@@ -902,7 +903,7 @@ function createApp(db) {
                 if (reported < expectedSize) {
                     const upd = db.prepare(`
                         UPDATE chunks
-                        SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL
+                        SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL, assigned_at = NULL, heartbeat_at = NULL
                         WHERE id = ? AND worker_name = ? AND status = 'assigned'
                     `).run(job_id, name);
                     return { reclaimed: upd.changes > 0, expectedSize, reported };
@@ -1079,7 +1080,7 @@ function createApp(db) {
                     ? (BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex)).toString()
                     : null;
             const elapsedSeconds = c.assigned_at
-                ? Math.max(0, (Date.now() - new Date(c.assigned_at + ' UTC').getTime()) / 1000)
+                ? Math.max(0, (Date.now() - new Date(c.assigned_at.includes('T') ? c.assigned_at : c.assigned_at.replace(' ', 'T') + 'Z').getTime()) / 1000)
                 : null;
 
             workerAssignedMap[c.worker_name] = {
@@ -1459,6 +1460,7 @@ if (require.main === module) {
         worker_name TEXT,
         prev_worker_name TEXT,
         assigned_at DATETIME,
+        heartbeat_at DATETIME,
         found_key TEXT,
         found_address TEXT,
         is_test INTEGER NOT NULL DEFAULT 0,
@@ -1511,6 +1513,9 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); } catch (_) {}
+    try {
+        db.prepare("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL").run();
+    } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)").run(); } catch (_) {}
@@ -1658,7 +1663,9 @@ if (require.main === module) {
             UPDATE chunks
             SET status = 'reclaimed',
                 prev_worker_name = worker_name,
-                worker_name = NULL
+                worker_name = NULL,
+                assigned_at = NULL,
+                heartbeat_at = NULL
             WHERE status = 'assigned'
               AND COALESCE(heartbeat_at, assigned_at) < datetime('now', '-${TIMEOUT_MINUTES} minutes')
         `).run();
