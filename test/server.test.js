@@ -1170,4 +1170,78 @@ describe('Virtual Chunk Allocator — stats and API', () => {
 
         expect(w1.current_vchunk_run).not.toBe(w2.current_vchunk_run);
     });
+
+    test('current_vchunk_run_start and current_vchunk_run_end are numbers not strings', async () => {
+        const end = (6000n).toString(16).padStart(64, '0');
+        seedPuzzle(db, { start_hex: '0'.repeat(64), end_hex: end, virtual_chunk_size_keys: 600 });
+
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1 });
+
+        const stats = await request(app).get('/api/v1/stats');
+        const w = stats.body.workers.find(w => w.name === 'w1');
+
+        expect(typeof w.current_vchunk_run_start).toBe('number');
+        expect(typeof w.current_vchunk_run_end).toBe('number');
+    });
+});
+
+describe('Worker telemetry — progress fields', () => {
+    test('newly assigned chunk has non-null assigned_at and heartbeat_at', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const jobId = r.body.job_id;
+
+        const row = db.prepare('SELECT assigned_at, heartbeat_at FROM chunks WHERE id=?').get(jobId);
+        expect(row.assigned_at).not.toBeNull();
+        expect(row.heartbeat_at).not.toBeNull();
+    });
+
+    test('heartbeat with wrong worker_name does not update heartbeat_at', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'owner', hashrate: 1000000 });
+        const jobId = r.body.job_id;
+
+        const before = db.prepare('SELECT heartbeat_at FROM chunks WHERE id=?').get(jobId);
+        await new Promise(res => setTimeout(res, 10));
+
+        await request(app)
+            .post('/api/v1/heartbeat')
+            .send({ name: 'interloper', job_id: jobId })
+            .expect(200, { ok: true });
+
+        const after = db.prepare('SELECT heartbeat_at FROM chunks WHERE id=?').get(jobId);
+        expect(after.heartbeat_at).toBe(before.heartbeat_at);
+    });
+
+    test('stats worker has current_job_elapsed_seconds as a non-negative number when job assigned', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+
+        const stats = await request(app).get('/api/v1/stats');
+        const w = stats.body.workers.find(w => w.name === 'w1');
+
+        expect(w.current_job_elapsed_seconds).not.toBeNull();
+        expect(typeof w.current_job_elapsed_seconds).toBe('number');
+        expect(w.current_job_elapsed_seconds).toBeGreaterThanOrEqual(0);
+    });
+
+    test('stats worker has current_job_progress_percent in [0, 100] when job assigned', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+
+        const stats = await request(app).get('/api/v1/stats');
+        const w = stats.body.workers.find(w => w.name === 'w1');
+
+        expect(w.current_job_progress_percent).not.toBeNull();
+        expect(typeof w.current_job_progress_percent).toBe('number');
+        expect(w.current_job_progress_percent).toBeGreaterThanOrEqual(0);
+        expect(w.current_job_progress_percent).toBeLessThanOrEqual(100);
+    });
+
+    test('stats worker has null progress fields when no job assigned', async () => {
+        seedPuzzle(db);
+
+        const stats = await request(app).get('/api/v1/stats');
+        expect(stats.body.workers).toHaveLength(0);
+    });
 });

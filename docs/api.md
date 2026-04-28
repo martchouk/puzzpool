@@ -171,6 +171,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
       "assigned_at": "2024-01-15 12:30:00", "heartbeat_at": "2024-01-15 12:34:30",
       "current_job_start_hex": "000...06000000000", "current_job_end_hex": "000...060002bf200",
       "current_job_keys": "900000000",
+      "current_job_elapsed_seconds": 270, "current_job_progress_percent": 24.0,
       "min_chunk_keys": "17045651456", "chunk_quantum_keys": "4261412864"
     }
   ],
@@ -204,6 +205,8 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `current_job_start_hex` | string\|null | `start_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_end_hex` | string\|null | `end_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_keys` | string\|null | Size of the current job in keys (decimal integer string); null if no chunk |
+| `current_job_elapsed_seconds` | number\|null | Seconds elapsed since the current chunk was assigned; null if no chunk |
+| `current_job_progress_percent` | number\|null | Estimated scan progress 0–100 based on `hashrate × elapsed / job_keys`; null if no chunk or no hashrate |
 | `min_chunk_keys` | string\|null | Worker's reported minimum job size (decimal integer string); null if not reported |
 | `chunk_quantum_keys` | string\|null | Worker's reported job size quantum (decimal integer string); null if not reported |
 

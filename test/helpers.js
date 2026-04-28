@@ -65,14 +65,6 @@ function createTestDb() {
             status      TEXT NOT NULL DEFAULT 'open'
         );
         CREATE UNIQUE INDEX idx_sectors_unique_span ON sectors (puzzle_id, start_hex, end_hex);
-        CREATE TABLE alloc_order_vchunks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            puzzle_id INTEGER NOT NULL,
-            order_index INTEGER NOT NULL,
-            chunk_index INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX idx_alloc_order_vchunks_order ON alloc_order_vchunks (puzzle_id, order_index);
-        CREATE UNIQUE INDEX idx_alloc_order_vchunks_chunk ON alloc_order_vchunks (puzzle_id, chunk_index);
         CREATE TABLE findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chunk_id INTEGER NOT NULL,

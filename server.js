@@ -181,6 +181,17 @@ function computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKey
     return roundUpToQuantum(raw, quantum);
 }
 
+function computeWorkerProgressPercent(assignedAt, hashrate, jobKeys) {
+    if (!assignedAt || !hashrate || !jobKeys) return null;
+    const elapsedSeconds = (Date.now() - new Date(assignedAt + ' UTC').getTime()) / 1000;
+    if (elapsedSeconds < 0) return null;
+    const jobKeysBig = typeof jobKeys === 'string' ? BigInt(jobKeys) : BigInt(Math.round(Number(jobKeys)));
+    if (jobKeysBig === 0n) return null;
+    const scannedEstimate = BigInt(Math.round(hashrate * elapsedSeconds));
+    const pct = Number(scannedEstimate * 10000n / jobKeysBig) / 100;
+    return Math.min(100, Math.max(0, pct));
+}
+
 function normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks) {
     if (neededChunks >= totalChunks) return 0;
     let start = candidateIndex;
@@ -1067,6 +1078,9 @@ function createApp(db) {
                 c.start_hex && c.end_hex
                     ? (BigInt('0x' + c.end_hex) - BigInt('0x' + c.start_hex)).toString()
                     : null;
+            const elapsedSeconds = c.assigned_at
+                ? Math.max(0, (Date.now() - new Date(c.assigned_at + ' UTC').getTime()) / 1000)
+                : null;
 
             workerAssignedMap[c.worker_name] = {
                 current_chunk: c.id,
@@ -1080,6 +1094,7 @@ function createApp(db) {
                 current_job_start_hex: c.start_hex ?? null,
                 current_job_end_hex: c.end_hex ?? null,
                 current_job_keys: currentJobKeys,
+                current_job_elapsed_seconds: elapsedSeconds !== null ? Math.round(elapsedSeconds) : null,
             };
         }
 
@@ -1099,6 +1114,10 @@ function createApp(db) {
                 current_job_start_hex: assigned.current_job_start_hex ?? null,
                 current_job_end_hex: assigned.current_job_end_hex ?? null,
                 current_job_keys: assigned.current_job_keys ?? null,
+                current_job_elapsed_seconds: assigned.current_job_elapsed_seconds ?? null,
+                current_job_progress_percent: assigned.assigned_at
+                    ? computeWorkerProgressPercent(assigned.assigned_at, w.hashrate, assigned.current_job_keys)
+                    : null,
             };
         });
 
