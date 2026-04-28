@@ -153,8 +153,6 @@ function permuteIndexFeistel(orderIndex, n, key) {
     }
 }
 
-
-
 function roundUpToQuantum(value, quantum) {
     if (quantum <= 1n) return value;
     return ceilDiv(value, quantum) * quantum;
