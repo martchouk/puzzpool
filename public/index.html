@@ -632,6 +632,42 @@
 
         .modal-btn-confirm:hover { background: rgba(0,255,255,0.2); }
 
+        .td-progress {
+            min-width: 120px;
+        }
+
+        .progress-cell {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            width: 100%;
+        }
+
+        .progress-bar {
+            flex: 1 1 auto;
+            height: 8px;               /* about 2 mm on most screens */
+            background: var(--text-secondary);
+            opacity: 0.35;
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.3s ease;
+            min-width: 0;
+        }
+
+        .progress-label {
+            flex: 0 0 auto;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }    
+
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
         @media (max-width: 900px) {
@@ -1159,7 +1195,31 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             const pct = computeWorkerProgressPercent(worker, stats);
             if (pct == null || !Number.isFinite(pct)) return '—';
             const clamped = Math.max(0, Math.min(100, pct));
-            return `${Math.round(clamped)} %`;
+            return `${Math.round(clamped)}%`;
+        }
+
+        function renderWorkerProgress(worker, stats) {
+            const pct = computeWorkerProgressPercent(worker, stats);
+            if (pct == null || !Number.isFinite(pct)) return '—';
+
+            const clamped = Math.max(0, Math.min(100, pct));
+            const rounded = Math.round(clamped);
+
+            let color = 'var(--text-secondary)';
+            if (worker.active) {
+                color = 'var(--accent-cyan)';
+            } else if (worker.assigned_here) {
+                color = 'var(--accent-amber)';
+            }
+
+            return `
+                <div class="progress-cell">
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" style="width:${clamped}%; background:${color};"></div>
+                    </div>
+                    <span class="progress-label" style="color:${color};">${rounded} %</span>
+                </div>
+            `;
         }
 
         function formatIntegerDots(value) {
@@ -1734,7 +1794,8 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                             }
                         }
 
-                        const progress = formatWorkerProgress(w, data);
+                        //const progress = formatWorkerProgress(w, data);
+                        const progress = renderWorkerProgress(w, data);
 
                         return `<tr${dim}>
                             <td>${dot}</td>
