@@ -197,9 +197,11 @@ function computeWorkerProgressPercent(assignedAt, hashrate, jobKeys) {
     if (assignedMs === null) return null;
     const elapsedSeconds = (Date.now() - assignedMs) / 1000;
     if (elapsedSeconds < 0) return null;
+    const hashrateNum = Number(hashrate);
+    if (!Number.isFinite(hashrateNum) || hashrateNum <= 0) return null;
     const jobKeysBig = typeof jobKeys === 'string' ? BigInt(jobKeys) : BigInt(Math.round(Number(jobKeys)));
     if (jobKeysBig === 0n) return null;
-    const scannedEstimate = BigInt(Math.round(hashrate * elapsedSeconds));
+    const scannedEstimate = BigInt(Math.round(hashrateNum * elapsedSeconds));
     const pct = Number(scannedEstimate * 10000n / jobKeysBig) / 100;
     return Math.min(100, Math.max(0, pct));
 }
@@ -773,7 +775,7 @@ function createApp(db) {
                 SELECT id
                 FROM chunks
                 WHERE status = 'reclaimed' AND puzzle_id = ? AND is_test = 0
-                LIMIT 1
+                ORDER BY id ASC LIMIT 1
             )
             RETURNING *
         `).get(name, puzzle.id);
