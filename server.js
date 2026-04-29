@@ -2050,6 +2050,7 @@ if (require.main === module) {
 
     try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_start_text TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_end_text TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzle_shards ADD COLUMN alloc_cursor_text TEXT").run(); } catch (_) {}
     try {
         db.prepare("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL").run();
     } catch (_) {}
@@ -2115,15 +2116,26 @@ if (require.main === module) {
     } catch (_) {}
 
     try {
-        db.prepare(`
-            UPDATE puzzle_shards
-            SET alloc_cursor_text = CASE
-                WHEN alloc_cursor_text IS NOT NULL AND alloc_cursor_text != '' THEN alloc_cursor_text
-                WHEN alloc_cursor IS NOT NULL THEN printf('%064x', alloc_cursor)
-                ELSE '0000000000000000000000000000000000000000000000000000000000000000'
-            END
-            WHERE alloc_cursor_text IS NULL OR alloc_cursor_text = ''
-        `).run();
+        const shardCols = db.prepare(`PRAGMA table_info(puzzle_shards)`).all();
+        const shardColNames = new Set(shardCols.map(c => c.name));
+
+        if (shardColNames.has('alloc_cursor')) {
+            db.prepare(`
+                UPDATE puzzle_shards
+                SET alloc_cursor_text = CASE
+                    WHEN alloc_cursor_text IS NOT NULL AND alloc_cursor_text != '' THEN alloc_cursor_text
+                    WHEN alloc_cursor IS NOT NULL THEN printf('%064x', alloc_cursor)
+                    ELSE '0000000000000000000000000000000000000000000000000000000000000000'
+                END
+                WHERE alloc_cursor_text IS NULL OR alloc_cursor_text = ''
+            `).run();
+        } else {
+            db.prepare(`
+                UPDATE puzzle_shards
+                SET alloc_cursor_text = '0000000000000000000000000000000000000000000000000000000000000000'
+                WHERE alloc_cursor_text IS NULL OR alloc_cursor_text = ''
+            `).run();
+        }
     } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
