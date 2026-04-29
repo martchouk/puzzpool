@@ -44,8 +44,9 @@ const MAX_STORED_VCHUNKS = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_ALLOC_PROBES = parseInt(process.env.MAX_ALLOC_PROBES || '8192', 10);
 
 const TARGET_MAX_SHARDS = BigInt(parseInt(process.env.TARGET_MAX_SHARDS || '65536', 10));
-const TARGET_MAX_VCHUNKS_PER_SHARD = BigInt(
-    process.env.TARGET_MAX_VCHUNKS_PER_SHARD || String(Number.MAX_SAFE_INTEGER)
+const TARGET_MAX_VCHUNKS_PER_SHARD = parsePositiveBigInt(
+    process.env.TARGET_MAX_VCHUNKS_PER_SHARD,
+    null
 );
 
 // Puzzle #71 range floor for shard sizing:
@@ -81,6 +82,57 @@ function randomBigIntInRange(min, max) {
     const bytes = crypto.randomBytes(byteLen);
     const n = BigInt('0x' + bytes.toString('hex'));
     return min + (n % range);
+}
+
+function encodeBigIndex(n) {
+    const x = typeof n === 'bigint' ? n : BigInt(n);
+    if (x < 0n) throw new Error(`encodeBigIndex: negative value ${x.toString()}`);
+    return x.toString(16).padStart(64, '0');
+}
+
+function decodeBigIndex(value, fallback = null) {
+    if (value === undefined || value === null || value === '') return fallback;
+
+    if (typeof value === 'bigint') return value;
+
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value) || value < 0) return fallback;
+        return BigInt(Math.trunc(value));
+    }
+
+    const s = String(value).trim();
+    if (!s) return fallback;
+
+    if (/^0x[0-9a-fA-F]+$/.test(s)) return BigInt(s);
+    if (/^[0-9a-fA-F]{64}$/.test(s)) return BigInt('0x' + s);
+    if (/^[0-9]+$/.test(s)) return BigInt(s);
+
+    throw new Error(`decodeBigIndex: unsupported value ${value}`);
+}
+
+function normalizeRunStartForCandidateBig(candidateIndex, neededChunks, totalChunks) {
+    if (neededChunks >= totalChunks) return 0n;
+
+    let start = candidateIndex;
+    if (start + neededChunks > totalChunks) {
+        start = totalChunks - neededChunks;
+    }
+    if (start < 0n) start = 0n;
+    return start;
+}
+
+function sumShardLocalRuns(rows) {
+    let total = 0n;
+
+    for (const r of rows) {
+        const s = decodeBigIndex(r.local_vchunk_start, decodeBigIndex(r.vchunk_start, null));
+        const e = decodeBigIndex(r.local_vchunk_end, decodeBigIndex(r.vchunk_end, null));
+        if (s !== null && e !== null && e > s) {
+            total += (e - s);
+        }
+    }
+
+    return total.toString();
 }
 
 function normalizeHashrate(input, fallback = 1000000) {
@@ -136,13 +188,16 @@ function chooseVirtualChunkSizeForShard(shardSize) {
     let size = DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS > 0n ? DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS : 1n;
     if (size > shardSize) size = shardSize;
 
-    while (ceilDiv(shardSize, size) > TARGET_MAX_VCHUNKS_PER_SHARD) {
-        size <<= 1n;
-        if (size > shardSize) {
-            size = shardSize;
-            break;
+    if (TARGET_MAX_VCHUNKS_PER_SHARD && TARGET_MAX_VCHUNKS_PER_SHARD > 0n) {
+        while (ceilDiv(shardSize, size) > TARGET_MAX_VCHUNKS_PER_SHARD) {
+            size <<= 1n;
+            if (size > shardSize) {
+                size = shardSize;
+                break;
+            }
         }
     }
+
     return size;
 }
 
@@ -288,21 +343,6 @@ function defaultAllocSeedForPuzzle(puzzle, strategy = ALLOC_STRATEGY_VCHUNKS) {
     return sha256Hex(`${puzzle.name}|${puzzle.start_hex}|${puzzle.end_hex}|${strategy}`);
 }
 
-function chooseDefaultVirtualChunkSize(range) {
-    let size = DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS > 0n ? DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS : 1n;
-    if (size > range) size = range;
-
-    // Keep count storable / safely readable in JS.
-    while (ceilDiv(range, size) > MAX_STORED_VCHUNKS) {
-        size <<= 1n;
-        if (size > range) {
-            size = range;
-            break;
-        }
-    }
-    return size;
-}
-
 function pickShardIndex(orderIndex, shardCountBig, permKey) {
     if (shardCountBig <= 1n) return 0;
     if (PERMUTATION_MODE === 'affine') {
@@ -354,28 +394,6 @@ function computeWorkerProgressPercent(assignedAt, hashrate, jobKeys) {
     return Math.min(100, Math.max(0, pct));
 }
 
-function normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks) {
-    if (neededChunks >= totalChunks) return 0;
-    let start = candidateIndex;
-    if (start + neededChunks > totalChunks) {
-        start = totalChunks - neededChunks;
-    }
-    if (start < 0) start = 0;
-    return start;
-}
-
-function virtualChunkRangeToHex(puzzle, vchunkStart, vchunkEndExclusive) {
-    const pStart = BigInt('0x' + puzzle.start_hex);
-    const pEnd   = BigInt('0x' + puzzle.end_hex);
-    const size   = BigInt(puzzle.virtual_chunk_size_keys);
-    const start  = pStart + BigInt(vchunkStart) * size;
-    const end    = bigIntMin(pStart + BigInt(vchunkEndExclusive) * size, pEnd);
-    return {
-        startHex: start.toString(16).padStart(64, '0'),
-        endHex:   end.toString(16).padStart(64, '0'),
-    };
-}
-
 // --- Legacy sector seeding retained for rollback compatibility ---
 function seedSectors(db, puzzleId, startHex, endHex) {
     const MIN_SECTOR_SIZE = 1000000000n;
@@ -421,8 +439,7 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
         : chooseVirtualChunkSizeForShard(shardSize);
 
     const vchunksPerShardBig = ceilDiv(shardSize, chunkSize);
-    validateVirtualChunkCountOrThrow(vchunksPerShardBig, 'seedVirtualChunks');
-    const vchunksPerShard = Number(vchunksPerShardBig);
+    const vchunksPerShardText = vchunksPerShardBig.toString();
 
     db.transaction(() => {
         db.prepare(`
@@ -434,18 +451,24 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
                 shard_size_keys = ?,
                 shard_count = ?,
                 shard_alloc_cursor = 0,
+                shard_alloc_cursor_text = ?,
                 virtual_chunk_size_keys = ?,
                 virtual_chunk_count = ?,
-                virtual_chunks_per_shard = ?
+                virtual_chunk_count_text = ?,
+                virtual_chunks_per_shard = ?,
+                virtual_chunks_per_shard_text = ?
             WHERE id = ?
         `).run(
             ALLOC_STRATEGY_VCHUNKS,
             allocSeed,
             shardSize.toString(),
             shardCount,
+            encodeBigIndex(0n),
             chunkSize.toString(),
-            vchunksPerShard,   // keep virtual_chunk_count as shard-local count for compatibility during migration
-            vchunksPerShard,
+            vchunksPerShardText,
+            vchunksPerShardText,
+            vchunksPerShardText,
+            vchunksPerShardText,
             puzzleId
         );
 
@@ -453,12 +476,12 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
 
         const insertShard = db.prepare(`
             INSERT INTO puzzle_shards (
-                puzzle_id, shard_index, status, alloc_cursor, bootstrap_stage, assigned_runs, completed_runs
-            ) VALUES (?, ?, 'open', 0, 0, 0, 0)
+                puzzle_id, shard_index, status, alloc_cursor_text, bootstrap_stage, assigned_runs, completed_runs
+            ) VALUES (?, ?, 'open', ?, 0, 0, 0)
         `);
 
         for (let i = 0; i < shardCount; i++) {
-            insertShard.run(puzzleId, i);
+            insertShard.run(puzzleId, i, encodeBigIndex(0n));
         }
     })();
 
@@ -466,7 +489,7 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
         `[System] Seeded ${shardCount} shards for puzzle ${puzzleId} ` +
         `(shard size ${shardSize.toString()} keys, ` +
         `virtual chunk size ${chunkSize.toString()} keys, ` +
-        `${vchunksPerShard} vchunks/shard)`
+        `${vchunksPerShardBig.toString()} vchunks/shard)`
     );
 }
 
@@ -500,8 +523,14 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
 
         const storedShardCount = parsePositiveBigInt(puzzle.shard_count, null);
         const storedShardSize = parsePositiveBigInt(puzzle.shard_size_keys, null);
-        const storedVChunkCount = parsePositiveBigInt(puzzle.virtual_chunk_count, null);
-        const storedPerShard = parsePositiveBigInt(puzzle.virtual_chunks_per_shard, null);
+        const storedVChunkCount = decodeBigIndex(
+            puzzle.virtual_chunk_count_text,
+            parsePositiveBigInt(puzzle.virtual_chunk_count, null)
+        );
+        const storedPerShard = decodeBigIndex(
+            puzzle.virtual_chunks_per_shard_text,
+            parsePositiveBigInt(puzzle.virtual_chunks_per_shard, null)
+        );
 
         const metadataLooksWrong =
             !storedShardCount ||
@@ -551,34 +580,24 @@ function createApp(db) {
         SELECT id, name, start_hex, end_hex,
                alloc_strategy, alloc_seed, alloc_cursor,
                shard_size_keys, shard_count, shard_alloc_cursor,
-               virtual_chunk_size_keys, virtual_chunk_count, virtual_chunks_per_shard,
+               shard_alloc_cursor_text,
+               virtual_chunk_size_keys, virtual_chunk_count, virtual_chunk_count_text,
+               virtual_chunks_per_shard, virtual_chunks_per_shard_text,
                bootstrap_stage,
                test_start_hex, test_end_hex
         FROM puzzles
         WHERE id = ?
     `);
 
-    const stmtVChunkCursorSet = db.prepare(`
-        UPDATE puzzles
-        SET alloc_cursor = ?
-        WHERE id = ?
-    `);
-
-    const stmtBootstrapStageSet = db.prepare(`
-        UPDATE puzzles
-        SET bootstrap_stage = ?
-        WHERE id = ?
-    `);
-
     const stmtShardByIndex = db.prepare(`
-        SELECT puzzle_id, shard_index, status, alloc_cursor, bootstrap_stage, assigned_runs, completed_runs
+        SELECT puzzle_id, shard_index, status, alloc_cursor_text, bootstrap_stage, assigned_runs, completed_runs
         FROM puzzle_shards
         WHERE puzzle_id = ? AND shard_index = ?
     `);
 
     const stmtShardCursorSet = db.prepare(`
         UPDATE puzzle_shards
-        SET alloc_cursor = ?
+        SET alloc_cursor_text = ?
         WHERE puzzle_id = ? AND shard_index = ?
     `);
 
@@ -600,20 +619,6 @@ function createApp(db) {
         WHERE puzzle_id = ? AND shard_index = ?
     `);
 
-    const stmtShardOpenAny = db.prepare(`
-        SELECT puzzle_id, shard_index, status, alloc_cursor, bootstrap_stage, assigned_runs, completed_runs
-        FROM puzzle_shards
-        WHERE puzzle_id = ? AND status = 'open'
-        ORDER BY shard_index ASC
-        LIMIT 1
-    `);
-
-    const stmtShardOpenRandomProbe = db.prepare(`
-        SELECT puzzle_id, shard_index, status, alloc_cursor, bootstrap_stage, assigned_runs, completed_runs
-        FROM puzzle_shards
-        WHERE puzzle_id = ? AND status = 'open' AND shard_index = ?
-    `);
-
     const stmtShardLocalAnyOverlap = db.prepare(`
         SELECT 1
         FROM chunks
@@ -621,10 +626,10 @@ function createApp(db) {
           AND shard_index = ?
           AND is_test = 0
           AND status IN ('assigned', 'reclaimed', 'completed', 'FOUND')
-          AND local_vchunk_start IS NOT NULL
-          AND local_vchunk_end IS NOT NULL
-          AND local_vchunk_start < ?
-          AND local_vchunk_end > ?
+          AND local_vchunk_start_text IS NOT NULL
+          AND local_vchunk_end_text IS NOT NULL
+          AND local_vchunk_start_text < ?
+          AND local_vchunk_end_text > ?
         LIMIT 1
     `);
 
@@ -635,7 +640,7 @@ function createApp(db) {
             sector_id, alloc_block_id,
             vchunk_start, vchunk_end,
             alloc_generation,
-            shard_index, local_vchunk_start, local_vchunk_end
+            shard_index, local_vchunk_start_text, local_vchunk_end_text
         ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?)
     `);
 
@@ -668,6 +673,12 @@ function createApp(db) {
         )
         VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 'test')
         RETURNING *
+    `);
+
+    const stmtPuzzleShardCursorTextSet = db.prepare(`
+        UPDATE puzzles
+        SET shard_alloc_cursor_text = ?
+        WHERE id = ?
     `);
 
     const MIDPOINT_SECTOR = Number(TARGET_SECTORS / 2n);
@@ -714,63 +725,78 @@ function createApp(db) {
         }
     });
 
-    function rangeIsFreeInShard(puzzleId, shardIndex, localStart, localEndExclusive) {
-        if (localStart < 0 || localEndExclusive <= localStart) return false;
-        return !stmtShardLocalAnyOverlap.get(puzzleId, shardIndex, localEndExclusive, localStart);
+    function rangeIsFreeInShard(puzzleId, shardIndex, localStartBig, localEndExclusiveBig) {
+        if (localStartBig < 0n || localEndExclusiveBig <= localStartBig) return false;
+
+        return !stmtShardLocalAnyOverlap.get(
+            puzzleId,
+            shardIndex,
+            encodeBigIndex(localEndExclusiveBig),
+            encodeBigIndex(localStartBig)
+        );
     }
 
-    function findBeginBootstrapRun(puzzleId, shardIndex, totalChunks, neededChunks) {
-        const maxStart = totalChunks - neededChunks;
-        if (maxStart < 0) return null;
+    function findBeginBootstrapRun(puzzleId, shardIndex, totalChunksBig, neededChunksBig) {
+        const maxStart = totalChunksBig - neededChunksBig;
+        if (maxStart < 0n) return null;
 
-        const probes = Math.min(maxStart + 1, MAX_ALLOC_PROBES);
-        for (let i = 0; i < probes; i++) {
-            const start = i;
-            if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunks)) return start;
+        const probeLimitBig = bigIntMin(maxStart + 1n, BigInt(MAX_ALLOC_PROBES));
+        const probeLimit = Number(probeLimitBig);
+
+        for (let i = 0; i < probeLimit; i++) {
+            const start = BigInt(i);
+            if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunksBig)) return start;
         }
+
         return null;
     }
 
-    function findEndBootstrapRun(puzzleId, shardIndex, totalChunks, neededChunks) {
-        const maxStart = totalChunks - neededChunks;
-        if (maxStart < 0) return null;
+    function findEndBootstrapRun(puzzleId, shardIndex, totalChunksBig, neededChunksBig) {
+        const maxStart = totalChunksBig - neededChunksBig;
+        if (maxStart < 0n) return null;
 
-        const probes = Math.min(maxStart + 1, MAX_ALLOC_PROBES);
-        for (let i = 0; i < probes; i++) {
-            const start = maxStart - i;
-            if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunks)) return start;
+        const probeLimitBig = bigIntMin(maxStart + 1n, BigInt(MAX_ALLOC_PROBES));
+        const probeLimit = Number(probeLimitBig);
+
+        for (let i = 0; i < probeLimit; i++) {
+            const start = maxStart - BigInt(i);
+            if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunksBig)) return start;
         }
+
         return null;
     }
 
-    function findMidBootstrapRun(puzzleId, shardIndex, totalChunks, neededChunks) {
-        if (totalChunks <= 0) return null;
+    function findMidBootstrapRun(puzzleId, shardIndex, totalChunksBig, neededChunksBig) {
+        if (totalChunksBig <= 0n) return null;
 
-        const anchor = Math.floor(totalChunks / 2);
-        const maxStart = totalChunks - neededChunks;
-        if (maxStart < 0) return null;
+        const anchor = totalChunksBig / 2n;
+        const maxStart = totalChunksBig - neededChunksBig;
+        if (maxStart < 0n) return null;
 
         const tried = new Set();
-        const probes = Math.min(totalChunks, MAX_ALLOC_PROBES);
 
-        for (let dist = 0; dist < probes; dist++) {
-            const leftAnchor = anchor - dist;
-            if (leftAnchor >= 0) {
-                const start = normalizeRunStartForCandidate(leftAnchor, neededChunks, totalChunks);
-                if (!tried.has(start)) {
-                    tried.add(start);
-                    if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunks)) return start;
+        for (let dist = 0; dist < MAX_ALLOC_PROBES; dist++) {
+            const distBig = BigInt(dist);
+
+            const leftAnchor = anchor - distBig;
+            if (leftAnchor >= 0n) {
+                const start = normalizeRunStartForCandidateBig(leftAnchor, neededChunksBig, totalChunksBig);
+                const k = encodeBigIndex(start);
+                if (!tried.has(k)) {
+                    tried.add(k);
+                    if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunksBig)) return start;
                 }
             }
 
             if (dist === 0) continue;
 
-            const rightAnchor = anchor + dist;
-            if (rightAnchor < totalChunks) {
-                const start = normalizeRunStartForCandidate(rightAnchor, neededChunks, totalChunks);
-                if (!tried.has(start)) {
-                    tried.add(start);
-                    if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunks)) return start;
+            const rightAnchor = anchor + distBig;
+            if (rightAnchor < totalChunksBig) {
+                const start = normalizeRunStartForCandidateBig(rightAnchor, neededChunksBig, totalChunksBig);
+                const k = encodeBigIndex(start);
+                if (!tried.has(k)) {
+                    tried.add(k);
+                    if (rangeIsFreeInShard(puzzleId, shardIndex, start, start + neededChunksBig)) return start;
                 }
             }
         }
@@ -778,13 +804,14 @@ function createApp(db) {
         return null;
     }
 
-    function assignVirtualChunkRun(name, puzzle, shardIndex, localRunStart, runCount) {
-        const localRunEnd = localRunStart + runCount;
+    function assignVirtualChunkRun(name, puzzle, shardIndex, localRunStartBig, runCountBig) {
+        const localRunEndBig = localRunStartBig + runCountBig;
+
         const { startHex, endHex } = shardLocalVirtualChunkRangeToHex(
             puzzle,
             shardIndex,
-            localRunStart,
-            localRunEnd
+            localRunStartBig,
+            localRunEndBig
         );
 
         const generation = PERMUTATION_MODE;
@@ -796,8 +823,8 @@ function createApp(db) {
             name,
             generation,
             shardIndex,
-            localRunStart,
-            localRunEnd
+            encodeBigIndex(localRunStartBig),
+            encodeBigIndex(localRunEndBig)
         );
 
         stmtShardAssignedRunInc.run(puzzle.id, shardIndex);
@@ -807,45 +834,55 @@ function createApp(db) {
             startHex,
             endHex,
             shardIndex,
-            localVChunkStart: localRunStart,
-            localVChunkEnd: localRunEnd
+            localVChunkStart: localRunStartBig,
+            localVChunkEnd: localRunEndBig
         };
     }
 
     const assignVirtualChunkJob = db.transaction((name, workHints, puzzle) => {
         const currentPuzzle = stmtVChunkPuzzle.get(puzzle.id);
         if (!currentPuzzle) return null;
-        if (!currentPuzzle.virtual_chunk_size_keys || !currentPuzzle.virtual_chunks_per_shard) return null;
+        const perShardChunksBig = decodeBigIndex(
+            currentPuzzle.virtual_chunks_per_shard_text,
+            decodeBigIndex(currentPuzzle.virtual_chunks_per_shard,
+                decodeBigIndex(currentPuzzle.virtual_chunk_count_text,
+                    decodeBigIndex(currentPuzzle.virtual_chunk_count, null)
+                )
+            )
+        );
+
+        if (!currentPuzzle.virtual_chunk_size_keys || !perShardChunksBig) return null;
         if (!currentPuzzle.shard_count || !currentPuzzle.shard_size_keys) return null;
 
         const shardCountBig = BigInt(currentPuzzle.shard_count);
         if (shardCountBig <= 0n) return null;
 
         const totalShards = Number(shardCountBig);
-        const perShardChunksBig = BigInt(currentPuzzle.virtual_chunks_per_shard || currentPuzzle.virtual_chunk_count);
         if (perShardChunksBig <= 0n) return null;
 
-        const totalChunks = Number(perShardChunksBig);
         const hashrateBig = normalizeHashrate(workHints.hashrate || stmtWorkerHash.get(name)?.hashrate);
         const minChunkKeys = parsePositiveBigInt(workHints.min_chunk_keys, null);
         const chunkQuantumKeys = parsePositiveBigInt(workHints.chunk_quantum_keys, 1n);
         const requestedKeys = computeWorkerRequestedKeys({ hashrateBig, minChunkKeys, chunkQuantumKeys });
 
         const vchunkSize = BigInt(currentPuzzle.virtual_chunk_size_keys);
-        let neededChunks = Number(ceilDiv(requestedKeys, vchunkSize));
-        if (neededChunks < 1) neededChunks = 1;
-        if (BigInt(neededChunks) > perShardChunksBig) neededChunks = totalChunks;
+        let neededChunksBig = ceilDiv(requestedKeys, vchunkSize);
+        if (neededChunksBig < 1n) neededChunksBig = 1n;
+        if (neededChunksBig > perShardChunksBig) neededChunksBig = perShardChunksBig;
 
         console.log(
             `[Alloc] ${name} requested ${requestedKeys.toString()} keys ` +
             `(hashrate=${hashrateBig.toString()}, min=${minChunkKeys ? minChunkKeys.toString() : 'null'}, ` +
             `quantum=${chunkQuantumKeys ? chunkQuantumKeys.toString() : '1'}) ` +
-            `=> need ${neededChunks} virtual chunks of ${vchunkSize.toString()} keys ` +
-            `(shards=${totalShards}, perShard=${totalChunks})`
+            `=> need ${neededChunksBig.toString()} virtual chunks of ${vchunkSize.toString()} keys ` +
+            `(shards=${totalShards}, perShard=${perShardChunksBig.toString()})`
         );
 
         const permKey = currentPuzzle.alloc_seed || defaultAllocSeedForPuzzle(currentPuzzle, ALLOC_STRATEGY_VCHUNKS);
-        const rawShardCursorBig = BigInt(currentPuzzle.shard_alloc_cursor || 0);
+        const rawShardCursorBig = decodeBigIndex(
+            currentPuzzle.shard_alloc_cursor_text,
+            decodeBigIndex(currentPuzzle.shard_alloc_cursor, 0n)
+        );
         const shardProbeLimit = Math.min(totalShards, MAX_ALLOC_PROBES);
 
         for (let shardOffset = 0; shardOffset < shardProbeLimit; shardOffset++) {
@@ -857,43 +894,59 @@ function createApp(db) {
 
             const stage = Number(shard.bootstrap_stage || 0);
             const freshRuns = Number(shard.assigned_runs || 0);
-            const rawCursorBig = BigInt(shard.alloc_cursor || 0);
+            const rawCursorBig = decodeBigIndex(shard.alloc_cursor_text, 0n);
 
             if (freshRuns < 3 && stage < 3) {
-                let runStart = null;
+                let runStartBig = null;
 
-                if (stage === 0) runStart = findMidBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, neededChunks);
-                else if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, neededChunks);
-                else if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, neededChunks);
+                if (stage === 0) runStartBig = findMidBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, neededChunksBig);
+                else if (stage === 1) runStartBig = findBeginBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, neededChunksBig);
+                else if (stage === 2) runStartBig = findEndBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, neededChunksBig);
 
-                if (runStart !== null) {
-                    const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStart, neededChunks);
+                if (runStartBig !== null) {
+                    const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStartBig, neededChunksBig);
+
                     stmtShardBootstrapStageSet.run(stage + 1, currentPuzzle.id, shardIndex);
-                    db.prepare(`UPDATE puzzles SET shard_alloc_cursor = ? WHERE id = ?`)
-                        .run(Number((shardOrderIndex + 1n) % shardCountBig), currentPuzzle.id);
+                    stmtShardCursorSet.run(
+                        encodeBigIndex((runStartBig + 1n) % perShardChunksBig),
+                        currentPuzzle.id,
+                        shardIndex
+                    );
+                    stmtPuzzleShardCursorTextSet.run(
+                        encodeBigIndex((shardOrderIndex + 1n) % shardCountBig),
+                        currentPuzzle.id
+                    );
 
                     console.log(
                         `[Alloc] bootstrap shard ${shardIndex} stage ${stage} -> assigned ${name} ` +
-                        `local vchunks ${result.localVChunkStart}..${result.localVChunkEnd - 1} ` +
+                        `local vchunks ${result.localVChunkStart.toString()}..${(result.localVChunkEnd - 1n).toString()} ` +
                         `(${result.startHex} .. ${result.endHex})`
                     );
                     return result;
                 }
 
-                for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
-                    if (stage === 0) runStart = findMidBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, fallback);
-                    else if (stage === 1) runStart = findBeginBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, fallback);
-                    else if (stage === 2) runStart = findEndBootstrapRun(currentPuzzle.id, shardIndex, totalChunks, fallback);
+                for (let fallback = neededChunksBig - 1n; fallback >= 1n; fallback--) {
+                    if (stage === 0) runStartBig = findMidBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, fallback);
+                    else if (stage === 1) runStartBig = findBeginBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, fallback);
+                    else if (stage === 2) runStartBig = findEndBootstrapRun(currentPuzzle.id, shardIndex, perShardChunksBig, fallback);
 
-                    if (runStart !== null) {
-                        const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStart, fallback);
+                    if (runStartBig !== null) {
+                        const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStartBig, fallback);
+
                         stmtShardBootstrapStageSet.run(stage + 1, currentPuzzle.id, shardIndex);
-                        db.prepare(`UPDATE puzzles SET shard_alloc_cursor = ? WHERE id = ?`)
-                            .run(Number((shardOrderIndex + 1n) % shardCountBig), currentPuzzle.id);
+                        stmtShardCursorSet.run(
+                            encodeBigIndex((runStartBig + 1n) % perShardChunksBig),
+                            currentPuzzle.id,
+                            shardIndex
+                        );
+                        stmtPuzzleShardCursorTextSet.run(
+                            encodeBigIndex((shardOrderIndex + 1n) % shardCountBig),
+                            currentPuzzle.id
+                        );
 
                         console.log(
                             `[Alloc] bootstrap fallback shard ${shardIndex} stage ${stage} -> assigned ${name} ` +
-                            `local vchunks ${result.localVChunkStart}..${result.localVChunkEnd - 1} ` +
+                            `local vchunks ${result.localVChunkStart.toString()}..${(result.localVChunkEnd - 1n).toString()} ` +
                             `(${result.startHex} .. ${result.endHex})`
                         );
                         return result;
@@ -911,64 +964,77 @@ function createApp(db) {
                 b = affine.b;
             }
 
-            const probeLimit = Math.min(totalChunks, MAX_ALLOC_PROBES);
+            const triedStarts = new Set();
 
-            let triedStarts = new Set();
-            for (let offset = 0; offset < probeLimit; offset++) {
+            for (let offset = 0; offset < MAX_ALLOC_PROBES; offset++) {
                 const orderIndex = (rawCursorBig + BigInt(offset)) % perShardChunksBig;
-                const candidateIndex = Number(
+                const candidateIndex = (
                     PERMUTATION_MODE === 'affine'
                         ? permuteIndexAffine(orderIndex, perShardChunksBig, a, b)
                         : permuteIndexFeistel(orderIndex, perShardChunksBig, `${permKey}:shard:${shardIndex}`)
                 );
 
-                const runStart = normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks);
-                if (triedStarts.has(runStart)) continue;
-                triedStarts.add(runStart);
+                const runStartBig = normalizeRunStartForCandidateBig(candidateIndex, neededChunksBig, perShardChunksBig);
+                const key = encodeBigIndex(runStartBig);
+                if (triedStarts.has(key)) continue;
+                triedStarts.add(key);
 
-                if (rangeIsFreeInShard(currentPuzzle.id, shardIndex, runStart, runStart + neededChunks)) {
-                    stmtShardCursorSet.run(Number((orderIndex + 1n) % perShardChunksBig), currentPuzzle.id, shardIndex);
-                    db.prepare(`UPDATE puzzles SET shard_alloc_cursor = ? WHERE id = ?`)
-                        .run(Number((shardOrderIndex + 1n) % shardCountBig), currentPuzzle.id);
+                if (rangeIsFreeInShard(currentPuzzle.id, shardIndex, runStartBig, runStartBig + neededChunksBig)) {
+                    stmtShardCursorSet.run(
+                        encodeBigIndex((orderIndex + 1n) % perShardChunksBig),
+                        currentPuzzle.id,
+                        shardIndex
+                    );
+                    stmtPuzzleShardCursorTextSet.run(
+                        encodeBigIndex((shardOrderIndex + 1n) % shardCountBig),
+                        currentPuzzle.id
+                    );
 
-                    const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStart, neededChunks);
+                    const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStartBig, neededChunksBig);
                     if (stage < 3) stmtShardBootstrapStageSet.run(3, currentPuzzle.id, shardIndex);
 
                     console.log(
                         `[Alloc] ${PERMUTATION_MODE} shard ${shardIndex} full-run -> assigned ${name} ` +
-                        `local vchunks ${result.localVChunkStart}..${result.localVChunkEnd - 1} ` +
+                        `local vchunks ${result.localVChunkStart.toString()}..${(result.localVChunkEnd - 1n).toString()} ` +
                         `(${result.startHex} .. ${result.endHex})`
                     );
                     return result;
                 }
             }
 
-            for (let fallback = neededChunks - 1; fallback >= 1; fallback--) {
-                triedStarts = new Set();
+            for (let fallback = neededChunksBig - 1n; fallback >= 1n; fallback--) {
+                const triedFallback = new Set();
 
-                for (let offset = 0; offset < probeLimit; offset++) {
+                for (let offset = 0; offset < MAX_ALLOC_PROBES; offset++) {
                     const orderIndex = (rawCursorBig + BigInt(offset)) % perShardChunksBig;
-                    const candidateIndex = Number(
+                    const candidateIndex = (
                         PERMUTATION_MODE === 'affine'
                             ? permuteIndexAffine(orderIndex, perShardChunksBig, a, b)
                             : permuteIndexFeistel(orderIndex, perShardChunksBig, `${permKey}:shard:${shardIndex}`)
                     );
 
-                    const runStart = normalizeRunStartForCandidate(candidateIndex, fallback, totalChunks);
-                    if (triedStarts.has(runStart)) continue;
-                    triedStarts.add(runStart);
+                    const runStartBig = normalizeRunStartForCandidateBig(candidateIndex, fallback, perShardChunksBig);
+                    const key = encodeBigIndex(runStartBig);
+                    if (triedFallback.has(key)) continue;
+                    triedFallback.add(key);
 
-                    if (rangeIsFreeInShard(currentPuzzle.id, shardIndex, runStart, runStart + fallback)) {
-                        stmtShardCursorSet.run(Number((orderIndex + 1n) % perShardChunksBig), currentPuzzle.id, shardIndex);
-                        db.prepare(`UPDATE puzzles SET shard_alloc_cursor = ? WHERE id = ?`)
-                            .run(Number((shardOrderIndex + 1n) % shardCountBig), currentPuzzle.id);
+                    if (rangeIsFreeInShard(currentPuzzle.id, shardIndex, runStartBig, runStartBig + fallback)) {
+                        stmtShardCursorSet.run(
+                            encodeBigIndex((orderIndex + 1n) % perShardChunksBig),
+                            currentPuzzle.id,
+                            shardIndex
+                        );
+                        stmtPuzzleShardCursorTextSet.run(
+                            encodeBigIndex((shardOrderIndex + 1n) % shardCountBig),
+                            currentPuzzle.id
+                        );
 
-                        const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStart, fallback);
+                        const result = assignVirtualChunkRun(name, currentPuzzle, shardIndex, runStartBig, fallback);
                         if (stage < 3) stmtShardBootstrapStageSet.run(3, currentPuzzle.id, shardIndex);
 
                         console.log(
                             `[Alloc] ${PERMUTATION_MODE} shard ${shardIndex} fallback -> assigned ${name} ` +
-                            `local vchunks ${result.localVChunkStart}..${result.localVChunkEnd - 1} ` +
+                            `local vchunks ${result.localVChunkStart.toString()}..${(result.localVChunkEnd - 1n).toString()} ` +
                             `(${result.startHex} .. ${result.endHex})`
                         );
                         return result;
@@ -1156,6 +1222,8 @@ function createApp(db) {
                 `).run(primaryKey, primaryAddr, job_id, name);
 
                 let isLate = false;
+                let completedNow = info.changes > 0;
+
                 if (!info.changes) {
                     const alreadyRecorded = db.prepare(`
                         SELECT id FROM findings WHERE chunk_id = ? AND worker_name = ? AND found_key = ?
@@ -1168,7 +1236,7 @@ function createApp(db) {
                             WHERE id = ? AND prev_worker_name = ? AND status IN ('assigned', 'reclaimed')
                         `).get(job_id, name);
 
-                        if (!latePrev) return { accepted: false, inserted: [], isLate: false };
+                        if (!latePrev) return { accepted: false, inserted: [], isLate: false, completedNow: false };
 
                         db.prepare(`
                             UPDATE chunks
@@ -1178,7 +1246,9 @@ function createApp(db) {
                                 found_address = COALESCE(found_address, ?)
                             WHERE id = ?
                         `).run(name, primaryKey, primaryAddr, job_id);
+
                         isLate = true;
+                        completedNow = true;
                     }
                 }
 
@@ -1187,7 +1257,8 @@ function createApp(db) {
                     const r = stmtInsertFinding.run(job_id, name, f.found_key, f.found_address || null);
                     if (r.changes) inserted.push(f);
                 }
-                return { accepted: true, inserted, isLate };
+
+                return { accepted: true, inserted, isLate, completedNow };
             })();
 
             if (!result.accepted) return res.json({ accepted: false });
@@ -1199,6 +1270,18 @@ function createApp(db) {
                 const msg = `[${new Date().toISOString()}] BINGO! Job: ${job_id} | Worker: ${name} | KEY: ${f.found_key} | ADDR: ${f.found_address || 'Unknown'}\n`;
                 console.log(`\n🚨🚨🚨 ${msg}`);
                 fs.appendFileSync('BINGO_FOUND_KEYS.txt', msg);
+            }
+
+            if (result.completedNow) {
+                const completedChunk = db.prepare(`
+                    SELECT puzzle_id, shard_index
+                    FROM chunks
+                    WHERE id = ?
+                `).get(job_id);
+
+                if (completedChunk && completedChunk.shard_index !== null && completedChunk.shard_index !== undefined) {
+                    stmtShardCompletedRunInc.run(completedChunk.puzzle_id, completedChunk.shard_index);
+                }
             }
         } else {
             const { keys_scanned } = req.body;
@@ -1248,6 +1331,16 @@ function createApp(db) {
                 WHERE id = ? AND worker_name = ? AND status = 'assigned'
             `).run(job_id, name);
             if (!info.changes) return res.json({ accepted: false });
+
+            const completedChunk = db.prepare(`
+                SELECT puzzle_id, shard_index
+                FROM chunks
+                WHERE id = ?
+            `).get(job_id);
+
+            if (completedChunk && completedChunk.shard_index !== null && completedChunk.shard_index !== undefined) {
+                stmtShardCompletedRunInc.run(completedChunk.puzzle_id, completedChunk.shard_index);
+            }
         }
 
         const chunk = db.prepare(`
@@ -1364,19 +1457,54 @@ function createApp(db) {
                 return d > 0n ? 1 : d < 0n ? -1 : 0;
             });
 
-        const finders = pid ? db.prepare(`
+        const rawFinders = pid ? db.prepare(`
             SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-                   c.id AS chunk_global,
-                   c.shard_index,
-                   c.local_vchunk_start,
-                   c.local_vchunk_end,
-                   c.vchunk_start,
-                   c.vchunk_end
+                c.id AS chunk_global,
+                c.shard_index,
+                c.local_vchunk_start_text AS local_vchunk_start,
+                c.local_vchunk_end_text AS local_vchunk_end,
+                c.vchunk_start,
+                c.vchunk_end
             FROM findings f
             JOIN chunks c ON c.id = f.chunk_id
             WHERE c.puzzle_id = ? AND c.is_test = 0
             ORDER BY f.id ASC
         `).all(pid) : [];
+
+        const finders = rawFinders.map(f => {
+            const localStartBig = decodeBigIndex(f.local_vchunk_start, null);
+            const localEndBig = decodeBigIndex(f.local_vchunk_end, null);
+
+            const runStartBig = localStartBig !== null
+                ? localStartBig
+                : decodeBigIndex(f.vchunk_start, null);
+
+            const runEndBig = localEndBig !== null
+                ? localEndBig
+                : decodeBigIndex(f.vchunk_end, null);
+
+            return {
+                worker_name: f.worker_name,
+                found_key: f.found_key,
+                found_address: f.found_address,
+                created_at: f.created_at,
+                chunk_global: f.chunk_global,
+                shard_index: f.shard_index ?? null,
+
+                // keep raw values too, for compatibility if UI still reads them
+                local_vchunk_start: f.local_vchunk_start ?? null,
+                local_vchunk_end: f.local_vchunk_end ?? null,
+                vchunk_start: f.vchunk_start ?? null,
+                vchunk_end: f.vchunk_end ?? null,
+
+                // new normalized display-friendly values
+                vchunk_start_display: runStartBig !== null ? runStartBig.toString() : null,
+                vchunk_end_display: runEndBig !== null ? (runEndBig - 1n).toString() : null,
+                vchunk_run_display: (runStartBig !== null && runEndBig !== null)
+                    ? `${runStartBig.toString()}..${(runEndBig - 1n).toString()}`
+                    : null,
+            };
+        });
 
         const assignedNow = puzzle ? db.prepare(`
             SELECT
@@ -1385,8 +1513,8 @@ function createApp(db) {
                 c.vchunk_start,
                 c.vchunk_end,
                 c.shard_index,
-                c.local_vchunk_start,
-                c.local_vchunk_end,
+                c.local_vchunk_start_text AS local_vchunk_start,
+                c.local_vchunk_end_text AS local_vchunk_end,
                 c.assigned_at,
                 c.heartbeat_at,
                 c.start_hex,
@@ -1405,24 +1533,25 @@ function createApp(db) {
             const assignedMs = parseUtcDateMs(c.assigned_at);
             const elapsedSeconds = assignedMs !== null ? Math.max(0, (Date.now() - assignedMs) / 1000) : null;
 
-            const runStart =
-                c.local_vchunk_start !== null && c.local_vchunk_start !== undefined
-                    ? c.local_vchunk_start
-                    : (c.vchunk_start ?? null);
+            const localStartBig = decodeBigIndex(c.local_vchunk_start, null);
+            const localEndBig = decodeBigIndex(c.local_vchunk_end, null);
 
-            const runEnd =
-                c.local_vchunk_end !== null && c.local_vchunk_end !== undefined
-                    ? c.local_vchunk_end
-                    : (c.vchunk_end ?? null);
+            const runStartBig = localStartBig !== null
+                ? localStartBig
+                : decodeBigIndex(c.vchunk_start, null);
+
+            const runEndBig = localEndBig !== null
+                ? localEndBig
+                : decodeBigIndex(c.vchunk_end, null);
 
             workerAssignedMap[c.worker_name] = {
                 current_chunk: c.id,
                 current_shard_index: c.shard_index ?? null,
-                current_vchunk_run: (runStart !== null && runEnd !== null)
-                    ? `${runStart}..${runEnd - 1}`
+                current_vchunk_run: (runStartBig !== null && runEndBig !== null)
+                    ? `${runStartBig.toString()}..${(runEndBig - 1n).toString()}`
                     : null,
-                current_vchunk_run_start: runStart,
-                current_vchunk_run_end: runEnd, // exclusive
+                current_vchunk_run_start: runStartBig !== null ? runStartBig.toString() : null,
+                current_vchunk_run_end: runEndBig !== null ? runEndBig.toString() : null,
                 assigned_at: c.assigned_at ?? null,
                 heartbeat_at: c.heartbeat_at ?? null,
                 current_job_start_hex: c.start_hex ?? null,
@@ -1489,64 +1618,62 @@ function createApp(db) {
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
                 if (strategy === ALLOC_STRATEGY_VCHUNKS) {
-                    const perShard = Number(puzzle.virtual_chunks_per_shard || puzzle.virtual_chunk_count || 0);
-                    const shardCount = Number(puzzle.shard_count || 0);
-                    return perShard * shardCount;
+                    const perShard = decodeBigIndex(
+                        puzzle.virtual_chunks_per_shard_text,
+                        decodeBigIndex(
+                            puzzle.virtual_chunks_per_shard,
+                            decodeBigIndex(
+                                puzzle.virtual_chunk_count_text,
+                                decodeBigIndex(puzzle.virtual_chunk_count, 0n)
+                            )
+                        )
+                    ) || 0n;
+
+                    const shardCount = BigInt(puzzle.shard_count || 0);
+                    return (perShard * shardCount).toString();
                 }
-                return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(pid).c;
+                return String(db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(pid).c || 0);
             })()
-            : 0;
+            : '0';
 
         const virtualChunksStarted = pid
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
                 if (strategy === ALLOC_STRATEGY_VCHUNKS) {
-                    const row = db.prepare(`
-                        SELECT COALESCE(SUM(
-                            CASE
-                                WHEN local_vchunk_start IS NOT NULL AND local_vchunk_end IS NOT NULL
-                                THEN (local_vchunk_end - local_vchunk_start)
-                                WHEN vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
-                                THEN (vchunk_end - vchunk_start)
-                                ELSE 0
-                            END
-                        ), 0) AS c
+                    const rows = db.prepare(`
+                        SELECT local_vchunk_start_text AS local_vchunk_start,
+                        local_vchunk_end_text AS local_vchunk_end,
+                        vchunk_start, vchunk_end
                         FROM chunks
                         WHERE puzzle_id = ? AND is_test = 0
-                    `).get(pid);
-                    return row.c || 0;
+                    `).all(pid);
+                    return sumShardLocalRuns(rows);
                 }
-                return db.prepare(`
+                return String(db.prepare(`
                     SELECT COUNT(DISTINCT sector_id) AS c
                     FROM chunks
                     WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL
-                `).get(pid).c;
+                `).get(pid).c || 0);
             })()
-            : 0;
+            : '0';
 
         const virtualChunksCompleted = pid
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
                 if (strategy === ALLOC_STRATEGY_VCHUNKS) {
-                    const row = db.prepare(`
-                        SELECT COALESCE(SUM(
-                            CASE
-                                WHEN local_vchunk_start IS NOT NULL AND local_vchunk_end IS NOT NULL
-                                THEN (local_vchunk_end - local_vchunk_start)
-                                WHEN vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
-                                THEN (vchunk_end - vchunk_start)
-                                ELSE 0
-                            END
-                        ), 0) AS c
+                    const rows = db.prepare(`
+                        SELECT local_vchunk_start_text AS local_vchunk_start,
+                        local_vchunk_end_text AS local_vchunk_end,
+                        vchunk_start, vchunk_end
                         FROM chunks
                         WHERE puzzle_id = ? AND is_test = 0
                           AND status IN ('completed', 'FOUND')
-                    `).get(pid);
-                    return row.c || 0;
+                    `).all(pid);
+                    return sumShardLocalRuns(rows);
                 }
-                return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ? AND status = 'done'").get(pid).c;
+                return String(db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ? AND status = 'done'").get(pid).c || 0);
             })()
-            : 0;
+            : '0';
 
         const allocGenerationRows = pid ? db.prepare(`
             SELECT alloc_generation, COUNT(*) AS count
@@ -1587,11 +1714,11 @@ function createApp(db) {
                 alloc_strategy: puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY,
                 alloc_cursor: puzzle.alloc_cursor || 0,
                 virtual_chunk_size_keys: puzzle.virtual_chunk_size_keys || null,
-                virtual_chunk_count: puzzle.virtual_chunk_count || null,
-                virtual_chunks_per_shard: puzzle.virtual_chunks_per_shard || null,
+                virtual_chunk_count: puzzle.virtual_chunk_count_text || puzzle.virtual_chunk_count || null,
+                virtual_chunks_per_shard: puzzle.virtual_chunks_per_shard_text || puzzle.virtual_chunks_per_shard || null,
                 shard_size_keys: puzzle.shard_size_keys || null,
                 shard_count: puzzle.shard_count || null,
-                shard_alloc_cursor: puzzle.shard_alloc_cursor || 0,
+                shard_alloc_cursor: puzzle.shard_alloc_cursor_text || puzzle.shard_alloc_cursor || 0,
                 bootstrap_stage: puzzle.bootstrap_stage || 0,
             } : null,
             active_workers_count: visibleWorkers.filter(w => w.active).length,
@@ -1802,8 +1929,9 @@ function createApp(db) {
         const puzzles = db.prepare(`
             SELECT id, name, active, start_hex, end_hex,
                    alloc_strategy, alloc_seed, alloc_cursor,
-                   shard_size_keys, shard_count, shard_alloc_cursor,
-                   virtual_chunk_size_keys, virtual_chunk_count, virtual_chunks_per_shard,
+                   shard_size_keys, shard_count, shard_alloc_cursor, shard_alloc_cursor_text,
+                   virtual_chunk_size_keys, virtual_chunk_count, virtual_chunk_count_text,
+                   virtual_chunks_per_shard, virtual_chunks_per_shard_text,
                    bootstrap_stage
             FROM puzzles
             ORDER BY id ASC
@@ -1880,7 +2008,7 @@ if (require.main === module) {
             puzzle_id INTEGER NOT NULL,
             shard_index INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
-            alloc_cursor INTEGER NOT NULL DEFAULT 0,
+            alloc_cursor_text TEXT NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
             bootstrap_stage INTEGER NOT NULL DEFAULT 0,
             assigned_runs INTEGER NOT NULL DEFAULT 0,
             completed_runs INTEGER NOT NULL DEFAULT 0,
@@ -1916,8 +2044,86 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN shard_index INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_start INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_end INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN shard_alloc_cursor_text TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_count_text TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunks_per_shard_text TEXT").run(); } catch (_) {}
+
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_start_text TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_end_text TEXT").run(); } catch (_) {}
     try {
         db.prepare("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL").run();
+    } catch (_) {}
+
+    try {
+    db.prepare(`
+        UPDATE puzzles
+        SET shard_alloc_cursor_text = CASE
+            WHEN shard_alloc_cursor_text IS NOT NULL AND shard_alloc_cursor_text != '' THEN shard_alloc_cursor_text
+            WHEN shard_alloc_cursor IS NOT NULL THEN printf('%064x', shard_alloc_cursor)
+            ELSE '0000000000000000000000000000000000000000000000000000000000000000'
+        END
+        WHERE shard_alloc_cursor_text IS NULL OR shard_alloc_cursor_text = ''
+    `).run();
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE puzzles
+            SET virtual_chunk_count_text = CASE
+                WHEN virtual_chunk_count_text IS NOT NULL AND virtual_chunk_count_text != '' THEN virtual_chunk_count_text
+                WHEN virtual_chunk_count IS NOT NULL THEN CAST(virtual_chunk_count AS TEXT)
+                ELSE NULL
+            END
+            WHERE virtual_chunk_count_text IS NULL OR virtual_chunk_count_text = ''
+        `).run();
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE puzzles
+            SET virtual_chunks_per_shard_text = CASE
+                WHEN virtual_chunks_per_shard_text IS NOT NULL AND virtual_chunks_per_shard_text != '' THEN virtual_chunks_per_shard_text
+                WHEN virtual_chunks_per_shard IS NOT NULL THEN CAST(virtual_chunks_per_shard AS TEXT)
+                ELSE NULL
+            END
+            WHERE virtual_chunks_per_shard_text IS NULL OR virtual_chunks_per_shard_text = ''
+        `).run();
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE chunks
+            SET local_vchunk_start_text = CASE
+                WHEN local_vchunk_start_text IS NOT NULL AND local_vchunk_start_text != '' THEN local_vchunk_start_text
+                WHEN local_vchunk_start IS NOT NULL THEN printf('%064x', local_vchunk_start)
+                ELSE NULL
+            END
+            WHERE local_vchunk_start_text IS NULL OR local_vchunk_start_text = ''
+        `).run();
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE chunks
+            SET local_vchunk_end_text = CASE
+                WHEN local_vchunk_end_text IS NOT NULL AND local_vchunk_end_text != '' THEN local_vchunk_end_text
+                WHEN local_vchunk_end IS NOT NULL THEN printf('%064x', local_vchunk_end)
+                ELSE NULL
+            END
+            WHERE local_vchunk_end_text IS NULL OR local_vchunk_end_text = ''
+        `).run();
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE puzzle_shards
+            SET alloc_cursor_text = CASE
+                WHEN alloc_cursor_text IS NOT NULL AND alloc_cursor_text != '' THEN alloc_cursor_text
+                WHEN alloc_cursor IS NOT NULL THEN printf('%064x', alloc_cursor)
+                ELSE '0000000000000000000000000000000000000000000000000000000000000000'
+            END
+            WHERE alloc_cursor_text IS NULL OR alloc_cursor_text = ''
+        `).run();
     } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
@@ -1925,6 +2131,8 @@ if (require.main === module) {
 
     try { db.prepare("CREATE INDEX IF NOT EXISTS idx_puzzle_shards_status ON puzzle_shards (puzzle_id, status, shard_index)").run(); } catch (_) {}
     try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_shard_span ON chunks (puzzle_id, shard_index, local_vchunk_start, local_vchunk_end, status)").run(); } catch (_) {}
+
+    try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_shard_span_text ON chunks (puzzle_id, shard_index, local_vchunk_start_text, local_vchunk_end_text, status)").run(); } catch (_) {}
 
     try {
         db.prepare(`
@@ -1947,6 +2155,14 @@ if (require.main === module) {
             SET alloc_strategy = ?
             WHERE alloc_strategy IS NULL
         `).run(ALLOC_STRATEGY_LEGACY);
+    } catch (_) {}
+
+    try {
+        db.prepare(`
+            UPDATE puzzle_shards
+            SET alloc_cursor_text = '0000000000000000000000000000000000000000000000000000000000000000'
+            WHERE alloc_cursor_text IS NULL OR alloc_cursor_text = ''
+        `).run();
     } catch (_) {}
 
     // Seed from KEYSPACE_<NAME>=<start_hex>:<end_hex>
@@ -2100,7 +2316,6 @@ module.exports = {
     deriveAffinePermutationParams,
     permuteIndexAffine,
     defaultAllocSeedForPuzzle,
-    chooseDefaultVirtualChunkSize,
     bitLengthBigInt,
     nextEven,
     feistelRoundValue,
