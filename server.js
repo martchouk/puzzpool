@@ -43,6 +43,17 @@ const MAX_STORED_VCHUNKS = BigInt(Number.MAX_SAFE_INTEGER);
 // pseudo-random candidate positions each request.
 const MAX_ALLOC_PROBES = parseInt(process.env.MAX_ALLOC_PROBES || '8192', 10);
 
+const TARGET_MAX_SHARDS = BigInt(parseInt(process.env.TARGET_MAX_SHARDS || '65536', 10));
+const TARGET_MAX_VCHUNKS_PER_SHARD = BigInt(
+    process.env.TARGET_MAX_VCHUNKS_PER_SHARD || String(Number.MAX_SAFE_INTEGER)
+);
+
+// Puzzle #71 range floor for shard sizing:
+// start = 0x0400000000000000000
+// end   = 0x07fffffffffffffffff
+// range = end - start
+const PUZZLE71_RANGE_FLOOR = BigInt('1180591620717411303423');
+
 // GPU batch size kept for admin test-chunk default
 const GPU_BATCH_KEYS = 4278190080n;
 
@@ -106,6 +117,65 @@ function bitLengthBigInt(n) {
         bits++;
     }
     return bits;
+}
+
+function nextPowerOfTwoBigInt(n) {
+    if (n <= 1n) return 1n;
+    let p = 1n;
+    while (p < n) p <<= 1n;
+    return p;
+}
+
+function chooseShardSize(range) {
+    const rawShardSize = ceilDiv(range, TARGET_MAX_SHARDS);
+    const minShardSize = PUZZLE71_RANGE_FLOOR;
+    return nextPowerOfTwoBigInt(rawShardSize > minShardSize ? rawShardSize : minShardSize);
+}
+
+function chooseVirtualChunkSizeForShard(shardSize) {
+    let size = DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS > 0n ? DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS : 1n;
+    if (size > shardSize) size = shardSize;
+
+    while (ceilDiv(shardSize, size) > TARGET_MAX_VCHUNKS_PER_SHARD) {
+        size <<= 1n;
+        if (size > shardSize) {
+            size = shardSize;
+            break;
+        }
+    }
+    return size;
+}
+
+function validateShardCountOrThrow(shardCountBig, context) {
+    if (shardCountBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+            `${context}: shard count ${shardCountBig.toString()} exceeds JS safe integer range ` +
+            `(${Number.MAX_SAFE_INTEGER}).`
+        );
+    }
+}
+
+function shardLocalVirtualChunkRangeToHex(puzzle, shardIndex, localVChunkStart, localVChunkEndExclusive) {
+    const pStart = BigInt('0x' + puzzle.start_hex);
+    const pEnd   = BigInt('0x' + puzzle.end_hex);
+
+    const shardSize = BigInt(puzzle.shard_size_keys);
+    const vchunkSize = BigInt(puzzle.virtual_chunk_size_keys);
+
+    const absoluteStart = pStart
+        + BigInt(shardIndex) * shardSize
+        + BigInt(localVChunkStart) * vchunkSize;
+
+    const absoluteEnd = pStart
+        + BigInt(shardIndex) * shardSize
+        + BigInt(localVChunkEndExclusive) * vchunkSize;
+
+    const clippedEnd = bigIntMin(absoluteEnd, pEnd);
+
+    return {
+        startHex: absoluteStart.toString(16).padStart(64, '0'),
+        endHex: clippedEnd.toString(16).padStart(64, '0'),
+    };
 }
 
 function nextEven(n) {
@@ -329,15 +399,21 @@ function seedSectors(db, puzzleId, startHex, endHex) {
 }
 
 // --- New allocator seeding: virtual chunks ---
-function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChunkSizeKeys) {
+function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChunkSizeKeys = null) {
     const { range } = normalizedRange(startHex, endHex);
-    const chunkSize = bigIntMin(
-        virtualChunkSizeKeys && virtualChunkSizeKeys > 0n ? virtualChunkSizeKeys : chooseDefaultVirtualChunkSize(range),
-        range
-    );
-    const chunkCountBig = ceilDiv(range, chunkSize);
-    validateVirtualChunkCountOrThrow(chunkCountBig, 'seedVirtualChunks');
-    const chunkCount = Number(chunkCountBig);
+
+    const shardSize = bigIntMin(chooseShardSize(range), range);
+    const shardCountBig = ceilDiv(range, shardSize);
+    validateShardCountOrThrow(shardCountBig, 'seedVirtualChunks');
+    const shardCount = Number(shardCountBig);
+
+    let chunkSize = virtualChunkSizeKeys && virtualChunkSizeKeys > 0n
+        ? bigIntMin(virtualChunkSizeKeys, shardSize)
+        : chooseVirtualChunkSizeForShard(shardSize);
+
+    const vchunksPerShardBig = ceilDiv(shardSize, chunkSize);
+    validateVirtualChunkCountOrThrow(vchunksPerShardBig, 'seedVirtualChunks');
+    const vchunksPerShard = Number(vchunksPerShardBig);
 
     db.transaction(() => {
         db.prepare(`
@@ -345,20 +421,44 @@ function seedVirtualChunks(db, puzzleId, startHex, endHex, allocSeed, virtualChu
             SET alloc_strategy = ?,
                 alloc_seed = ?,
                 alloc_cursor = 0,
+                bootstrap_stage = 0,
+                shard_size_keys = ?,
+                shard_count = ?,
+                shard_alloc_cursor = 0,
                 virtual_chunk_size_keys = ?,
                 virtual_chunk_count = ?,
-                bootstrap_stage = 0
+                virtual_chunks_per_shard = ?
             WHERE id = ?
         `).run(
             ALLOC_STRATEGY_VCHUNKS,
             allocSeed,
+            shardSize.toString(),
+            shardCount,
             chunkSize.toString(),
-            chunkCount,
+            vchunksPerShard,   // keep virtual_chunk_count as shard-local count for compatibility during migration
+            vchunksPerShard,
             puzzleId
         );
+
+        db.prepare("DELETE FROM puzzle_shards WHERE puzzle_id = ?").run(puzzleId);
+
+        const insertShard = db.prepare(`
+            INSERT INTO puzzle_shards (
+                puzzle_id, shard_index, status, alloc_cursor, bootstrap_stage, assigned_runs, completed_runs
+            ) VALUES (?, ?, 'open', 0, 0, 0, 0)
+        `);
+
+        for (let i = 0; i < shardCount; i++) {
+            insertShard.run(puzzleId, i);
+        }
     })();
 
-    console.log(`[System] Seeded ${chunkCount} virtual chunks for puzzle ${puzzleId} (virtual chunk size ${chunkSize.toString()} keys)`);
+    console.log(
+        `[System] Seeded ${shardCount} shards for puzzle ${puzzleId} ` +
+        `(shard size ${shardSize.toString()} keys, ` +
+        `virtual chunk size ${chunkSize.toString()} keys, ` +
+        `${vchunksPerShard} vchunks/shard)`
+    );
 }
 
 function ensureAllocatorForPuzzle(db, puzzleId) {
@@ -374,38 +474,51 @@ function ensureAllocatorForPuzzle(db, puzzleId) {
 
         const seed = puzzle.alloc_seed || defaultAllocSeedForPuzzle(puzzle, ALLOC_STRATEGY_VCHUNKS);
         const { range } = normalizedRange(puzzle.start_hex, puzzle.end_hex);
-        const desiredDefaultSize = chooseDefaultVirtualChunkSize(range);
 
-        const size = (() => {
+        const desiredShardSize = bigIntMin(chooseShardSize(range), range);
+        const desiredChunkSize = (() => {
             if (puzzle.virtual_chunk_size_keys) {
                 try {
                     const stored = BigInt(puzzle.virtual_chunk_size_keys);
-                    const actual = bigIntMin(stored, range);
-                    if (ceilDiv(range, actual) <= MAX_STORED_VCHUNKS) {
-                        return actual;
-                    }
+                    if (stored > 0n) return bigIntMin(stored, desiredShardSize);
                 } catch (_) {}
             }
-            return desiredDefaultSize;
+            return chooseVirtualChunkSizeForShard(desiredShardSize);
         })();
 
-        const expectedCount = ceilDiv(range, size);
-        const storedCount = parsePositiveBigInt(puzzle.virtual_chunk_count, null);
+        const expectedShardCount = ceilDiv(range, desiredShardSize);
+        const expectedVChunksPerShard = ceilDiv(desiredShardSize, desiredChunkSize);
 
-        if (!storedCount || storedCount !== expectedCount) {
-            seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, size);
+        const storedShardCount = parsePositiveBigInt(puzzle.shard_count, null);
+        const storedShardSize = parsePositiveBigInt(puzzle.shard_size_keys, null);
+        const storedVChunkCount = parsePositiveBigInt(puzzle.virtual_chunk_count, null);
+        const storedPerShard = parsePositiveBigInt(puzzle.virtual_chunks_per_shard, null);
+
+        const metadataLooksWrong =
+            !storedShardCount ||
+            !storedShardSize ||
+            !storedVChunkCount ||
+            !storedPerShard ||
+            storedShardCount !== expectedShardCount ||
+            storedShardSize !== desiredShardSize ||
+            storedVChunkCount !== expectedVChunksPerShard ||
+            storedPerShard !== expectedVChunksPerShard;
+
+        if (metadataLooksWrong) {
+            seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, desiredChunkSize);
         } else if (
             AUTO_RESEED_EMPTY_VCHUNK_PUZZLES &&
             issuedCount === 0 &&
-            size !== desiredDefaultSize
+            BigInt(puzzle.virtual_chunk_size_keys || desiredChunkSize.toString()) !== desiredChunkSize
         ) {
             console.log(
                 `[System] Re-seeding empty virtual-chunk puzzle ${puzzleId} ` +
-                `from size ${size.toString()} to ${desiredDefaultSize.toString()} keys`
+                `to shard-aware layout with chunk size ${desiredChunkSize.toString()}`
             );
-            seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, desiredDefaultSize);
+            seedVirtualChunks(db, puzzleId, puzzle.start_hex, puzzle.end_hex, seed, desiredChunkSize);
         }
-    } else {
+    } 
+    else {
         const sectorCount = db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(puzzleId).c;
         if (sectorCount === 0) {
             seedSectors(db, puzzle.id, puzzle.start_hex, puzzle.end_hex);
@@ -1259,7 +1372,11 @@ function createApp(db) {
         const virtualChunksTotal = pid
             ? (() => {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
-                if (strategy === ALLOC_STRATEGY_VCHUNKS) return puzzle.virtual_chunk_count || 0;
+                if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+                    const perShard = Number(puzzle.virtual_chunks_per_shard || puzzle.virtual_chunk_count || 0);
+                    const shardCount = Number(puzzle.shard_count || 0);
+                    return perShard * shardCount;
+                }
                 return db.prepare("SELECT COUNT(*) AS c FROM sectors WHERE puzzle_id = ?").get(pid).c;
             })()
             : 0;
@@ -1269,9 +1386,17 @@ function createApp(db) {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
                 if (strategy === ALLOC_STRATEGY_VCHUNKS) {
                     const row = db.prepare(`
-                        SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) AS c
+                        SELECT COALESCE(SUM(
+                            CASE
+                                WHEN local_vchunk_start IS NOT NULL AND local_vchunk_end IS NOT NULL
+                                THEN (local_vchunk_end - local_vchunk_start)
+                                WHEN vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                                THEN (vchunk_end - vchunk_start)
+                                ELSE 0
+                            END
+                        ), 0) AS c
                         FROM chunks
-                        WHERE puzzle_id = ? AND is_test = 0 AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                        WHERE puzzle_id = ? AND is_test = 0
                     `).get(pid);
                     return row.c || 0;
                 }
@@ -1288,10 +1413,18 @@ function createApp(db) {
                 const strategy = puzzle.alloc_strategy || ALLOC_STRATEGY_LEGACY;
                 if (strategy === ALLOC_STRATEGY_VCHUNKS) {
                     const row = db.prepare(`
-                        SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) AS c
+                        SELECT COALESCE(SUM(
+                            CASE
+                                WHEN local_vchunk_start IS NOT NULL AND local_vchunk_end IS NOT NULL
+                                THEN (local_vchunk_end - local_vchunk_start)
+                                WHEN vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                                THEN (vchunk_end - vchunk_start)
+                                ELSE 0
+                            END
+                        ), 0) AS c
                         FROM chunks
-                        WHERE puzzle_id = ? AND is_test = 0 AND status IN ('completed', 'FOUND')
-                          AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL
+                        WHERE puzzle_id = ? AND is_test = 0
+                          AND status IN ('completed', 'FOUND')
                     `).get(pid);
                     return row.c || 0;
                 }
@@ -1339,6 +1472,10 @@ function createApp(db) {
                 alloc_cursor: puzzle.alloc_cursor || 0,
                 virtual_chunk_size_keys: puzzle.virtual_chunk_size_keys || null,
                 virtual_chunk_count: puzzle.virtual_chunk_count || null,
+                virtual_chunks_per_shard: puzzle.virtual_chunks_per_shard || null,
+                shard_size_keys: puzzle.shard_size_keys || null,
+                shard_count: puzzle.shard_count || null,
+                shard_alloc_cursor: puzzle.shard_alloc_cursor || 0,
                 bootstrap_stage: puzzle.bootstrap_stage || 0,
             } : null,
             active_workers_count: visibleWorkers.filter(w => w.active).length,
@@ -1420,9 +1557,10 @@ function createApp(db) {
 
         let vchunkSize = null;
         if (strategy === ALLOC_STRATEGY_VCHUNKS) {
+            const shardSize = bigIntMin(chooseShardSize(puzzleRange), puzzleRange);
             const parsed = parsePositiveBigInt(virtual_chunk_size_keys, null);
-            vchunkSize = parsed ? bigIntMin(parsed, puzzleRange) : chooseDefaultVirtualChunkSize(puzzleRange);
-            validateVirtualChunkCountOrThrow(ceilDiv(puzzleRange, vchunkSize), 'set-puzzle');
+            vchunkSize = parsed ? bigIntMin(parsed, shardSize) : chooseVirtualChunkSizeForShard(shardSize);
+            validateVirtualChunkCountOrThrow(ceilDiv(shardSize, vchunkSize), 'set-puzzle');
         }
 
         db.transaction(() => {
@@ -1619,6 +1757,17 @@ if (require.main === module) {
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key);
+
+        CREATE TABLE IF NOT EXISTS puzzle_shards (
+            puzzle_id INTEGER NOT NULL,
+            shard_index INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            alloc_cursor INTEGER NOT NULL DEFAULT 0,
+            bootstrap_stage INTEGER NOT NULL DEFAULT 0,
+            assigned_runs INTEGER NOT NULL DEFAULT 0,
+            completed_runs INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (puzzle_id, shard_index)
+        );
     `);
 
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); } catch (_) {}
@@ -1629,6 +1778,11 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_size_keys TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_count INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE puzzles ADD COLUMN bootstrap_stage INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN shard_size_keys TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN shard_count INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN shard_alloc_cursor INTEGER NOT NULL DEFAULT 0").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunks_per_shard INTEGER").run(); } catch (_) {}
 
     try { db.prepare("ALTER TABLE workers ADD COLUMN version TEXT").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE workers ADD COLUMN min_chunk_keys TEXT").run(); } catch (_) {}
@@ -1641,12 +1795,18 @@ if (require.main === module) {
     try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); } catch (_) {}
     try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_generation TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN shard_index INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_start INTEGER").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE chunks ADD COLUMN local_vchunk_end INTEGER").run(); } catch (_) {}
     try {
         db.prepare("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL").run();
     } catch (_) {}
 
     try { db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_dedup ON findings (chunk_id, worker_name, found_key)").run(); } catch (_) {}
     try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)").run(); } catch (_) {}
+
+    try { db.prepare("CREATE INDEX IF NOT EXISTS idx_puzzle_shards_status ON puzzle_shards (puzzle_id, status, shard_index)").run(); } catch (_) {}
+    try { db.prepare("CREATE INDEX IF NOT EXISTS idx_chunks_shard_span ON chunks (puzzle_id, shard_index, local_vchunk_start, local_vchunk_end, status)").run(); } catch (_) {}
 
     try {
         db.prepare(`
@@ -1699,7 +1859,8 @@ if (require.main === module) {
             let virtualChunkSize = null;
             if (strategy === ALLOC_STRATEGY_VCHUNKS) {
                 const range = BigInt('0x' + endNorm) - BigInt('0x' + startNorm);
-                virtualChunkSize = chooseDefaultVirtualChunkSize(range);
+                const shardSize = bigIntMin(chooseShardSize(range), range);
+                virtualChunkSize = chooseVirtualChunkSizeForShard(shardSize);
             }
 
             const info = db.prepare(`
@@ -1738,7 +1899,8 @@ if (require.main === module) {
         let virtualChunkSize = null;
         if (strategy === ALLOC_STRATEGY_VCHUNKS) {
             const range = BigInt('0x' + endHex) - BigInt('0x' + startHex);
-            virtualChunkSize = chooseDefaultVirtualChunkSize(range);
+            const shardSize = bigIntMin(chooseShardSize(range), range);
+            virtualChunkSize = chooseVirtualChunkSizeForShard(shardSize);
         }
 
         const info = db.prepare(`
@@ -1834,4 +1996,11 @@ module.exports = {
     DEFAULT_VIRTUAL_CHUNK_SIZE_KEYS,
     MAX_STORED_VCHUNKS,
     MAX_ALLOC_PROBES,
+    nextPowerOfTwoBigInt,
+    chooseShardSize,
+    chooseVirtualChunkSizeForShard,
+    shardLocalVirtualChunkRangeToHex,
+    TARGET_MAX_SHARDS,
+    TARGET_MAX_VCHUNKS_PER_SHARD,
+    PUZZLE71_RANGE_FLOOR,
 };
