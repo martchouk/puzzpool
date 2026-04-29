@@ -844,8 +844,10 @@ function createApp(db) {
         if (!currentPuzzle) return null;
         const perShardChunksBig = decodeBigIndex(
             currentPuzzle.virtual_chunks_per_shard_text,
-            decodeBigIndex(currentPuzzle.virtual_chunks_per_shard,
-                decodeBigIndex(currentPuzzle.virtual_chunk_count_text,
+            decodeBigIndex(
+                currentPuzzle.virtual_chunks_per_shard,
+                decodeBigIndex(
+                    currentPuzzle.virtual_chunk_count_text,
                     decodeBigIndex(currentPuzzle.virtual_chunk_count, null)
                 )
             )
