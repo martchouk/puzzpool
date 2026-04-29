@@ -224,6 +224,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `completed_chunks` | number | Chunks with `status='completed'` or `'FOUND'` (excluding test chunks) |
 | `reclaimed_chunks` | number | Chunks with `status='reclaimed'` |
 | `total_keys_completed` | string | Total keys covered by completed/FOUND chunks (decimal string) |
+| `alloc_generations` | object | Per-generation chunk counts: `{ "legacy": N, "affine": N, "feistel": N }` — tracks how many chunks were issued under each permutation algorithm |
 
 **`virtual_chunks` field**
 
@@ -246,7 +247,9 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
-used by the canvas visualisations.
+used by the canvas visualisations. `chunks_vis[].g` is the `alloc_generation` value
+(`"feistel"`, `"affine"`, `"legacy"`, `"test"`, or `null` for old rows) — used by the
+Allocator Diagnostics view to filter chunks by generation.
 
 ---
 

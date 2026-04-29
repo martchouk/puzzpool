@@ -12,6 +12,7 @@ const {
     chooseDefaultVirtualChunkSize,
     ALLOC_STRATEGY_LEGACY,
     ALLOC_STRATEGY_VCHUNKS,
+    PERMUTATION_MODE,
 } = require('../server');
 const { createTestDb, seedPuzzle } = require('./helpers');
 
@@ -1243,5 +1244,58 @@ describe('Worker telemetry — progress fields', () => {
 
         const stats = await request(app).get('/api/v1/stats');
         expect(stats.body.workers).toHaveLength(0);
+    });
+});
+
+describe('alloc_generation', () => {
+    let db, app;
+    beforeEach(() => { db = createTestDb(); app = createApp(db); });
+
+    test('chunk assigned via virtual allocator has alloc_generation matching PERMUTATION_MODE', async () => {
+        seedPuzzle(db);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const jobId = r.body.job_id;
+        const row = db.prepare('SELECT alloc_generation FROM chunks WHERE id = ?').get(jobId);
+        expect(row.alloc_generation).toBe(PERMUTATION_MODE);
+    });
+
+    test('test chunk has alloc_generation = "test"', async () => {
+        const puzzle = seedPuzzle(db);
+        db.prepare("UPDATE puzzles SET test_start_hex = ?, test_end_hex = ? WHERE id = ?")
+            .run('0'.repeat(64), '000000000000000000000000000000000000000000000000000000000000ffff', puzzle.id);
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const jobId = r.body.job_id;
+        const row = db.prepare('SELECT alloc_generation FROM chunks WHERE id = ?').get(jobId);
+        expect(row.alloc_generation).toBe('test');
+    });
+
+    test('chunk assigned via legacy allocator has alloc_generation = "legacy"', async () => {
+        seedPuzzle(db, { strategy: ALLOC_STRATEGY_LEGACY });
+        const r = await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const jobId = r.body.job_id;
+        const row = db.prepare('SELECT alloc_generation FROM chunks WHERE id = ?').get(jobId);
+        expect(row.alloc_generation).toBe('legacy');
+    });
+
+    test('stats includes alloc_generations counts', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        const stats = await request(app).get('/api/v1/stats');
+        const ag = stats.body.alloc_generations;
+        expect(ag).toBeDefined();
+        expect(typeof ag.legacy).toBe('number');
+        expect(typeof ag.affine).toBe('number');
+        expect(typeof ag.feistel).toBe('number');
+        expect(ag[PERMUTATION_MODE]).toBe(1);
+    });
+
+    test('chunks_vis entries include alloc_generation field g', async () => {
+        seedPuzzle(db);
+        await request(app).post('/api/v1/work').send({ name: 'w1', hashrate: 1000000 });
+        await request(app).post('/api/v1/submit').send({ name: 'w1', job_id: 1, status: 'done', keys_scanned: 1e18 });
+        const stats = await request(app).get('/api/v1/stats');
+        const vis = stats.body.chunks_vis;
+        expect(vis.length).toBeGreaterThan(0);
+        expect(Object.prototype.hasOwnProperty.call(vis[0], 'g')).toBe(true);
     });
 });

@@ -54,7 +54,8 @@ function createTestDb() {
             sector_id INTEGER,
             alloc_block_id INTEGER,
             vchunk_start INTEGER,
-            vchunk_end INTEGER
+            vchunk_end INTEGER,
+            alloc_generation TEXT
         );
         CREATE TABLE sectors (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

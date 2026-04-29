@@ -57,6 +57,8 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ alloc_block_id   │ INTEGER NULL│ (unused, legacy)                       │
 │ vchunk_start     │ INTEGER NULL│ First virtual chunk index in this job  │
 │ vchunk_end       │ INTEGER NULL│ Last virtual chunk index + 1 (exclusive)│
+│ alloc_generation │ TEXT NULL   │ Permutation mode when assigned:        │
+│                  │             │ "feistel", "affine", "legacy", "test"  │
 └──────────────────┴─────────────┴────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -145,6 +147,9 @@ try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); 
 try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); }        catch (_) {}
 try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); }          catch (_) {}
 try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); }       catch (_) {}
+try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_generation TEXT").run(); }       catch (_) {}
+// Backfill: carry assigned_at into heartbeat_at for old rows
+UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL
 ```
 
 ## WAL Mode

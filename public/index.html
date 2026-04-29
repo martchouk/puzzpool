@@ -889,6 +889,7 @@
                     <div class="canvas-2d-box">
                         <canvas id="alloc-gap-canvas"></canvas>
                     </div>
+                    <div id="alloc-gap-metrics" class="stat-subtext" style="margin-top:0.5rem;"></div>
                 </div>
 
                 <div>
@@ -1327,6 +1328,30 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                 return formatBigInt(Math.trunc(value));
             }
             return formatBigInt(String(value));
+        }
+
+        function formatGapNumber(x) {
+            if (!Number.isFinite(x)) return '—';
+
+            if (x >= 1) return x.toFixed(2);
+            if (x >= 0.01) return x.toFixed(4);
+            if (x >= 0.0001) return x.toFixed(6);
+            return x.toExponential(3);
+        }
+
+        function percentileSorted(arr, p) {
+            if (!arr || arr.length === 0) return null;
+            if (p <= 0) return arr[0];
+            if (p >= 1) return arr[arr.length - 1];
+
+            const idx = (arr.length - 1) * p;
+            const lo = Math.floor(idx);
+            const hi = Math.ceil(idx);
+
+            if (lo === hi) return arr[lo];
+
+            const t = idx - lo;
+            return arr[lo] * (1 - t) + arr[hi] * t;
         }
 
         function formatHashrate(h) {
@@ -1768,6 +1793,61 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             }
         }
 
+        function updateAllocatorGapMetrics() {
+            const el = document.getElementById('alloc-gap-metrics');
+            if (!el) return;
+
+            const chunks = getAllocatorChunks()
+                .slice()
+                .sort((a, b) => a.s - b.s);
+
+            if (chunks.length < 2) {
+                el.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">not enough data</span>';
+                return;
+            }
+
+            const gaps = [];
+            for (let i = 1; i < chunks.length; i++) {
+                const gap = chunks[i].s - chunks[i - 1].s;
+                if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
+            }
+
+            if (!gaps.length) {
+                el.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">no valid gaps</span>';
+                return;
+            }
+
+            gaps.sort((a, b) => a - b);
+
+            const n = gaps.length;
+            const sum = gaps.reduce((acc, v) => acc + v, 0);
+            const mean = sum / n;
+            const median = percentileSorted(gaps, 0.5);
+            const p95 = percentileSorted(gaps, 0.95);
+            const max = gaps[n - 1];
+
+            let variance = 0;
+            for (const g of gaps) {
+                const d = g - mean;
+                variance += d * d;
+            }
+            variance /= n;
+
+            const stddev = Math.sqrt(variance);
+            const cv = mean > 0 ? stddev / mean : null;
+            const maxOverMean = mean > 0 ? max / mean : null;
+
+            el.innerHTML =
+                `Gap metrics: ` +
+                `n <span style="color:var(--accent-cyan)">${formatIntegerDots(n)}</span> · ` +
+                `mean <span style="color:var(--accent-amber)">${formatGapNumber(mean)}</span> · ` +
+                `median <span style="color:var(--accent-amber)">${formatGapNumber(median)}</span> · ` +
+                `p95 <span style="color:var(--accent-green)">${formatGapNumber(p95)}</span> · ` +
+                `max <span style="color:var(--accent-green)">${formatGapNumber(max)}</span> · ` +
+                `cv <span style="color:var(--accent-cyan)">${cv != null ? formatGapNumber(cv) : '—'}</span> · ` +
+                `max/mean <span style="color:var(--accent-cyan)">${maxOverMean != null ? formatGapNumber(maxOverMean) : '—'}</span>`;
+        }
+
         function drawAllocatorGapHistogram() {
             const canvas = document.getElementById('alloc-gap-canvas');
             if (!canvas) return;
@@ -1884,6 +1964,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         function drawAllocatorDiagnostics() {
             drawAllocatorScatter();
             drawAllocatorGapHistogram();
+            updateAllocatorGapMetrics();
             drawAllocatorResidueMap();
         }
 

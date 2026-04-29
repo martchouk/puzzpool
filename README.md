@@ -106,6 +106,7 @@ cp .env.example .env
 | `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
 | `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
 | `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
+| `PERMUTATION_MODE` | `feistel` | Virtual chunk permutation algorithm: `feistel` (cycle-walking Feistel cipher) or `affine` (linear congruential). Recorded per-chunk as `alloc_generation`. |
 | `KEYSPACE_<NAME>` | *(unset)* | Seed a keyspace on startup: `KEYSPACE_ALL_BTC=<start_hex>:<end_hex>`. Underscores in the variable name become spaces in the puzzle name. Multiple variables are supported. |
 
 ---
