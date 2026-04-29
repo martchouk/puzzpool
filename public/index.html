@@ -668,6 +668,7 @@
 
         #alloc-scatter-canvas,
         #alloc-gap-canvas,
+        #alloc-gapnorm-canvas,
         #alloc-residue-canvas {
             width: 100%;
             height: 220px;
@@ -891,6 +892,13 @@
                     </div>
                     <div id="alloc-gap-metrics" class="stat-subtext" style="margin-top:0.5rem;"></div>
                 </div>
+
+                <div>
+                    <div class="section-title" style="margin-bottom:0.5rem;">Normalized Nearest-Neighbor Gap Histogram</div>
+                    <div class="canvas-2d-box">
+                        <canvas id="alloc-gapnorm-canvas"></canvas>
+                    </div>
+                </div>    
 
                 <div>
                     <div class="section-title" style="margin-bottom:0.5rem;">Low Bits Residue Map</div>
@@ -1733,6 +1741,55 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                 .sort((a, b) => Number(a.id) - Number(b.id));
         }
 
+        function getAllocatorSortedStarts() {
+            return getAllocatorChunks()
+                .slice()
+                .sort((a, b) => a.s - b.s);
+        }
+
+        function getAllocatorNormalizedGaps() {
+            const chunks = getAllocatorSortedStarts();
+            if (chunks.length < 2) return [];
+
+            const gaps = [];
+            for (let i = 1; i < chunks.length; i++) {
+                const gap = chunks[i].s - chunks[i - 1].s;
+                if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
+            }
+            if (!gaps.length) return [];
+
+            const mean = gaps.reduce((sum, g) => sum + g, 0) / gaps.length;
+            if (!(mean > 0)) return [];
+
+            return gaps.map(g => g / mean).filter(v => Number.isFinite(v) && v >= 0);
+        }
+
+        function quantileSorted(arr, q) {
+            if (!arr.length) return null;
+            const pos = (arr.length - 1) * q;
+            const lo = Math.floor(pos);
+            const hi = Math.ceil(pos);
+            if (lo === hi) return arr[lo];
+            const t = pos - lo;
+            return arr[lo] * (1 - t) + arr[hi] * t;
+        }
+
+        function computeNormalizedGapMetrics() {
+            const values = getAllocatorNormalizedGaps().slice().sort((a, b) => a - b);
+            if (!values.length) return null;
+
+            const n = values.length;
+            const mean = values.reduce((s, v) => s + v, 0) / n;
+            const median = quantileSorted(values, 0.5);
+            const p95 = quantileSorted(values, 0.95);
+            const max = values[n - 1];
+            const variance = values.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+            const sd = Math.sqrt(variance);
+            const cv = mean > 0 ? sd / mean : null;
+
+            return { n, mean, median, p95, max, cv };
+        }
+
         function getFilteredAllocatorChunks() {
             const chunks = Array.isArray(g_chunks_vis) ? g_chunks_vis : [];
             if (g_allocGenerationFilter === 'all') return chunks;
@@ -1911,6 +1968,76 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             }
         }
 
+        function drawAllocatorNormalizedGapHistogram() {
+            const canvas = document.getElementById('alloc-gapnorm-canvas');
+            if (!canvas) return;
+
+            const W = canvas.offsetWidth;
+            const H = canvas.offsetHeight;
+            if (W === 0 || H === 0) return;
+
+            canvas.width = W;
+            canvas.height = H;
+
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, W, H);
+
+            const values = getAllocatorNormalizedGaps();
+            if (!values.length) return;
+
+            // Clip the far tail so the plot stays readable.
+            // Everything above CLIP goes into the last bin.
+            const CLIP = 6;
+            const bins = Math.min(96, Math.max(36, Math.floor(W / 10)));
+            const hist = new Array(bins).fill(0);
+
+            for (const v of values) {
+                const clipped = Math.min(v, CLIP);
+                let idx = Math.floor((clipped / CLIP) * (bins - 1));
+                if (idx < 0) idx = 0;
+                if (idx >= bins) idx = bins - 1;
+                hist[idx]++;
+            }
+
+            const maxCount = Math.max(...hist, 1);
+            const barW = W / bins;
+
+            // background grid
+            ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+            ctx.lineWidth = 1;
+            for (let i = 1; i < 4; i++) {
+                const y = Math.floor((H * i) / 4) + 0.5;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(W, y);
+                ctx.stroke();
+            }
+
+            // reference line at normalized gap = 1.0
+            const xRef = (1 / CLIP) * W;
+            ctx.strokeStyle = 'rgba(255,176,0,0.85)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(xRef + 0.5, 0);
+            ctx.lineTo(xRef + 0.5, H);
+            ctx.stroke();
+
+            // bars
+            ctx.fillStyle = 'rgba(0,255,136,0.60)';
+            for (let i = 0; i < bins; i++) {
+                const h = (hist[i] / maxCount) * (H - 8);
+                const x = i * barW;
+                ctx.fillRect(x, H - h, Math.max(1, barW - 1), h);
+            }
+
+            // small labels
+            ctx.fillStyle = 'rgba(255,255,255,0.55)';
+            ctx.font = '12px JetBrains Mono, monospace';
+            ctx.fillText('1× mean', Math.min(W - 60, xRef + 6), 14);
+            ctx.fillText(`clip ${CLIP}×`, W - 70, 14);
+        }
+
         function drawAllocatorResidueMap() {
             const canvas = document.getElementById('alloc-residue-canvas');
             if (!canvas) return;
@@ -1965,6 +2092,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
             drawAllocatorScatter();
             drawAllocatorGapHistogram();
             updateAllocatorGapMetrics();
+            drawAllocatorNormalizedGapHistogram();
             drawAllocatorResidueMap();
         }
 
@@ -2290,6 +2418,19 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                 drawHeatmap();
                 drawAllocatorDiagnostics();
                 drawHilbert();
+
+                const ngm = computeNormalizedGapMetrics();
+                if (ngm) {
+                    console.log(
+                        `[Alloc norm-gap ${g_allocGenerationFilter}] ` +
+                        `n ${formatIntegerDots(ngm.n)} · ` +
+                        `mean ${ngm.mean.toFixed(3)} · ` +
+                        `median ${ngm.median.toFixed(3)} · ` +
+                        `p95 ${ngm.p95.toFixed(3)} · ` +
+                        `max ${ngm.max.toFixed(3)} · ` +
+                        `cv ${ngm.cv != null ? ngm.cv.toFixed(4) : '—'}`
+                    );
+                }
 
                 const gens = data.alloc_generations || { legacy: 0, affine: 0, feistel: 0 };
 
