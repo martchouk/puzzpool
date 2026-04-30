@@ -110,7 +110,7 @@ void Allocator::seedVirtualChunks(int64_t puzzleId, const std::string& startHex,
     q.bind(1, cfg_.allocStrategyVChunks);
     q.bind(2, allocSeed);
     q.bind(3, bigToDec(chunkSize));
-    q.bind(4, static_cast<long long>(chunkCountBig));
+    q.bind(4, static_cast<int64_t>(chunkCountBig));
     q.bind(5, puzzleId);
     q.exec();
     tx.commit();
