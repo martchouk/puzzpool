@@ -28,9 +28,12 @@ option(PUZZPOOL_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(PUZZPOOL_USE_SYSTEM_CROW "Use installed Crow package instead of bundled third_party/crow" OFF)
 option(PUZZPOOL_USE_SYSTEM_SQLITECPP "Use installed SQLiteCpp package instead of bundled third_party/SQLiteCpp" OFF)
 option(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS "Suppress warnings from bundled/system third-party code" ON)
+option(PUZZPOOL_BUILD_TESTS "Build the Catch2 test suite" ON)
 
-add_executable(puzzpool
-    src/main.cpp
+# ── puzzpool_core static library (everything except main.cpp) ─────────────────
+# Tests link against this target; the server executable links it + main.cpp.
+
+add_library(puzzpool_core STATIC
     src/env.cpp
     src/config.cpp
     src/hex_bigint.cpp
@@ -47,83 +50,87 @@ add_executable(puzzpool
     src/service_bootstrap.cpp
 )
 
-target_include_directories(puzzpool PRIVATE
+target_include_directories(puzzpool_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_compile_features(puzzpool PRIVATE cxx_std_20)
+target_compile_features(puzzpool_core PUBLIC cxx_std_20)
 
-# ------------------------------------------------------------
-# Project warnings: apply ONLY to our target
-# ------------------------------------------------------------
-if(MSVC)
-    target_compile_options(puzzpool PRIVATE
-        /W4
-        /permissive-
-    )
-    if(PUZZPOOL_WARNINGS_AS_ERRORS)
-        target_compile_options(puzzpool PRIVATE /WX)
+# ── puzzpool executable ───────────────────────────────────────────────────────
+
+add_executable(puzzpool src/main.cpp)
+target_link_libraries(puzzpool PRIVATE puzzpool_core)
+
+# ── Warnings (applied to both core and executable) ────────────────────────────
+
+foreach(_tgt puzzpool_core puzzpool)
+    if(MSVC)
+        target_compile_options(${_tgt} PRIVATE
+            /W4
+            /permissive-
+        )
+        if(PUZZPOOL_WARNINGS_AS_ERRORS)
+            target_compile_options(${_tgt} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${_tgt} PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow
+            -Wnon-virtual-dtor
+            -Wold-style-cast
+            -Woverloaded-virtual
+            -Wnull-dereference
+            -Wdouble-promotion
+            -Wformat=2
+        )
+        if(PUZZPOOL_WARNINGS_AS_ERRORS)
+            target_compile_options(${_tgt} PRIVATE -Werror)
+        endif()
     endif()
-else()
-    target_compile_options(puzzpool PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wshadow
-        -Wnon-virtual-dtor
-        -Wold-style-cast
-        -Woverloaded-virtual
-        -Wnull-dereference
-        -Wdouble-promotion
-        -Wformat=2
-    )
-    if(PUZZPOOL_WARNINGS_AS_ERRORS)
-        target_compile_options(puzzpool PRIVATE -Werror)
-    endif()
-endif()
+endforeach()
 
 find_package(Threads REQUIRED)
-target_link_libraries(puzzpool PRIVATE Threads::Threads)
+target_link_libraries(puzzpool_core PUBLIC Threads::Threads)
 
 find_package(Boost REQUIRED)
-target_link_libraries(puzzpool PRIVATE Boost::boost)
+target_link_libraries(puzzpool_core PUBLIC Boost::boost)
 
 find_package(nlohmann_json REQUIRED)
-target_link_libraries(puzzpool PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(puzzpool_core PUBLIC nlohmann_json::nlohmann_json)
 
-# ------------------------------------------------------------
-# Crow
-# ------------------------------------------------------------
+# ── Crow ─────────────────────────────────────────────────────────────────────
+
 if(PUZZPOOL_USE_SYSTEM_CROW)
     find_package(Crow REQUIRED)
-    target_link_libraries(puzzpool PRIVATE Crow::Crow)
+    target_link_libraries(puzzpool_core PUBLIC Crow::Crow)
 
-    # If Crow is header-heavy, treat its includes as SYSTEM for this target.
     if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
         get_target_property(_crow_includes Crow::Crow INTERFACE_INCLUDE_DIRECTORIES)
         if(_crow_includes)
-            target_include_directories(puzzpool SYSTEM PRIVATE ${_crow_includes})
+            target_include_directories(puzzpool_core SYSTEM PUBLIC ${_crow_includes})
         endif()
     endif()
 else()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include/crow.h")
         if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
-            target_include_directories(puzzpool SYSTEM PRIVATE
+            target_include_directories(puzzpool_core SYSTEM PUBLIC
                 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include"
             )
         else()
-            target_include_directories(puzzpool PRIVATE
+            target_include_directories(puzzpool_core PUBLIC
                 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include"
             )
         endif()
     elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include/crow/app.h")
         if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
-            target_include_directories(puzzpool SYSTEM PRIVATE
+            target_include_directories(puzzpool_core SYSTEM PUBLIC
                 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include"
             )
         else()
-            target_include_directories(puzzpool PRIVATE
+            target_include_directories(puzzpool_core PUBLIC
                 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crow/include"
             )
         endif()
@@ -136,19 +143,17 @@ else()
     endif()
 endif()
 
-# ------------------------------------------------------------
-# SQLiteCpp
-# ------------------------------------------------------------
+# ── SQLiteCpp ─────────────────────────────────────────────────────────────────
+
 if(PUZZPOOL_USE_SYSTEM_SQLITECPP)
     find_package(SQLite3 REQUIRED)
     find_package(SQLiteCpp REQUIRED)
-    target_link_libraries(puzzpool PRIVATE SQLiteCpp SQLite::SQLite3)
+    target_link_libraries(puzzpool_core PUBLIC SQLiteCpp SQLite::SQLite3)
 
     if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
-        # Treat imported include dirs as SYSTEM on our target
         get_target_property(_sqlitecpp_includes SQLiteCpp INTERFACE_INCLUDE_DIRECTORIES)
         if(_sqlitecpp_includes)
-            target_include_directories(puzzpool SYSTEM PRIVATE ${_sqlitecpp_includes})
+            target_include_directories(puzzpool_core SYSTEM PUBLIC ${_sqlitecpp_includes})
         endif()
     endif()
 else()
@@ -162,23 +167,20 @@ else()
         add_subdirectory(third_party/SQLiteCpp)
 
         if(TARGET SQLiteCpp)
-            target_link_libraries(puzzpool PRIVATE SQLiteCpp)
+            target_link_libraries(puzzpool_core PUBLIC SQLiteCpp)
 
             if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
-                # Suppress warnings while building the vendored SQLiteCpp target itself
                 if(MSVC)
                     target_compile_options(SQLiteCpp PRIVATE /W0)
                 else()
                     target_compile_options(SQLiteCpp PRIVATE -w)
                 endif()
 
-                # And treat its public includes as system includes for our target
                 get_target_property(_sqlitecpp_includes SQLiteCpp INTERFACE_INCLUDE_DIRECTORIES)
                 if(_sqlitecpp_includes)
-                    target_include_directories(puzzpool SYSTEM PRIVATE ${_sqlitecpp_includes})
+                    target_include_directories(puzzpool_core SYSTEM PUBLIC ${_sqlitecpp_includes})
                 endif()
 
-                # If bundled sqlite3 target exists, suppress warnings there too
                 if(TARGET sqlite3)
                     if(MSVC)
                         target_compile_options(sqlite3 PRIVATE /W0)
@@ -200,9 +202,9 @@ else()
 endif()
 
 if(APPLE)
-    target_compile_definitions(puzzpool PRIVATE _DARWIN_C_SOURCE)
+    target_compile_definitions(puzzpool_core PUBLIC _DARWIN_C_SOURCE)
 elseif(UNIX AND NOT APPLE)
-    target_compile_definitions(puzzpool PRIVATE _GNU_SOURCE)
+    target_compile_definitions(puzzpool_core PUBLIC _GNU_SOURCE)
 endif()
 
 set_target_properties(puzzpool PROPERTIES
@@ -213,6 +215,37 @@ install(TARGETS puzzpool
     RUNTIME DESTINATION bin
 )
 
+# ── Catch2 + tests ────────────────────────────────────────────────────────────
+
+if(PUZZPOOL_BUILD_TESTS)
+    enable_testing()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Catch2/CMakeLists.txt")
+        set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(CATCH_INSTALL_DOCS  OFF CACHE BOOL "" FORCE)
+        set(CATCH_INSTALL_HELPERS OFF CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/Catch2)
+
+        if(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS)
+            foreach(_t Catch2 Catch2WithMain)
+                if(TARGET ${_t})
+                    if(MSVC)
+                        target_compile_options(${_t} PRIVATE /W0)
+                    else()
+                        target_compile_options(${_t} PRIVATE -w)
+                    endif()
+                endif()
+            endforeach()
+        endif()
+
+        add_subdirectory(tests)
+    else()
+        message(WARNING
+            "Catch2 not found at third_party/Catch2 — skipping tests.\n"
+            "Run: git submodule update --init third_party/Catch2"
+        )
+    endif()
+endif()
+
 message(STATUS "========================================")
 message(STATUS "Project:                         ${PROJECT_NAME}")
 message(STATUS "Version:                         ${PROJECT_VERSION}")
@@ -221,4 +254,5 @@ message(STATUS "C++ standard:                    ${CMAKE_CXX_STANDARD}")
 message(STATUS "Use system Crow:                 ${PUZZPOOL_USE_SYSTEM_CROW}")
 message(STATUS "Use system SQLiteCpp:            ${PUZZPOOL_USE_SYSTEM_SQLITECPP}")
 message(STATUS "Suppress third-party warnings:   ${PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS}")
+message(STATUS "Build tests:                     ${PUZZPOOL_BUILD_TESTS}")
 message(STATUS "========================================")
