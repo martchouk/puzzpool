@@ -5,6 +5,7 @@ skills.md
 
 # Runtime / generated
 node_modules/
+frontend/node_modules/
 pool.db
 *.db
 .env
