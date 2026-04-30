@@ -39,6 +39,12 @@ add_executable(puzzpool
     src/db.cpp
     src/allocator.cpp
     src/service.cpp
+    src/service_serialization.cpp
+    src/service_work.cpp
+    src/service_submit.cpp
+    src/service_admin.cpp
+    src/service_stats.cpp
+    src/service_bootstrap.cpp
 )
 
 target_include_directories(puzzpool PRIVATE
