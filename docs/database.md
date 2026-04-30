@@ -1,6 +1,6 @@
 # Database
 
-puzzpool uses **SQLite 3** via the `better-sqlite3` synchronous driver.
+puzzpool uses **SQLite 3** via the [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) synchronous C++ wrapper.
 The database file defaults to `pool.db` in the working directory (override with `DB_PATH`).
 WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the dashboard.
 
@@ -121,44 +121,29 @@ before random permutation begins:
 
 ## Migrations
 
-All schema additions run as idempotent `ALTER TABLE` statements at startup.
-The `try/catch` ensures existing databases with those columns are unaffected:
+All schema additions run as idempotent `ALTER TABLE … ADD COLUMN` statements at startup
+inside `src/db.cpp` (`PoolDb::migrate()`). Each statement is wrapped in a try/catch so
+existing databases with those columns already present are unaffected.
 
-```js
-// puzzles
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex TEXT").run(); }          catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_strategy TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_seed TEXT").run(); }            catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_cursor INTEGER ...").run(); }   catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_size_keys TEXT").run(); } catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_count INTEGER").run(); } catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN bootstrap_stage INTEGER ...").run(); } catch (_) {}
+Columns added by migration (in addition to the base schema created on first run):
 
-// workers
-try { db.prepare("ALTER TABLE workers ADD COLUMN version TEXT").run(); }               catch (_) {}
-try { db.prepare("ALTER TABLE workers ADD COLUMN min_chunk_keys TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE workers ADD COLUMN chunk_quantum_keys TEXT").run(); }    catch (_) {}
-
-// chunks
-try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER ...").run(); }         catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); }       catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); }      catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); }          catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); }       catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_generation TEXT").run(); }       catch (_) {}
-// Backfill: carry assigned_at into heartbeat_at for old rows
-UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL
 ```
+puzzles:  test_start_hex, test_end_hex, alloc_strategy, alloc_seed,
+          alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
+
+workers:  version, min_chunk_keys, chunk_quantum_keys
+
+chunks:   is_test, prev_worker_name, alloc_block_id, vchunk_start, vchunk_end,
+          heartbeat_at, alloc_generation
+```
+
+A backfill runs after migrations to copy `assigned_at` into `heartbeat_at` for any
+chunk rows that pre-date the heartbeat column.
 
 ## WAL Mode
 
-```js
-db.pragma('journal_mode = WAL');
-```
-
-WAL allows concurrent readers (dashboard polling) while a writer holds the lock.
+WAL (Write-Ahead Logging) is enabled at startup via `PRAGMA journal_mode = WAL`.
+It allows concurrent readers (dashboard polling) while a writer holds the lock.
 Without WAL, the dashboard would occasionally see `SQLITE_BUSY` errors during chunk
 assignment writes.
 

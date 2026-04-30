@@ -86,9 +86,10 @@ SQL injection is not possible.
 
 ## XSS Prevention
 
-The frontend (`public/index.html`) uses only `element.textContent` for all dynamic
-content from the API. No `innerHTML`, `eval`, or `document.write` calls exist.
-Worker names, hash values, and addresses are displayed safely.
+The dashboard (`public/index.html`) uses `element.textContent` for all user-supplied
+content and only uses `innerHTML` for trusted, server-controlled strings such as
+formatted numbers and pre-coloured stat labels. Worker names, hash values, and addresses
+are always written via `textContent`. No `eval` or `document.write` calls exist.
 
 ---
 
@@ -101,7 +102,7 @@ Cross-origin API calls from other domains will be blocked by the browser.
 
 ## TLS
 
-TLS is terminated at Nginx. The Node.js process only listens on `127.0.0.1:8888` and
+TLS is terminated at Nginx. The C++ server only listens on `127.0.0.1:8888` and
 is never exposed directly to the internet. Certificates are managed by Let's Encrypt /
 Certbot with auto-renewal.
 
@@ -115,7 +116,7 @@ Certbot with auto-renewal.
   limit_req_zone $binary_remote_addr zone=pool:10m rate=10r/s;
   location /api/v1/ { limit_req zone=pool burst=20 nodelay; }
   ```
-- Run the Node.js process as a non-root user (the provided systemd unit does this)
+- Run the server process as a non-root user (the provided systemd unit does this)
 - Enable `NoNewPrivileges=true` in the systemd unit (already in `deploy/puzzpool.service`)
-- Keep Node.js and `better-sqlite3` updated for security patches
+- Keep system packages (`libboost`, `libsqlite3`) updated for security patches
 - Use GitHub's private vulnerability reporting for security issues (see SECURITY.md template)

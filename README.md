@@ -1,7 +1,7 @@
 # puzzpool
 
 [![CI](https://github.com/martchouk/puzzpool/actions/workflows/ci.yml/badge.svg)](https://github.com/martchouk/puzzpool/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)](https://en.cppreference.com/w/cpp/20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Distributed Bitcoin keyspace search pool. Workers request chunks of a puzzle's keyspace,
@@ -15,14 +15,17 @@ progress in real time: stat cards (hashrate, ETA, keys completed), three canvas-
 
 ## Quick Start (local)
 
+**Prerequisites:** GCC 12+ or Clang 15+, CMake 3.20+, `libboost-dev`, `nlohmann-json3-dev`, Node.js 20+ (frontend build only)
+
 ```bash
-# Prerequisites: Node.js >= 18
-git clone https://github.com/martchouk/puzzpool.git
+# Ubuntu / Debian
+sudo apt-get install -y cmake build-essential libboost-dev nlohmann-json3-dev
+
+git clone --recurse-submodules https://github.com/martchouk/puzzpool.git
 cd puzzpool
-npm install
-node server.js
-# → server running on http://127.0.0.1:8888
-# → open http://127.0.0.1:8888 in your browser
+./update-deps.sh     # build C++ server + frontend dashboard
+cp .env.example .env # configure (set ADMIN_TOKEN at minimum)
+./build/bin/puzzpool # → server on http://127.0.0.1:8888
 ```
 
 ---
@@ -32,8 +35,8 @@ node server.js
 ```
   Workers               puzzpool server              Browser
   ───────               ──────────────              ───────
-  scanner  ──/work──▶   Express.js         ◀──/stats──  Dashboard
-           ◀──job_id──  (port 8888)                      (3 s poll)
+  scanner  ──/work──▶   C++ / Crow         ◀──/stats──  Dashboard
+           ◀──job_id──  (port 8888)                      (5 s poll)
   scanning
            ──/submit──▶      │
            ──/heartbeat──▶   ▼
@@ -44,10 +47,9 @@ node server.js
 
 | Layer | Technology |
 |-------|-----------|
-| Runtime | Node.js ≥ 18 |
-| HTTP | Express 4 |
-| Database | SQLite 3 (`better-sqlite3`, WAL mode) |
-| Frontend | Vanilla HTML/CSS/JS (no build step) |
+| HTTP server | C++20, [Crow](https://crowcpp.org/) |
+| Database | SQLite 3 via [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) |
+| Frontend | TypeScript + Vite (built to `public/index.html`, single self-contained file) |
 | Reverse proxy | Nginx (TLS + admin IP restriction) |
 | Process manager | systemd |
 
@@ -58,15 +60,16 @@ design decisions.
 
 ## Database Schema
 
-Five tables — all created automatically on first run.
+Four tables — all created automatically on first run.
 
 | Table | Purpose |
 |-------|---------|
 | `puzzles` | Puzzle definitions (keyspace range, allocator config, test chunk) |
 | `workers` | Registered workers (name, hashrate, version, last seen) |
 | `chunks` | Work units (assigned / completed / reclaimed / FOUND) |
-| `sectors` | Sharded keyspace frontiers (legacy allocator) |
 | `findings` | Audit log of discovered private keys |
+
+A legacy `sectors` table is retained for databases created with the old `legacy_random_shards_v1` allocator.
 
 See [docs/database.md](docs/database.md) for full schema, ER diagram, and migration notes.
 
@@ -86,6 +89,7 @@ See [docs/api.md](docs/api.md) for full request/response schemas.
 | `POST` | `/api/v1/admin/activate-puzzle` | Switch the active puzzle by ID |
 | `POST` | `/api/v1/admin/set-test-chunk` | Set verification chunk for new workers |
 | `GET`  | `/api/v1/admin/puzzles` | List all puzzles |
+| `POST` | `/api/v1/admin/reclaim` | Force-reclaim timed-out chunks immediately |
 
 ---
 
@@ -115,34 +119,50 @@ cp .env.example .env
 
 ### Prerequisites
 
-- Ubuntu/Debian server with Node.js 18+, Nginx, Certbot, systemd
+- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `nlohmann-json3-dev`
+- Node.js 20+ (only needed at build time to compile the TypeScript dashboard)
+- Nginx, Certbot, systemd
 - DNS A record pointing your domain to the server
 
 ### Steps
 
 ```bash
-# 1. Clone
-git clone https://github.com/martchouk/puzzpool.git ~/git/puzzpool
-cd ~/git/puzzpool && npm ci --production
+# 1. Install build dependencies
+sudo apt-get install -y cmake build-essential libboost-dev nlohmann-json3-dev nodejs npm
 
-# 2. Configure
+# 2. Clone with submodules
+git clone --recurse-submodules https://github.com/martchouk/puzzpool.git ~/git/puzzpool
+cd ~/git/puzzpool
+
+# 3. Configure
 cp .env.example .env
 # Edit .env — set ADMIN_TOKEN at minimum
 
-# 3. Systemd service
+# 4. Build C++ server + TypeScript dashboard
+./update-deps.sh
+
+# 5. Systemd service
 sudo cp deploy/puzzpool.service /etc/systemd/system/
-# Edit the User= and WorkingDirectory= lines in the service file
+# Edit User= and WorkingDirectory= in the service file
 sudo systemctl daemon-reload
 sudo systemctl enable --now puzzpool
 
-# 4. Nginx
+# 6. Nginx
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/puzzpool
 # Edit server_name and SSL certificate paths
 sudo ln -s /etc/nginx/sites-available/puzzpool /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 
-# 5. TLS (Let's Encrypt)
+# 7. TLS (Let's Encrypt)
 sudo certbot --nginx -d your.domain.com
+```
+
+### Routine update (after `git pull`)
+
+```bash
+git pull origin main
+./update.sh                      # incremental C++ rebuild + frontend rebuild
+sudo systemctl restart puzzpool
 ```
 
 See [deploy/nginx.conf](deploy/nginx.conf) and [deploy/puzzpool.service](deploy/puzzpool.service)
@@ -162,7 +182,7 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
 - Set `ADMIN_TOKEN` for token-based admin authentication
 - Workers are identified by name only — no passwords (by design for an open public puzzle)
 - All SQL uses parameterised queries (no injection risk)
-- Frontend uses only `textContent` (no XSS risk)
+- Dashboard renders all user-supplied data via `textContent` (no XSS risk)
 
 See [docs/security.md](docs/security.md) for the full threat model and recommendations.
 
@@ -171,9 +191,13 @@ See [docs/security.md](docs/security.md) for the full threat model and recommend
 ## Testing
 
 ```bash
-npm test          # Jest integration tests (in-memory SQLite, no server needed)
-npm run lint      # ESLint
-bash test.sh      # Manual curl tests against live or local server
+# Build and run unit tests
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+
+# TypeScript type check + frontend build
+npm run build --prefix frontend
 ```
 
 See [docs/testing.md](docs/testing.md) for test scenarios and manual verification steps.
@@ -212,8 +236,8 @@ git tag v1.x && git push origin v1.x
 
 | Environment | Tracks | Update command |
 |-------------|--------|----------------|
-| Test server | `dev` | `git pull origin dev` (in `update.sh`) |
-| Production  | `main` | `git pull origin main` (in `update.sh`) |
+| Test server | `dev` | `git pull origin dev && ./update.sh` |
+| Production  | `main` | `git pull origin main && ./update.sh` |
 
 ### Review process
 

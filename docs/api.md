@@ -205,10 +205,10 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `current_job_start_hex` | string\|null | `start_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_end_hex` | string\|null | `end_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_keys` | string\|null | Size of the current job in keys (decimal integer string); null if no chunk |
-| `current_job_elapsed_seconds` | number\|null | Seconds elapsed since the current chunk was assigned; null if no chunk |
-| `current_job_progress_percent` | number\|null | Estimated scan progress 0–100 based on `hashrate × elapsed / job_keys`; null if no chunk or no hashrate |
 | `min_chunk_keys` | string\|null | Worker's reported minimum job size (decimal integer string); null if not reported |
 | `chunk_quantum_keys` | string\|null | Worker's reported job size quantum (decimal integer string); null if not reported |
+| `fresh` | boolean | `true` if this worker was reactivated (transitioned from inactive to active) in the current stats response |
+| `assigned_here` | boolean | `true` if the worker's current chunk is assigned to the puzzle currently being viewed |
 
 **Top-level stats fields**
 
@@ -324,6 +324,22 @@ List all puzzles (active and historical).
 ```json
 { "puzzles": [ { "id": 1, "name": "Puzzle #71", "active": 1, ... } ] }
 ```
+
+---
+
+### POST /api/v1/admin/reclaim
+
+Force-reclaim all timed-out chunks immediately, without waiting for the background
+60-second reclaimer thread. Useful after a sudden loss of workers.
+
+**Request** — empty body or `{}`
+
+**Response 200**
+```json
+{ "ok": true, "reclaimed": 3 }
+```
+
+`reclaimed` is the number of chunks whose status was changed to `'reclaimed'`.
 
 ---
 

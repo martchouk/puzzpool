@@ -1,73 +1,95 @@
 # Testing
 
-## Automated Tests (Jest)
+## C++ Unit Tests (Catch2 + CTest)
 
 ```bash
-npm test
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Runs `test/server.test.js` against an in-memory SQLite database (`:memory:`).
-No network or file I/O — safe to run in CI.
+Tests are built automatically (`PUZZPOOL_BUILD_TESTS=ON` by default). Each test binary
+links against the `puzzpool_core` static library (all sources except `main.cpp`).
 
 ### Test coverage
 
-| Test | What is verified |
+| File | What is verified |
 |------|-----------------|
-| POST /work — new worker | Returns `job_id`, `start_key`, `end_key`; inserts chunk row |
-| POST /work — known worker | Uses stored hashrate; chunk size proportional to hashrate |
-| POST /work — no active puzzle | Returns 503 |
-| POST /work — reclaimed chunk priority | Reclaimed chunk offered before new random chunk |
-| POST /work — test chunk priority | Test chunk offered first; not offered twice |
-| POST /submit done | Chunk status → `completed` |
-| POST /submit FOUND | Chunk status → `FOUND`; row inserted in `findings` |
-| POST /submit wrong worker | Update is no-op (ownership check) |
-| POST /heartbeat | `heartbeat_at` reset; worker `last_seen` updated |
-| POST /heartbeat missing fields | Returns 400 |
-| GET /stats | Returns expected shape; `total_keys_completed` matches submitted chunks |
-| GET /stats no puzzle | Returns `puzzle: null` |
-| POST /admin/set-puzzle | Creates puzzle; sets active=1; deactivates others |
-| POST /admin/set-puzzle invalid hex | Returns 400 |
-| POST /admin/set-test-chunk | Sets test_start_hex/test_end_hex on active puzzle |
-| POST /admin/set-test-chunk clear | Clears test chunk |
-| ADMIN_TOKEN — missing header | Returns 401 |
-| ADMIN_TOKEN — correct header | Returns 200 |
+| `tests/test_hex_bigint.cpp` | `isValidHex`, `hexToInt`, `intToHex`, `normalizeHex`, `ceilDiv`, `minBig`/`maxBig`, `bigToDec`, `normalizedRange`, `bitLength` |
+| `tests/test_permutation.cpp` | Feistel: determinism, bounds `[0,n)`, 100k-sample injectivity, edge keyspace sizes; Affine: bounded, deterministic, 10k injectivity |
+| `tests/test_submission.cpp` | `submitDone` (exact/overscan accepted, underscan rejected+reclaimed, wrong worker, missing fields, negative); `submitFound` (valid, deduplication, empty array, invalid hex); `clearTestChunkIfNeeded` |
+| `tests/test_allocator.cpp` | `upsertWorker` (new/fresh), `assignWork` (valid chunk, idempotent, two-worker non-overlap), `reclaimChunk`, `existingAssignedChunk` (found/nullopt), `reclaimTimedOutChunks` (backdated/fresh) |
+
+### In-memory isolation
+
+All component tests use `:memory:` as the SQLite path (via `memConfig()` in
+`tests/test_helpers.hpp`). No files are read or written; tests are fully reproducible
+and safe to run in parallel.
+
+### Performance benchmarks
+
+Permutation benchmarks are tagged `[.benchmark]` and skipped by CTest. Run them explicitly:
+
+```bash
+./build/tests/test_permutation '[.benchmark]' --benchmark-no-analysis
+```
 
 ---
 
-## Integration Tests (test.sh)
+## TypeScript Type Check
 
 ```bash
-bash test.sh
+npm run build --prefix frontend
 ```
 
-Hits the **live deployment** at `https://puzzle.b58.de` by default.
-To run against a local server, edit `BASE_URL` at the top of `test.sh`:
+This runs `tsc --noEmit` (strict type check) followed by `vite build` (bundle to
+`public/index.html`). A clean exit means zero type errors and a valid build output.
+
+---
+
+## Smoke Test (local server)
 
 ```bash
-BASE_URL=http://127.0.0.1:8888
+./update.sh
+
+./build/bin/puzzpool &
+SERVER_PID=$!
+sleep 1
+curl -sf http://127.0.0.1:8888/api/v1/stats | python3 -m json.tool
+kill $SERVER_PID 2>/dev/null
+rm -f pool.db
+echo '[OK] smoke test passed'
 ```
 
-### Manual test scenarios
+---
+
+## Manual API Tests
 
 **Scenario 1 — Normal worker lifecycle**
 ```bash
+BASE_URL=http://127.0.0.1:8888
+
 # 1. Request work
 curl -s -X POST $BASE_URL/api/v1/work \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker","hashrate":1000000}' | jq .
+  -d '{"name":"testworker","hashrate":1000000}' | python3 -m json.tool
 
 # 2. Send heartbeat (keep job alive)
 curl -s -X POST $BASE_URL/api/v1/heartbeat \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker","job_id":1}' | jq .
+  -d '{"name":"testworker","job_id":1}' | python3 -m json.tool
 
-# 3. Submit completion (keys_scanned is required)
+# 3. Submit completion (keys_scanned required)
 curl -s -X POST $BASE_URL/api/v1/submit \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker","job_id":1,"status":"done","keys_scanned":500000000}' | jq .
+  -d '{"name":"testworker","job_id":1,"status":"done","keys_scanned":500000000}' | python3 -m json.tool
 
 # 4. Verify stats updated
-curl -s $BASE_URL/api/v1/stats | jq '.completed_chunks, .total_keys_completed'
+curl -s $BASE_URL/api/v1/stats | python3 -c "
+import sys, json; d = json.load(sys.stdin)
+print('completed_chunks:', d['completed_chunks'])
+print('total_keys_completed:', d['total_keys_completed'])
+"
 ```
 
 **Scenario 2 — Test chunk verification**
@@ -75,19 +97,18 @@ curl -s $BASE_URL/api/v1/stats | jq '.completed_chunks, .total_keys_completed'
 # 1. Admin: set a test chunk with known keys
 curl -s -X POST $BASE_URL/api/v1/admin/set-test-chunk \
   -H 'Content-Type: application/json' \
-  -d '{"start_hex":"0x5fffffffffff000000","end_hex":"0x5fffffffffff100000"}' | jq .
+  -d '{"start_hex":"0x5fffffffffff000000","end_hex":"0x5fffffffffff100000"}' | python3 -m json.tool
 
 # 2. Worker requests work — should receive the test chunk
 curl -s -X POST $BASE_URL/api/v1/work \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker2","hashrate":500000}' | jq .
+  -d '{"name":"testworker2","hashrate":500000}' | python3 -m json.tool
 # Verify start_key matches test chunk start
 
 # 3. Second worker should NOT receive the test chunk
 curl -s -X POST $BASE_URL/api/v1/work \
   -H 'Content-Type: application/json' \
-  -d '{"name":"testworker3","hashrate":500000}' | jq .
-# Verify start_key is different
+  -d '{"name":"testworker3","hashrate":500000}' | python3 -m json.tool
 ```
 
 **Scenario 3 — Key found**
@@ -104,10 +125,13 @@ curl -s -X POST $BASE_URL/api/v1/submit \
         "found_address":"1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf"
       }
     ]
-  }' | jq .
+  }' | python3 -m json.tool
 
 # Verify it appears in stats
-curl -s $BASE_URL/api/v1/stats | jq '.finders'
+curl -s $BASE_URL/api/v1/stats | python3 -c "
+import sys, json; d = json.load(sys.stdin)
+print('finders:', d['finders'])
+"
 ```
 
 **Scenario 4 — Admin token**
@@ -118,8 +142,7 @@ curl -s -X GET $BASE_URL/api/v1/admin/puzzles
 
 # With correct token
 curl -s -X GET $BASE_URL/api/v1/admin/puzzles \
-  -H "X-Admin-Token: $ADMIN_TOKEN"
-# → {"puzzles":[...]}
+  -H "X-Admin-Token: $ADMIN_TOKEN" | python3 -m json.tool
 ```
 
 ---
