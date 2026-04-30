@@ -5,7 +5,6 @@
 #include <catch2/benchmark/catch_benchmark.hpp>
 
 #include <set>
-#include <unordered_set>
 #include <string>
 
 using namespace puzzpool;
