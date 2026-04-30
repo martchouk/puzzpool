@@ -7,23 +7,29 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          submodules: recursive
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake build-essential libboost-dev nlohmann-json3-dev
 
-      - name: Lint
-        run: npm run lint
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Test
-        run: npm test
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test
+        run: |
+          timeout 3 ./build/bin/puzzpool || true
+          test -f pool.db && echo "DB created OK" && rm -f pool.db

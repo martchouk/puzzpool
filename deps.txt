@@ -1,0 +1,9 @@
+# Linux
+sudo apt install -y build-essential cmake ninja-build git pkg-config libsqlite3-dev libboost-all-dev nlohmann-json3-dev libasio-dev
+
+#mac
+brew update && brew install git cmake ninja pkg-config boost nlohmann-json sqlite asio
+
+git submodule add https://github.com/CrowCpp/Crow.git third_party/crow
+git submodule add https://github.com/SRombauts/SQLiteCpp.git third_party/SQLiteCpp
+git submodule update --init --recursive

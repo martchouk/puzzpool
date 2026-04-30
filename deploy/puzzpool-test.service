@@ -20,10 +20,9 @@ Type=simple
 User=jan
 WorkingDirectory=/home/jan/git/puzzpool.test
 
-ExecStart=/usr/bin/node server.js
+ExecStart=/home/jan/git/puzzpool.test/build/bin/puzzpool
 
 EnvironmentFile=/home/jan/git/puzzpool.test/.env
-Environment=NODE_ENV=production
 Environment=PORT=8889
 Environment=DB_PATH=/home/jan/git/puzzpool.test/pool.db
 Environment=TARGET_MINUTES=5

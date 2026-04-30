@@ -4,15 +4,14 @@ skills.md
 .claude
 
 # Runtime / generated
-node_modules/
 pool.db
 *.db
 .env
 BINGO_FOUND_KEYS.txt
 
+# C++ build output
+build/
+.cache/
+
 # macOS
 .DS_Store
-
-changes.patch
-server.js.bak
-server.js.orig

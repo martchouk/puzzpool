@@ -7,9 +7,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Only deploy when CI passes — ci.yml runs first on the same push,
-    # but GitHub Actions doesn't natively sequence across workflows.
-    # Use a needs: ci pattern or rely on branch protection requiring CI to pass first.
 
     steps:
       - name: Deploy via SSH
@@ -22,9 +19,13 @@ jobs:
             set -e
             cd ~/git/puzzpool
             git pull origin main
-            npm ci --production
+            ./update.sh
             sudo systemctl restart puzzpool
             # Health check — wait 3 s for process to start, then verify API responds
             sleep 3
-            curl -sf https://puzzle.b58.de/api/v1/stats | jq -r '.puzzle.name // "no puzzle"'
+            curl -sf https://puzzle.b58.de/api/v1/stats | python3 -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            print('puzzle:', d.get('puzzle', {}).get('name') if d.get('puzzle') else '(none)')
+            "
             echo "Deploy complete."
