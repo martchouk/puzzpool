@@ -4,6 +4,7 @@ skills.md
 .claude
 
 # Runtime / generated
+frontend/node_modules/
 pool.db
 *.db
 .env
