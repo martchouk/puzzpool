@@ -205,8 +205,11 @@ endif()
 
 if(APPLE)
     target_compile_definitions(puzzpool_core PUBLIC _DARWIN_C_SOURCE)
+    # CommonCrypto is a system framework — no explicit linking needed
 elseif(UNIX AND NOT APPLE)
     target_compile_definitions(puzzpool_core PUBLIC _GNU_SOURCE)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    target_link_libraries(puzzpool_core PUBLIC OpenSSL::Crypto)
 endif()
 
 set_target_properties(puzzpool PROPERTIES
