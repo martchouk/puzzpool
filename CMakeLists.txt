@@ -48,6 +48,8 @@ add_library(puzzpool_core STATIC
     src/service_admin.cpp
     src/service_stats.cpp
     src/service_bootstrap.cpp
+    src/work_service.cpp
+    src/submission_service.cpp
 )
 
 target_include_directories(puzzpool_core PUBLIC
