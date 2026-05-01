@@ -80,8 +80,8 @@ SubmissionService::SubmitResult SubmissionService::submitFound(
     std::vector<json> findings;
     std::set<std::string> seen;
     for (const auto& f : body["findings"]) {
-        if (!f.is_object() || !f.contains("found_key"))
-            return {false, true, 400, "each finding must include found_key"};
+        if (!f.is_object() || !f.contains("found_key") || !f["found_key"].is_string())
+            return {false, true, 400, "each finding must include found_key as a string"};
         std::string foundKey = f["found_key"].get<std::string>();
         if (!isValidHex(foundKey)) return {false, true, 400, "each found_key must be a valid hex string"};
         foundKey = normalizeHex(foundKey);

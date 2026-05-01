@@ -15,10 +15,12 @@ crow::response PoolService::handleStats(const crow::request& req) {
     std::shared_lock lock(mu_);
     try {
         std::optional<PuzzleRow> puzzle;
-        if (req.url_params.get("puzzle_id"))
-            puzzle = db_.puzzleById(std::stoll(req.url_params.get("puzzle_id")));
-        else
+        if (const char* pId = req.url_params.get("puzzle_id")) {
+            try { puzzle = db_.puzzleById(std::stoll(pId)); }
+            catch (const std::exception&) { return errorResponse(400, "puzzle_id must be a valid integer"); }
+        } else {
             puzzle = db_.activePuzzle();
+        }
 
         json out;
         out["stage"]           = cfg_.stage;

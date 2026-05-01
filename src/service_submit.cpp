@@ -10,9 +10,15 @@ crow::response PoolService::handleSubmit(const crow::request& req) {
     std::unique_lock lock(mu_);
     try {
         auto body = json::parse(req.body.empty() ? "{}" : req.body);
-        std::string name   = body.value("name", "");
-        int64_t     jobId  = body.value("job_id", 0LL);
-        std::string status = body.value("status", "");
+        std::string name;
+        if (body.contains("name") && body["name"].is_string())
+            name = body["name"].get<std::string>();
+        if (!body.contains("job_id") || !body["job_id"].is_number_integer())
+            return errorResponse(400, "job_id must be an integer");
+        int64_t jobId = body["job_id"].get<int64_t>();
+        std::string status;
+        if (body.contains("status") && body["status"].is_string())
+            status = body["status"].get<std::string>();
         if (status != "done" && status != "FOUND")
             return errorResponse(400, "status must be \"done\" or \"FOUND\"");
 
