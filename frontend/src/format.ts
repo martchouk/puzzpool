@@ -1,5 +1,17 @@
 import type { WorkerInfo, PuzzleInfo } from './types.ts';
 
+// ── HTML escaping ─────────────────────────────────────────────────────────────
+
+/** Escape untrusted strings before interpolating into innerHTML. */
+export function esc(s: string | null | undefined): string {
+  return (s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── Big integer formatting ────────────────────────────────────────────────────
 
 /** Format a BigInt decimal string with dot-separated thousands groups. */

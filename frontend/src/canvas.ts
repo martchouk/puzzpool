@@ -1,5 +1,5 @@
 import type { ChunkVis, ChunkStatus } from './types.ts';
-import { formatIntegerDots, formatGapNumber, percentileSorted, quantileSorted } from './format.ts';
+import { formatIntegerDots, formatGapNumber, percentileSorted, quantileSorted, esc } from './format.ts';
 
 // ── Chunk colour maps ─────────────────────────────────────────────────────────
 
@@ -465,8 +465,7 @@ export function formatTooltipLine(c: ChunkVis): string {
   const status = c.st === 'FOUND' ? '🔑 FOUND' :
                  c.st === 'assigned' ? '⚡ In Progress' :
                  c.st === 'completed' ? '✓ Done' : '↩ Reclaimed';
-  const worker = c.w ?? '—';
-  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span> &nbsp;Chunk #${c.id} &nbsp;<span style="color:#e0e0e0">${worker}</span>`;
+  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span> &nbsp;Chunk #${c.id} &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
 }
 
 export function showTooltip(tooltipEl: HTMLElement, e: MouseEvent, hits: ChunkVis[]): void {

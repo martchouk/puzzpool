@@ -3,7 +3,7 @@ import { fetchStats, activatePuzzle } from './api.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc,
   formatPrecisePercentage, trimHexRange, formatETA,
-  renderWorkerProgress, allocatorDiagnosticsHtml, emptyRow,
+  renderWorkerProgress, allocatorDiagnosticsHtml, emptyRow, esc,
 } from './format.ts';
 import {
   MAP_COLS, MAP_ROWS, HILBERT_N,
@@ -138,7 +138,7 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
   (togStrip as HTMLElement).style.gridTemplateColumns = gridCols;
 
   tabStrip.innerHTML = normalized.map(p =>
-    `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${p.name}</div>`
+    `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${esc(p.name)}</div>`
   ).join('');
 
   const selIdx  = normalized.findIndex(p => p.id === selectedId);
@@ -313,8 +313,8 @@ async function updateDashboard(): Promise<void> {
 
         return `<tr${dim}>
           <td>${dot}</td>
-          <td class="td-name">${w.name}</td>
-          <td class="td-mono">${w.version ?? 'unknown'}</td>
+          <td class="td-name">${esc(w.name)}</td>
+          <td class="td-mono">${esc(w.version ?? 'unknown')}</td>
           <td class="td-speed">${formatHashrate(w.hashrate)}</td>
           <td class="td-chunks">${w.current_chunk != null ? '#' + formatIntegerDots(w.current_chunk) : '—'}</td>
           <td class="td-chunks">${runStart}</td>
@@ -332,7 +332,7 @@ async function updateDashboard(): Promise<void> {
     } else {
       stbody.innerHTML = data.scores.map((s, i) => `<tr>
         <td class="td-rank">#${formatIntegerDots(i + 1)}</td>
-        <td class="td-name">${s.worker_name}</td>
+        <td class="td-name">${esc(s.worker_name)}</td>
         <td class="td-chunks">${formatBigInt(s.total_keys)}</td>
         <td class="td-chunks">${formatIntegerDots(s.completed_chunks)}</td>
       </tr>`).join('');
@@ -344,8 +344,8 @@ async function updateDashboard(): Promise<void> {
       ftbody.innerHTML = emptyRow(6, 'No keys found yet');
     } else {
       ftbody.innerHTML = data.finders.map(f => `<tr>
-        <td class="td-finder">${f.worker_name}</td>
-        <td class="td-addr">${f.found_address ?? 'Unknown'}</td>
+        <td class="td-finder">${esc(f.worker_name)}</td>
+        <td class="td-addr">${esc(f.found_address ?? 'Unknown')}</td>
         <td class="td-key">${f.vchunk_start != null ? formatIntegerDots(f.vchunk_start) : '—'}</td>
         <td class="td-key">${f.vchunk_end  != null ? formatIntegerDots(Number(f.vchunk_end) - 1) : '—'}</td>
         <td class="td-key">${f.chunk_global != null ? '#' + formatIntegerDots(f.chunk_global) : '—'}</td>

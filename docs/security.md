@@ -86,10 +86,26 @@ SQL injection is not possible.
 
 ## XSS Prevention
 
-The dashboard (`public/index.html`) uses `element.textContent` for all user-supplied
-content and only uses `innerHTML` for trusted, server-controlled strings such as
-formatted numbers and pre-coloured stat labels. Worker names, hash values, and addresses
-are always written via `textContent`. No `eval` or `document.write` calls exist.
+The dashboard uses two rendering paths:
+
+**`textContent`** — used for simple scalar updates (stat card values, puzzle name, frontier range). Safe by construction.
+
+**`innerHTML` with `esc()`** — used for table rows and tooltips where HTML structure (e.g. coloured spans, progress bars) is needed. All untrusted fields from the API are passed through `esc()` in `frontend/src/format.ts` before interpolation. `esc()` escapes `& < > " '`.
+
+Untrusted fields (worker-supplied or stored from unauthenticated input):
+- Worker `name`, `version`
+- Score and finder `worker_name`
+- Finder `found_address`
+- Chunk `w` (worker name in canvas tooltips)
+- Puzzle `name` (admin-set but stored in DB)
+
+Trusted fields interpolated without escaping (server-formatted or enum-bounded):
+- Formatted numbers from `formatIntegerDots`, `formatBigInt`, etc.
+- CSS variable strings (`var(--accent-cyan)`)
+- `ChunkStatus` enum values mapped through `CHUNK_COLORS`
+- `alloc_strategy` (mapped to known display names; unknown values escaped via `allocatorFriendlyName`)
+
+No `eval` or `document.write` calls exist.
 
 ---
 
