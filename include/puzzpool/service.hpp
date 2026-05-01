@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 
 namespace puzzpool {
@@ -54,7 +55,7 @@ private:
     Allocator          allocator_;
     WorkService        ws_;
     SubmissionService  ss_;
-    std::mutex         mu_;
+    std::shared_mutex  mu_;
 };
 
 } // namespace puzzpool

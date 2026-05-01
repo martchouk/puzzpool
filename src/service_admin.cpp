@@ -168,6 +168,7 @@ crow::response PoolService::handleSetTestChunk(const crow::request& req) {
 }
 
 crow::response PoolService::handleAdminPuzzles() {
+    std::shared_lock lock(mu_);
     try {
         SQLite::Statement q(db_.raw(), R"SQL(
             SELECT id, name, active, start_hex, end_hex,

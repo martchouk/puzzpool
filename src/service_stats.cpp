@@ -12,6 +12,7 @@ namespace puzzpool {
 using json = nlohmann::json;
 
 crow::response PoolService::handleStats(const crow::request& req) {
+    std::shared_lock lock(mu_);
     try {
         std::optional<PuzzleRow> puzzle;
         if (req.url_params.get("puzzle_id"))
