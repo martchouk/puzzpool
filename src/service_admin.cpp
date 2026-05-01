@@ -93,6 +93,7 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             q.bind(1, existing->id);
             q.exec();
             puzzleId = existing->id;
+            tx.commit();
             allocator_.ensureAllocatorForPuzzle(puzzleId);
         } else {
             SQLite::Statement ins(db_.raw(), R"SQL(
@@ -110,12 +111,12 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             if (vchunkSize) ins.bind(6, bigToDec(*vchunkSize)); else ins.bind(6);
             ins.exec();
             puzzleId = db_.raw().getLastInsertRowid();
+            tx.commit();
             if (strategy == cfg_.allocStrategyVChunks)
                 allocator_.seedVirtualChunks(puzzleId, startNorm, endNorm, seed, *vchunkSize);
             else
                 allocator_.seedSectors(puzzleId, startNorm, endNorm);
         }
-        tx.commit();
         auto p = db_.activePuzzle();
         return jsonResponse({{"ok", true}, {"puzzle", puzzleJson(*p)}});
     } catch (const std::exception& e) {
