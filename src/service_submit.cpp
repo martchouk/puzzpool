@@ -15,7 +15,9 @@ crow::response PoolService::handleSubmit(const crow::request& req) {
             name = body["name"].get<std::string>();
         if (!body.contains("job_id") || !body["job_id"].is_number_integer())
             return errorResponse(400, "job_id must be an integer");
-        int64_t jobId = body["job_id"].get<int64_t>();
+        int64_t jobId;
+        try { jobId = body["job_id"].get<int64_t>(); }
+        catch (const std::exception&) { return errorResponse(400, "job_id out of int64 range"); }
         std::string status;
         if (body.contains("status") && body["status"].is_string())
             status = body["status"].get<std::string>();

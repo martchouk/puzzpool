@@ -62,9 +62,12 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
                 if (!body["virtual_chunk_size_keys"].is_string())
                     return errorResponse(400, "virtual_chunk_size_keys must be a decimal string");
                 std::string vcsStr = body["virtual_chunk_size_keys"].get<std::string>();
-                if (vcsStr.empty() || vcsStr.find_first_not_of("0123456789") != std::string::npos || vcsStr == "0")
+                if (vcsStr.empty() || vcsStr.find_first_not_of("0123456789") != std::string::npos)
                     return errorResponse(400, "virtual_chunk_size_keys must be a positive decimal integer");
-                vchunkSize = minBig(cpp_int(vcsStr), puzzleRange);
+                cpp_int vcs = cpp_int(vcsStr);
+                if (vcs <= 0)
+                    return errorResponse(400, "virtual_chunk_size_keys must be a positive decimal integer");
+                vchunkSize = minBig(vcs, puzzleRange);
             }
             else
                 vchunkSize = allocator_.chooseDefaultVirtualChunkSize(puzzleRange);

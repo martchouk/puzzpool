@@ -16,8 +16,13 @@ crow::response PoolService::handleStats(const crow::request& req) {
     try {
         std::optional<PuzzleRow> puzzle;
         if (const char* pId = req.url_params.get("puzzle_id")) {
-            try { puzzle = db_.puzzleById(std::stoll(pId)); }
-            catch (const std::exception&) { return errorResponse(400, "puzzle_id must be a valid integer"); }
+            try {
+                std::size_t pos = 0;
+                int64_t id = std::stoll(pId, &pos);
+                if (pos != std::string_view(pId).size())
+                    return errorResponse(400, "puzzle_id must be a valid integer");
+                puzzle = db_.puzzleById(id);
+            } catch (const std::exception&) { return errorResponse(400, "puzzle_id must be a valid integer"); }
         } else {
             puzzle = db_.activePuzzle();
         }
