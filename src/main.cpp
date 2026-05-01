@@ -89,6 +89,12 @@ int main() {
             return service.handleAdminPuzzles();
         });
 
+        CROW_ROUTE(app, "/api/v1/admin/reclaim").methods(crow::HTTPMethod::POST)
+        ([&](const crow::request& req) {
+            if (auto denied = adminGuard(req)) return std::move(*denied);
+            return service.handleAdminReclaim();
+        });
+
         std::thread reclaimer([&service] {
             using namespace std::chrono_literals;
             for (;;) {

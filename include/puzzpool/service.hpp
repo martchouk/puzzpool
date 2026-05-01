@@ -31,8 +31,9 @@ public:
     crow::response handleSetPuzzle(const crow::request& req);
     crow::response handleSetTestChunk(const crow::request& req);
     crow::response handleAdminPuzzles();
+    crow::response handleAdminReclaim();
 
-    void reclaimTimedOutChunks();
+    int reclaimTimedOutChunks();
 
     const Config& cfg() const { return cfg_; }
 

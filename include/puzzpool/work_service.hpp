@@ -34,7 +34,7 @@ public:
 
     bool heartbeat(const std::string& name, int64_t jobId);
 
-    void reclaimTimedOutChunks();
+    int reclaimTimedOutChunks();
 
     // Returns true if this is the worker's first /work call after being idle
     // longer than reactivate_minutes (stale assigned chunks are reclaimed before

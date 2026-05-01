@@ -199,4 +199,13 @@ crow::response PoolService::handleAdminPuzzles() {
     }
 }
 
+crow::response PoolService::handleAdminReclaim() {
+    try {
+        int count = reclaimTimedOutChunks();
+        return jsonResponse({{"ok", true}, {"reclaimed", count}});
+    } catch (const std::exception& e) {
+        return errorResponse(500, e.what());
+    }
+}
+
 } // namespace puzzpool

@@ -11,9 +11,9 @@ PoolService::PoolService(const Config& cfg)
     ensureAllocators();
 }
 
-void PoolService::reclaimTimedOutChunks() {
+int PoolService::reclaimTimedOutChunks() {
     std::unique_lock lock(mu_);
-    ws_.reclaimTimedOutChunks();
+    return ws_.reclaimTimedOutChunks();
 }
 
 } // namespace puzzpool

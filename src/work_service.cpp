@@ -83,7 +83,7 @@ bool WorkService::heartbeat(const std::string& name, int64_t jobId) {
     return true;
 }
 
-void WorkService::reclaimTimedOutChunks() {
+int WorkService::reclaimTimedOutChunks() {
     const auto& cfg = db_.cfg();
     SQLite::Statement q(db_.raw(), R"SQL(
         UPDATE chunks
@@ -94,6 +94,7 @@ void WorkService::reclaimTimedOutChunks() {
     )SQL");
     q.bind(1, "-" + std::to_string(cfg.timeoutMinutes) + " minutes");
     q.exec();
+    return db_.raw().getChanges();
 }
 
 bool WorkService::upsertWorkerAndDetectReactivation(
