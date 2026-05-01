@@ -130,8 +130,12 @@ crow::response PoolService::handleSetTestChunk(const crow::request& req) {
         auto puzzle = db_.activePuzzle();
         if (!puzzle) return errorResponse(503, "No active puzzle");
         auto body = json::parse(req.body.empty() ? "{}" : req.body);
-        std::string startHex = body.value("start_hex", "");
-        std::string endHex   = body.value("end_hex", "");
+        std::string startHex;
+        if (body.contains("start_hex") && body["start_hex"].is_string())
+            startHex = body["start_hex"].get<std::string>();
+        std::string endHex;
+        if (body.contains("end_hex") && body["end_hex"].is_string())
+            endHex = body["end_hex"].get<std::string>();
 
         if (startHex.empty()) {
             SQLite::Statement q(db_.raw(), "UPDATE puzzles SET test_start_hex = NULL, test_end_hex = NULL WHERE id = ?");
