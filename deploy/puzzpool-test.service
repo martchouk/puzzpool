@@ -23,7 +23,7 @@ WorkingDirectory=/home/jan/git/puzzpool.test
 ExecStart=/home/jan/git/puzzpool.test/build/bin/puzzpool
 
 EnvironmentFile=/home/jan/git/puzzpool.test/.env
-Environment=PORT=8889
+Environment=PORT=9999
 Environment=DB_PATH=/home/jan/git/puzzpool.test/pool.db
 Environment=TARGET_MINUTES=5
 Environment=TIMEOUT_MINUTES=15

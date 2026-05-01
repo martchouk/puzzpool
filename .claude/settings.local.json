@@ -20,7 +20,18 @@
       "Bash(make benchmark_cpu)",
       "Bash(make cpu *)",
       "WebFetch(domain:github.com)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(cmake -S . -B build -DCMAKE_BUILD_TYPE=Release)",
+      "Bash(cmake *)",
+      "Bash(timeout 3 ./build/bin/puzzpool)",
+      "Bash(python3 -c \" import sys, json lines = sys.stdin.readlines\\(\\) for line in lines: try: obj = json.loads\\(line\\) role = obj.get\\('role', ''\\) if role in \\('user', 'assistant'\\): content = obj.get\\('content', ''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\('type'\\) == 'text': print\\(f'[{role}]: {c[\\\\\"text\\\\\"][:500]}'\\) elif isinstance\\(content, str\\): print\\(f'[{role}]: {content[:500]}'\\) except: pass \")",
+      "Bash(python3 -c \" import sys, json lines = sys.stdin.readlines\\(\\) for line in lines[-50:]: try: obj = json.loads\\(line\\) role = obj.get\\('role', ''\\) if role in \\('user', 'assistant'\\): content = obj.get\\('content', ''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\('type'\\) == 'text': text = c['text'] if text.strip\\(\\): print\\(f'[{role}]: {text[:800]}'\\) print\\('---'\\) elif isinstance\\(content, str\\) and content.strip\\(\\): print\\(f'[{role}]: {content[:800]}'\\) print\\('---'\\) except: pass \")",
+      "Bash(python3 -c ' *)",
+      "Bash(brew list *)",
+      "Bash(brew info *)",
+      "Bash(ctest --output-on-failure -V)",
+      "Bash(ctest *)",
+      "Bash(awk '/^    <script>/{found=1} found{count++} END{print \"JS lines: \" count}' /Users/john/git/puzzpool/public/index.html)"
     ]
   }
 }

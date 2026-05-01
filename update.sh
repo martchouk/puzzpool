@@ -9,6 +9,9 @@ git submodule sync --recursive
 echo "[update] checkout pinned submodule commits"
 git submodule update --init --recursive
 
+#echo "[update] checkout puzzpool"
+#git pull origin dev
+
 echo "[update] configure"
 cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 
