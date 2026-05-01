@@ -20,9 +20,20 @@ SubmissionService::SubmitResult SubmissionService::submitDone(
 
     if (!body.contains("keys_scanned"))
         return {false, true, 400, "keys_scanned is required for status: done"};
-    if (!body["keys_scanned"].is_number_integer() || body["keys_scanned"].get<long long>() < 0)
-        return {false, true, 400, "keys_scanned must be a non-negative integer"};
-    cpp_int reported = body["keys_scanned"].get<long long>();
+    cpp_int reported;
+    const auto& ks = body["keys_scanned"];
+    if (ks.is_number_integer()) {
+        long long v = ks.get<long long>();
+        if (v < 0) return {false, true, 400, "keys_scanned must be a non-negative integer"};
+        reported = v;
+    } else if (ks.is_string()) {
+        std::string s = ks.get<std::string>();
+        if (s.empty() || s.find_first_not_of("0123456789") != std::string::npos)
+            return {false, true, 400, "keys_scanned must be a non-negative integer or decimal string"};
+        reported = cpp_int(s);
+    } else {
+        return {false, true, 400, "keys_scanned must be a non-negative integer or decimal string"};
+    }
 
     SQLite::Transaction tx(db_.raw());
     SQLite::Statement chunkQ(db_.raw(),
