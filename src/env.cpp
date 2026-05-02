@@ -8,8 +8,10 @@
 
 #ifdef _WIN32
 #include <stdlib.h>
+extern char** _environ;
 #else
 #include <unistd.h>
+extern char** environ;
 #endif
 
 namespace puzzpool {
@@ -82,6 +84,23 @@ std::map<std::string, std::string> parseDotEnvFile(const std::string& path) {
         parseDotEnvLine(line, [&](const std::string& k, const std::string& v) {
             out[k] = v;
         });
+    }
+    return out;
+}
+
+std::map<std::string, std::string> processEnvMap() {
+    std::map<std::string, std::string> out;
+#ifdef _WIN32
+    char** env = _environ;
+#else
+    char** env = environ;
+#endif
+    if (!env) return out;
+    for (char** cur = env; *cur; ++cur) {
+        std::string item(*cur);
+        const auto eqPos = item.find('=');
+        if (eqPos == std::string::npos || eqPos == 0) continue;
+        out[item.substr(0, eqPos)] = item.substr(eqPos + 1);
     }
     return out;
 }

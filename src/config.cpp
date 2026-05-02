@@ -10,7 +10,9 @@ namespace puzzpool {
 
 Config loadConfigFromEnv() {
     loadDotEnv(".env", false);
-    const auto envMap = parseDotEnvFile(".env");
+    auto envMap = parseDotEnvFile(".env");
+    for (const auto& [key, value] : processEnvMap())
+        envMap[key] = value;
 
     Config cfg;
     cfg.port           = getEnvInt("PORT", 8888);

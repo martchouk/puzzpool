@@ -14,6 +14,7 @@ std::string trim(std::string s);
 void setEnvVar(const std::string& key, const std::string& value, bool overwrite = false);
 void loadDotEnv(const std::string& path = ".env", bool overwrite = false);
 std::map<std::string, std::string> parseDotEnvFile(const std::string& path = ".env");
+std::map<std::string, std::string> processEnvMap();
 
 std::string getEnvOr(const char* key, const std::string& fallback);
 int         getEnvInt(const char* key, int fallback);
