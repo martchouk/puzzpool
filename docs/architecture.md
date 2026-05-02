@@ -103,7 +103,7 @@ file — Node.js is not needed at runtime.
   Bootstrap stage < 3?   ──yes──▶  assign anchor chunk  ──▶  return {job_id}
        │ no
        ▼
-  Advance alloc_cursor through permutation, assign virtual chunk run  ──▶  return {job_id}
+  Advance alloc_cursor_hex through permutation, assign virtual chunk run  ──▶  return {job_id}
 
   Background (every 60 s):
     chunks WHERE status='assigned'
@@ -135,7 +135,7 @@ async drivers.
 
 **Feistel permutation** — The `virtual_random_chunks_v1` allocator divides the keyspace
 into fixed-size virtual chunks and visits them in a pseudo-random order determined by a
-cycle-walking Feistel cipher derived from a SHA-256 seed. The `alloc_cursor` in the
+cycle-walking Feistel cipher derived from a SHA-256 seed. The `alloc_cursor_hex` in the
 `puzzles` table advances with each assignment. Every virtual chunk is visited exactly
 once before any chunk is repeated, giving deterministic full coverage without storing
 the full permutation in memory.

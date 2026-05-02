@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -94,10 +93,8 @@ void Allocator::seedVirtualChunks(int64_t puzzleId, const std::string& startHex,
         UPDATE puzzles
         SET alloc_strategy = ?,
             alloc_seed = ?,
-            alloc_cursor = 0,
             alloc_cursor_hex = ?,
             virtual_chunk_size_keys = ?,
-            virtual_chunk_count = ?,
             virtual_chunk_count_hex = ?,
             bootstrap_stage = 0
         WHERE id = ?
@@ -106,12 +103,8 @@ void Allocator::seedVirtualChunks(int64_t puzzleId, const std::string& startHex,
     q.bind(2, allocSeed);
     q.bind(3, intToHex(cpp_int(0), 64));
     q.bind(4, bigToDec(chunkSize));
-    if (chunkCountBig <= cpp_int(std::numeric_limits<int64_t>::max()))
-        q.bind(5, static_cast<int64_t>(chunkCountBig));
-    else
-        q.bind(5);
-    q.bind(6, intToHex(chunkCountBig, 64));
-    q.bind(7, puzzleId);
+    q.bind(5, intToHex(chunkCountBig, 64));
+    q.bind(6, puzzleId);
     q.exec();
     tx.commit();
 }
@@ -137,9 +130,9 @@ Allocator::assignLegacyRandomChunk(const std::string& worker,
         INSERT INTO chunks (
             puzzle_id, start_hex, end_hex, status,
             worker_name, assigned_at, heartbeat_at, is_test,
-            sector_id, alloc_block_id, vchunk_start, vchunk_end,
+            sector_id,
             alloc_generation
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, NULL, NULL, NULL, 'legacy')
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, ?, 'legacy')
     )SQL");
 
     const int midpoint = static_cast<int>(cfg_.targetSectors / 2);
@@ -313,16 +306,11 @@ int64_t Allocator::readWorkerHashrate(const std::string& worker) {
 
 void Allocator::setAllocCursor(int64_t puzzleId, const cpp_int& cursor) {
     SQLite::Statement q(db_.raw(), R"SQL(
-        UPDATE puzzles SET alloc_cursor_hex = ?,
-            alloc_cursor = ?
+        UPDATE puzzles SET alloc_cursor_hex = ?
         WHERE id = ?
     )SQL");
     q.bind(1, intToHex(cursor, 64));
-    if (cursor <= cpp_int(std::numeric_limits<int64_t>::max()))
-        q.bind(2, static_cast<int64_t>(cursor));
-    else
-        q.bind(2);
-    q.bind(3, puzzleId);
+    q.bind(2, puzzleId);
     q.exec();
 }
 
@@ -446,27 +434,18 @@ Allocator::assignVirtualChunkRun(const std::string& worker, const PuzzleRow& puz
         INSERT INTO chunks (
             puzzle_id, start_hex, end_hex, status,
             worker_name, assigned_at, heartbeat_at, is_test,
-            sector_id, alloc_block_id,
-            vchunk_start, vchunk_end,
+            sector_id,
             vchunk_start_hex, vchunk_end_hex,
             alloc_generation
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, ?, ?, ?)
     )SQL");
     ins.bind(1, puzzle.id);
     ins.bind(2, span.first);
     ins.bind(3, span.second);
     ins.bind(4, worker);
-    if (runStart <= cpp_int(std::numeric_limits<int64_t>::max()))
-        ins.bind(5, static_cast<int64_t>(runStart));
-    else
-        ins.bind(5);
-    if (runEnd <= cpp_int(std::numeric_limits<int64_t>::max()))
-        ins.bind(6, static_cast<int64_t>(runEnd));
-    else
-        ins.bind(6);
-    ins.bind(7, intToHex(runStart, 64));
-    ins.bind(8, intToHex(runEnd, 64));
-    ins.bind(9, generation);
+    ins.bind(5, intToHex(runStart, 64));
+    ins.bind(6, intToHex(runEnd, 64));
+    ins.bind(7, generation);
     ins.exec();
     return WorkAssignResult{db_.raw().getLastInsertRowid(), span.first, span.second};
 }

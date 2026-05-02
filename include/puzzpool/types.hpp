@@ -48,8 +48,6 @@ struct ChunkRow {
     std::string heartbeatAt;
     int isTest = 0;
     int64_t sectorId = 0;
-    int64_t vchunkStart = -1;
-    int64_t vchunkEnd = -1;
     std::string allocGeneration;
 };
 

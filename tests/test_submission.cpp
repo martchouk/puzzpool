@@ -164,9 +164,10 @@ TEST_CASE("clearTestChunkIfNeeded: clears test_start/end on puzzle after test ch
     // Set up puzzle with a test chunk
     db.exec("UPDATE puzzles SET active = 0");
     SQLite::Statement pIns(db.raw(),
-        "INSERT INTO puzzles (name, start_hex, end_hex, active, alloc_strategy, alloc_seed, alloc_cursor,"
+        "INSERT INTO puzzles (name, start_hex, end_hex, active, alloc_strategy, alloc_seed, alloc_cursor_hex,"
         " test_start_hex, test_end_hex)"
-        " VALUES ('tp', '01', '64', 1, 'legacy_random_shards_v1', 's', 0, '01', '64')");
+        " VALUES ('tp', '01', '64', 1, 'legacy_random_shards_v1', 's',"
+        " '0000000000000000000000000000000000000000000000000000000000000000', '01', '64')");
     pIns.exec();
     int64_t pid = db.raw().getLastInsertRowid();
 

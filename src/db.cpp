@@ -28,13 +28,24 @@ void PoolDb::migrate() {
         name TEXT NOT NULL,
         start_hex TEXT NOT NULL,
         end_hex TEXT NOT NULL,
-        active INTEGER NOT NULL DEFAULT 0
+        active INTEGER NOT NULL DEFAULT 0,
+        test_start_hex TEXT,
+        test_end_hex TEXT,
+        alloc_strategy TEXT,
+        alloc_seed TEXT,
+        alloc_cursor_hex TEXT,
+        virtual_chunk_size_keys TEXT,
+        virtual_chunk_count_hex TEXT,
+        bootstrap_stage INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS workers (
         name TEXT PRIMARY KEY,
         hashrate REAL,
-        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        version TEXT,
+        min_chunk_keys TEXT,
+        chunk_quantum_keys TEXT
       );
 
       CREATE TABLE IF NOT EXISTS chunks (
@@ -50,10 +61,14 @@ void PoolDb::migrate() {
         found_key TEXT,
         found_address TEXT,
         is_test INTEGER NOT NULL DEFAULT 0,
-        sector_id INTEGER
+        sector_id INTEGER,
+        vchunk_start_hex TEXT,
+        vchunk_end_hex TEXT,
+        alloc_generation TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
+      CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_hex_span ON chunks (puzzle_id, vchunk_start_hex, vchunk_end_hex, status);
 
       CREATE TABLE IF NOT EXISTS sectors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,10 +99,8 @@ void PoolDb::migrate() {
     addColumnIfMissing("puzzles", "test_end_hex TEXT");
     addColumnIfMissing("puzzles", "alloc_strategy TEXT");
     addColumnIfMissing("puzzles", "alloc_seed TEXT");
-    addColumnIfMissing("puzzles", "alloc_cursor INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing("puzzles", "alloc_cursor_hex TEXT");
     addColumnIfMissing("puzzles", "virtual_chunk_size_keys TEXT");
-    addColumnIfMissing("puzzles", "virtual_chunk_count INTEGER");
     addColumnIfMissing("puzzles", "virtual_chunk_count_hex TEXT");
     addColumnIfMissing("puzzles", "bootstrap_stage INTEGER NOT NULL DEFAULT 0");
 
@@ -97,30 +110,12 @@ void PoolDb::migrate() {
 
     addColumnIfMissing("chunks", "is_test INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing("chunks", "prev_worker_name TEXT");
-    addColumnIfMissing("chunks", "alloc_block_id INTEGER");
-    addColumnIfMissing("chunks", "vchunk_start INTEGER");
-    addColumnIfMissing("chunks", "vchunk_end INTEGER");
     addColumnIfMissing("chunks", "vchunk_start_hex TEXT");
     addColumnIfMissing("chunks", "vchunk_end_hex TEXT");
     addColumnIfMissing("chunks", "heartbeat_at DATETIME");
     addColumnIfMissing("chunks", "alloc_generation TEXT");
 
-    exec("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)");
     exec("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_hex_span ON chunks (puzzle_id, vchunk_start_hex, vchunk_end_hex, status)");
-
-    exec(R"SQL(
-        UPDATE chunks SET
-            vchunk_start_hex = printf('%064x', vchunk_start),
-            vchunk_end_hex   = printf('%064x', vchunk_end)
-        WHERE vchunk_start IS NOT NULL AND vchunk_start_hex IS NULL
-    )SQL");
-
-    exec(R"SQL(
-        UPDATE puzzles SET
-            alloc_cursor_hex        = printf('%064x', alloc_cursor),
-            virtual_chunk_count_hex = printf('%064x', virtual_chunk_count)
-        WHERE virtual_chunk_count IS NOT NULL AND virtual_chunk_count_hex IS NULL
-    )SQL");
     exec("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL");
     exec("UPDATE puzzles SET alloc_strategy = 'legacy_random_shards_v1' WHERE alloc_strategy IS NULL");
     exec(R"SQL(
@@ -220,12 +215,12 @@ PuzzleRow PoolDb::readPuzzle(SQLite::Statement& q) {
     p.allocStrategy       = getStr("alloc_strategy");
     p.allocSeed           = getStr("alloc_seed");
     std::string cursorHex = getStr("alloc_cursor_hex");
-    p.allocCursor = cursorHex.empty() ? cpp_int(getI64("alloc_cursor")) : hexToInt(cursorHex);
+    p.allocCursor = cursorHex.empty() ? cpp_int(0) : hexToInt(cursorHex);
 
     p.virtualChunkSizeKeys = getStr("virtual_chunk_size_keys");
 
     std::string countHex = getStr("virtual_chunk_count_hex");
-    p.virtualChunkCount = countHex.empty() ? cpp_int(getI64("virtual_chunk_count")) : hexToInt(countHex);
+    p.virtualChunkCount = countHex.empty() ? cpp_int(0) : hexToInt(countHex);
     p.bootstrapStage      = getI("bootstrap_stage");
     return p;
 }

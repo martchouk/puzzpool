@@ -105,16 +105,17 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             SQLite::Statement ins(db_.raw(), R"SQL(
                 INSERT INTO puzzles (
                     name, start_hex, end_hex, active,
-                    alloc_strategy, alloc_seed, alloc_cursor,
-                    virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
-                ) VALUES (?, ?, ?, 1, ?, ?, 0, ?, NULL, 0)
+                    alloc_strategy, alloc_seed, alloc_cursor_hex,
+                    virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, NULL, 0)
             )SQL");
             ins.bind(1, name);
             ins.bind(2, startNorm);
             ins.bind(3, endNorm);
             ins.bind(4, strategy);
             ins.bind(5, seed);
-            if (vchunkSize) ins.bind(6, bigToDec(*vchunkSize)); else ins.bind(6);
+            ins.bind(6, intToHex(cpp_int(0), 64));
+            if (vchunkSize) ins.bind(7, bigToDec(*vchunkSize)); else ins.bind(7);
             ins.exec();
             puzzleId = db_.raw().getLastInsertRowid();
             tx.commit();
@@ -183,21 +184,21 @@ crow::response PoolService::handleAdminPuzzles() {
         SQLite::Statement q(db_.raw(), R"SQL(
             SELECT id, name, active, start_hex, end_hex,
                    alloc_strategy, alloc_seed,
-                   alloc_cursor, alloc_cursor_hex,
+                   alloc_cursor_hex,
                    virtual_chunk_size_keys,
-                   virtual_chunk_count, virtual_chunk_count_hex,
+                   virtual_chunk_count_hex,
                    bootstrap_stage
             FROM puzzles
             ORDER BY id ASC
         )SQL");
         json arr = json::array();
         while (q.executeStep()) {
-            json cursorJ = q.isColumnNull(8)
-                ? (q.isColumnNull(7) ? json(nullptr) : json(q.getColumn(7).getInt64()))
-                : json(bigToDec(hexToInt(q.getColumn(8).getString())));
-            json countJ = q.isColumnNull(11)
-                ? (q.isColumnNull(10) ? json(nullptr) : json(q.getColumn(10).getInt64()))
-                : json(bigToDec(hexToInt(q.getColumn(11).getString())));
+            json cursorJ = q.isColumnNull(7)
+                ? json(nullptr)
+                : json(bigToDec(hexToInt(q.getColumn(7).getString())));
+            json countJ = q.isColumnNull(9)
+                ? json(nullptr)
+                : json(bigToDec(hexToInt(q.getColumn(9).getString())));
             arr.push_back({
                 {"id",                      q.getColumn(0).getInt64()},
                 {"name",                    q.getColumn(1).getString()},
@@ -207,9 +208,9 @@ crow::response PoolService::handleAdminPuzzles() {
                 {"alloc_strategy",          q.isColumnNull(5) ? json(nullptr) : json(q.getColumn(5).getString())},
                 {"alloc_seed",              q.isColumnNull(6) ? json(nullptr) : json(q.getColumn(6).getString())},
                 {"alloc_cursor",            cursorJ},
-                {"virtual_chunk_size_keys", q.isColumnNull(9) ? json(nullptr) : json(q.getColumn(9).getString())},
+                {"virtual_chunk_size_keys", q.isColumnNull(8) ? json(nullptr) : json(q.getColumn(8).getString())},
                 {"virtual_chunk_count",     countJ},
-                {"bootstrap_stage",         q.isColumnNull(12) ? 0 : q.getColumn(12).getInt()}
+                {"bootstrap_stage",         q.isColumnNull(10) ? 0 : q.getColumn(10).getInt()}
             });
         }
         return jsonResponse({{"puzzles", arr}});

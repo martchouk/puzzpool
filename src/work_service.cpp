@@ -134,7 +134,7 @@ bool WorkService::upsertWorkerAndDetectReactivation(
 std::optional<ChunkRow> WorkService::existingAssignedChunk(const std::string& name, int64_t puzzleId) {
     SQLite::Statement q(db_.raw(), R"SQL(
         SELECT id, puzzle_id, start_hex, end_hex, status, worker_name, prev_worker_name,
-               assigned_at, heartbeat_at, is_test, sector_id, vchunk_start, vchunk_end, alloc_generation
+               assigned_at, heartbeat_at, is_test, sector_id, alloc_generation
         FROM chunks WHERE worker_name = ? AND puzzle_id = ? AND status = 'assigned' LIMIT 1
     )SQL");
     q.bind(1, name);
@@ -150,7 +150,7 @@ std::optional<ChunkRow> WorkService::reclaimChunk(const std::string& name, int64
         WHERE id = (
             SELECT id FROM chunks WHERE status = 'reclaimed' AND puzzle_id = ? AND is_test = 0 ORDER BY id ASC LIMIT 1
         ) RETURNING id, puzzle_id, start_hex, end_hex, status, worker_name, prev_worker_name,
-                    assigned_at, heartbeat_at, is_test, sector_id, vchunk_start, vchunk_end, alloc_generation
+                    assigned_at, heartbeat_at, is_test, sector_id, alloc_generation
     )SQL");
     q.bind(1, name);
     q.bind(2, puzzleId);
@@ -174,7 +174,7 @@ std::optional<ChunkRow> WorkService::claimTestChunk(const std::string& name, con
             WHERE puzzle_id = ? AND start_hex = ? AND end_hex = ? AND is_test = 1 AND status = 'reclaimed'
             LIMIT 1
         ) RETURNING id, puzzle_id, start_hex, end_hex, status, worker_name, prev_worker_name,
-                    assigned_at, heartbeat_at, is_test, sector_id, vchunk_start, vchunk_end, alloc_generation
+                    assigned_at, heartbeat_at, is_test, sector_id, alloc_generation
     )SQL");
     rec.bind(1, name);
     rec.bind(2, puzzle.id);
@@ -196,7 +196,7 @@ std::optional<ChunkRow> WorkService::claimTestChunk(const std::string& name, con
 
     SQLite::Statement fetch(db_.raw(), R"SQL(
         SELECT id, puzzle_id, start_hex, end_hex, status, worker_name, prev_worker_name,
-               assigned_at, heartbeat_at, is_test, sector_id, vchunk_start, vchunk_end, alloc_generation
+               assigned_at, heartbeat_at, is_test, sector_id, alloc_generation
         FROM chunks WHERE id = ?
     )SQL");
     fetch.bind(1, db_.raw().getLastInsertRowid());
@@ -217,9 +217,7 @@ ChunkRow WorkService::readChunk(SQLite::Statement& q) {
     c.heartbeatAt     = q.isColumnNull(8) ? "" : q.getColumn(8).getString();
     c.isTest          = q.isColumnNull(9)  ? 0  : q.getColumn(9).getInt();
     c.sectorId        = q.isColumnNull(10) ? 0  : q.getColumn(10).getInt64();
-    c.vchunkStart     = q.isColumnNull(11) ? -1 : q.getColumn(11).getInt64();
-    c.vchunkEnd       = q.isColumnNull(12) ? -1 : q.getColumn(12).getInt64();
-    c.allocGeneration = q.isColumnNull(13) ? "" : q.getColumn(13).getString();
+    c.allocGeneration = q.isColumnNull(11) ? "" : q.getColumn(11).getString();
     return c;
 }
 

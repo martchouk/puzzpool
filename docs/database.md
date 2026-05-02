@@ -19,9 +19,9 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ test_end_hex         │ TEXT NULL   │ Test chunk end   (nullable)        │
 │ alloc_strategy       │ TEXT NULL   │ virtual_random_chunks_v1 or legacy │
 │ alloc_seed           │ TEXT NULL   │ Hex seed for deterministic perm.   │
-│ alloc_cursor         │ INTEGER     │ Next permutation index to allocate │
+│ alloc_cursor_hex     │ TEXT NULL   │ Next permutation index, hex text   │
 │ virtual_chunk_size_keys│ TEXT NULL │ Chunk size in keys (decimal string)│
-│ virtual_chunk_count  │ INTEGER NULL│ Total virtual chunks in puzzle     │
+│ virtual_chunk_count_hex│ TEXT NULL │ Total virtual chunks, hex text     │
 │ bootstrap_stage      │ INTEGER     │ 0–3: bootstrap progress (see below)│
 └──────────────────────┴─────────────┴────────────────────────────────────┘
 
@@ -54,9 +54,8 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ found_address    │ TEXT NULL   │ Bitcoin address (populated on FOUND)   │
 │ is_test          │ INTEGER     │ 1 = test chunk, excluded from stats    │
 │ sector_id        │ INTEGER NULL│ FK → sectors.id (legacy allocator)     │
-│ alloc_block_id   │ INTEGER NULL│ (unused, legacy)                       │
-│ vchunk_start     │ INTEGER NULL│ First virtual chunk index in this job  │
-│ vchunk_end       │ INTEGER NULL│ Last virtual chunk index + 1 (exclusive)│
+│ vchunk_start_hex │ TEXT NULL   │ First virtual chunk index, hex text    │
+│ vchunk_end_hex   │ TEXT NULL   │ Last virtual chunk index + 1, hex text │
 │ alloc_generation │ TEXT NULL   │ Permutation mode when assigned:        │
 │                  │             │ "feistel", "affine", "legacy", "test"  │
 └──────────────────┴─────────────┴────────────────────────────────────────┘
@@ -129,11 +128,11 @@ Columns added by migration (in addition to the base schema created on first run)
 
 ```
 puzzles:  test_start_hex, test_end_hex, alloc_strategy, alloc_seed,
-          alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
+          alloc_cursor_hex, virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage
 
 workers:  version, min_chunk_keys, chunk_quantum_keys
 
-chunks:   is_test, prev_worker_name, alloc_block_id, vchunk_start, vchunk_end,
+chunks:   is_test, prev_worker_name, vchunk_start_hex, vchunk_end_hex,
           heartbeat_at, alloc_generation
 ```
 
@@ -161,16 +160,15 @@ sudo systemctl start puzzpool
 sqlite3 pool.db
 
 -- Active puzzle
-SELECT name, start_hex, end_hex, alloc_strategy, virtual_chunk_count FROM puzzles WHERE active = 1;
+SELECT name, start_hex, end_hex, alloc_strategy, virtual_chunk_count_hex FROM puzzles WHERE active = 1;
 
 -- Chunk counts by status
 SELECT status, COUNT(*) FROM chunks WHERE is_test = 0 GROUP BY status;
 
 -- Leaderboard
-SELECT worker_name, COUNT(*) chunks,
-       SUM(vchunk_end - vchunk_start) vchunks_done
+SELECT worker_name, COUNT(*) chunks
 FROM chunks WHERE status IN ('completed','FOUND') AND is_test = 0
-GROUP BY worker_name ORDER BY vchunks_done DESC;
+GROUP BY worker_name ORDER BY chunks DESC;
 
 -- All findings
 SELECT * FROM findings;

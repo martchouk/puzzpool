@@ -46,18 +46,19 @@ void PoolService::seedConfiguredKeyspaces() {
         SQLite::Statement ins(db_.raw(), R"SQL(
             INSERT INTO puzzles (
                 name, start_hex, end_hex, active,
-                alloc_strategy, alloc_seed, alloc_cursor,
-                virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
+                alloc_strategy, alloc_seed, alloc_cursor_hex,
+                virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage
             )
-            VALUES (?, ?, ?, 0, ?, ?, 0, ?, NULL, 0)
+            VALUES (?, ?, ?, 0, ?, ?, ?, ?, NULL, 0)
         )SQL");
         ins.bind(1, name);
         ins.bind(2, startNorm);
         ins.bind(3, endNorm);
         ins.bind(4, strategy);
         ins.bind(5, seed);
-        if (virtualChunkSize.has_value()) ins.bind(6, bigToDec(*virtualChunkSize));
-        else ins.bind(6);
+        ins.bind(6, intToHex(cpp_int(0), 64));
+        if (virtualChunkSize.has_value()) ins.bind(7, bigToDec(*virtualChunkSize));
+        else ins.bind(7);
         ins.exec();
         const int64_t puzzleId = db_.raw().getLastInsertRowid();
 
@@ -92,18 +93,19 @@ void PoolService::seedConfiguredKeyspaces() {
         SQLite::Statement ins(db_.raw(), R"SQL(
             INSERT INTO puzzles (
                 name, start_hex, end_hex, active,
-                alloc_strategy, alloc_seed, alloc_cursor,
-                virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
+                alloc_strategy, alloc_seed, alloc_cursor_hex,
+                virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage
             )
-            VALUES (?, ?, ?, 1, ?, ?, 0, ?, NULL, 0)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, NULL, 0)
         )SQL");
         ins.bind(1, name);
         ins.bind(2, startHex);
         ins.bind(3, endHex);
         ins.bind(4, strategy);
         ins.bind(5, seed);
-        if (virtualChunkSize.has_value()) ins.bind(6, bigToDec(*virtualChunkSize));
-        else ins.bind(6);
+        ins.bind(6, intToHex(cpp_int(0), 64));
+        if (virtualChunkSize.has_value()) ins.bind(7, bigToDec(*virtualChunkSize));
+        else ins.bind(7);
         ins.exec();
         const int64_t puzzleId = db_.raw().getLastInsertRowid();
 

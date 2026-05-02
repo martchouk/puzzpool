@@ -29,8 +29,8 @@ inline int64_t insertPuzzle(PoolDb& db,
     const std::string& strategy = "legacy_random_shards_v1") {
     db.exec("UPDATE puzzles SET active = 0");
     SQLite::Statement ins(db.raw(),
-        "INSERT INTO puzzles (name, start_hex, end_hex, active, alloc_strategy, alloc_seed, alloc_cursor)"
-        " VALUES ('test', ?, ?, 1, ?, 'seed', 0)");
+        "INSERT INTO puzzles (name, start_hex, end_hex, active, alloc_strategy, alloc_seed, alloc_cursor_hex)"
+        " VALUES ('test', ?, ?, 1, ?, 'seed', '0000000000000000000000000000000000000000000000000000000000000000')");
     ins.bind(1, start);
     ins.bind(2, end);
     ins.bind(3, strategy);

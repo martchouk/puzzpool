@@ -93,7 +93,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
 
     std::map<std::string, json> workerAssignedMap;
     SQLite::Statement aq(db_.raw(), R"SQL(
-        SELECT id, worker_name, vchunk_start, vchunk_end, assigned_at, heartbeat_at, start_hex, end_hex,
+        SELECT id, worker_name, assigned_at, heartbeat_at, start_hex, end_hex,
                vchunk_start_hex, vchunk_end_hex
         FROM chunks WHERE status = 'assigned' AND puzzle_id = ? AND is_test = 0
     )SQL");
@@ -102,31 +102,24 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         std::string worker = aq.getColumn(1).getString();
         json j;
         j["current_chunk"] = aq.getColumn(0).getInt64();
-        bool hasHex = !aq.isColumnNull(8) && !aq.isColumnNull(9);
-        bool hasInt = !aq.isColumnNull(2) && !aq.isColumnNull(3);
+        bool hasHex = !aq.isColumnNull(6) && !aq.isColumnNull(7);
         if (hasHex) {
-            cpp_int s = hexToInt(aq.getColumn(8).getString());
-            cpp_int e = hexToInt(aq.getColumn(9).getString());
+            cpp_int s = hexToInt(aq.getColumn(6).getString());
+            cpp_int e = hexToInt(aq.getColumn(7).getString());
             j["current_vchunk_run"]       = bigToDec(s) + ".." + bigToDec(e - 1);
             j["current_vchunk_run_start"] = bigToDec(s);
             j["current_vchunk_run_end"]   = bigToDec(e);
-        } else if (hasInt) {
-            auto s = aq.getColumn(2).getInt64();
-            auto e = aq.getColumn(3).getInt64();
-            j["current_vchunk_run"]       = std::to_string(s) + ".." + std::to_string(e - 1);
-            j["current_vchunk_run_start"] = std::to_string(s);
-            j["current_vchunk_run_end"]   = std::to_string(e);
         } else {
             j["current_vchunk_run"]       = nullptr;
             j["current_vchunk_run_start"] = nullptr;
             j["current_vchunk_run_end"]   = nullptr;
         }
-        j["assigned_at"]           = aq.isColumnNull(4) ? json(nullptr) : json(aq.getColumn(4).getString());
-        j["heartbeat_at"]          = aq.isColumnNull(5) ? json(nullptr) : json(aq.getColumn(5).getString());
-        j["current_job_start_hex"] = aq.isColumnNull(6) ? json(nullptr) : json(aq.getColumn(6).getString());
-        j["current_job_end_hex"]   = aq.isColumnNull(7) ? json(nullptr) : json(aq.getColumn(7).getString());
-        if (!aq.isColumnNull(6) && !aq.isColumnNull(7))
-            j["current_job_keys"] = bigToDec(hexToInt(aq.getColumn(7).getString()) - hexToInt(aq.getColumn(6).getString()));
+        j["assigned_at"]           = aq.isColumnNull(2) ? json(nullptr) : json(aq.getColumn(2).getString());
+        j["heartbeat_at"]          = aq.isColumnNull(3) ? json(nullptr) : json(aq.getColumn(3).getString());
+        j["current_job_start_hex"] = aq.isColumnNull(4) ? json(nullptr) : json(aq.getColumn(4).getString());
+        j["current_job_end_hex"]   = aq.isColumnNull(5) ? json(nullptr) : json(aq.getColumn(5).getString());
+        if (!aq.isColumnNull(4) && !aq.isColumnNull(5))
+            j["current_job_keys"] = bigToDec(hexToInt(aq.getColumn(5).getString()) - hexToInt(aq.getColumn(4).getString()));
         else
             j["current_job_keys"] = nullptr;
         workerAssignedMap[worker] = j;
@@ -231,7 +224,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     json finders = json::array();
     SQLite::Statement fq(db_.raw(), R"SQL(
         SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
-               c.id AS chunk_global, c.vchunk_start, c.vchunk_end
+               c.id AS chunk_global, c.vchunk_start_hex, c.vchunk_end_hex
         FROM findings f JOIN chunks c ON c.id = f.chunk_id
         WHERE c.puzzle_id = ? AND c.is_test = 0
         ORDER BY f.id ASC
@@ -244,8 +237,8 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
             {"found_address", fq.isColumnNull(2) ? json(nullptr) : json(fq.getColumn(2).getString())},
             {"created_at",   fq.isColumnNull(3) ? json(nullptr) : json(fq.getColumn(3).getString())},
             {"chunk_global", fq.getColumn(4).getInt64()},
-            {"vchunk_start", fq.isColumnNull(5) ? json(nullptr) : json(fq.getColumn(5).getInt64())},
-            {"vchunk_end",   fq.isColumnNull(6) ? json(nullptr) : json(fq.getColumn(6).getInt64())}
+            {"vchunk_start", fq.isColumnNull(5) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(5).getString())))},
+            {"vchunk_end",   fq.isColumnNull(6) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(6).getString())))}
         });
     }
     out["finders"] = finders;

@@ -143,9 +143,9 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "total_keys": "2361183241434822606848",
     "test_chunk": null,
     "alloc_strategy": "virtual_random_chunks_v1",
-    "alloc_cursor": 10452,
+    "alloc_cursor": "10452",
     "virtual_chunk_size_keys": "30000000",
-    "virtual_chunk_count": 78706,
+    "virtual_chunk_count": "78706",
     "bootstrap_stage": 3
   },
   "stage": "PROD",
@@ -180,7 +180,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
   "finders": [
-    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": 223735, "vchunk_end": 223745 }
+    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
   ],
   "chunks_vis": [
     { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
@@ -242,9 +242,9 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | Field | Type | Description |
 |-------|------|-------------|
 | `alloc_strategy` | string | Active allocator: `"virtual_random_chunks_v1"` or `"legacy_random_shards_v1"` |
-| `alloc_cursor` | number | Next position in the randomized permutation to allocate from |
+| `alloc_cursor` | string | Next position in the randomized permutation to allocate from |
 | `virtual_chunk_size_keys` | string\|null | Size of each virtual chunk in keys (decimal integer string); `virtual_random_chunks_v1` only |
-| `virtual_chunk_count` | number\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
+| `virtual_chunk_count` | string\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
 | `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),

@@ -35,8 +35,10 @@ struct VChunkFixture {
         SQLite::Statement ins(db.raw(), R"SQL(
             INSERT INTO puzzles
                 (name, start_hex, end_hex, active, alloc_strategy, alloc_seed,
-                 alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage)
-            VALUES ('vtest', ?, ?, 1, 'virtual_random_chunks_v1', ?, 0, '1000', NULL, 0)
+                 alloc_cursor_hex, virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage)
+            VALUES ('vtest', ?, ?, 1, 'virtual_random_chunks_v1', ?,
+                    '0000000000000000000000000000000000000000000000000000000000000000',
+                    '1000', NULL, 0)
         )SQL");
         ins.bind(1, START);
         ins.bind(2, END);
@@ -54,10 +56,10 @@ TEST_CASE("seedVirtualChunks: correct number of vchunk slots created", "[vchunk]
     VChunkFixture f;
     // 100 000 keys / 1 000 per chunk = 100 virtual chunks
     SQLite::Statement q(f.db.raw(),
-        "SELECT virtual_chunk_count FROM puzzles WHERE id = ?");
+        "SELECT virtual_chunk_count_hex FROM puzzles WHERE id = ?");
     q.bind(1, f.puzzleId);
     REQUIRE(q.executeStep());
-    CHECK(q.getColumn(0).getInt64() == 100);
+    CHECK(hexToInt(q.getColumn(0).getString()) == 100);
 }
 
 // ── assignWork with vchunk ────────────────────────────────────────────────────
@@ -199,8 +201,10 @@ struct LargeDomainFixture {
         SQLite::Statement ins(db.raw(), R"SQL(
             INSERT INTO puzzles
                 (name, start_hex, end_hex, active, alloc_strategy, alloc_seed,
-                 alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage)
-            VALUES ('allbtc', ?, ?, 1, 'virtual_random_chunks_v1', ?, 0, ?, NULL, 0)
+                 alloc_cursor_hex, virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage)
+            VALUES ('allbtc', ?, ?, 1, 'virtual_random_chunks_v1', ?,
+                    '0000000000000000000000000000000000000000000000000000000000000000',
+                    ?, NULL, 0)
         )SQL");
         ins.bind(1, START);
         ins.bind(2, END);
@@ -230,13 +234,23 @@ TEST_CASE("large domain: virtual_chunk_count_hex is stored and > INT64_MAX", "[v
     CHECK(count > cpp_int(std::numeric_limits<int64_t>::max()));
 }
 
-TEST_CASE("large domain: virtual_chunk_count INTEGER is NULL for huge count", "[vchunk][large]") {
+TEST_CASE("large domain: no legacy integer virtual chunk count column exists", "[vchunk][large]") {
     LargeDomainFixture f;
     SQLite::Statement q(f.db.raw(),
-        "SELECT virtual_chunk_count FROM puzzles WHERE id = ?");
-    q.bind(1, f.puzzleId);
+        "SELECT COUNT(*) FROM pragma_table_info('puzzles') WHERE name = 'virtual_chunk_count'");
     REQUIRE(q.executeStep());
-    CHECK(q.isColumnNull(0));
+    CHECK(q.getColumn(0).getInt() == 0);
+}
+
+TEST_CASE("large domain: no legacy integer virtual chunk span columns exist", "[vchunk][large]") {
+    LargeDomainFixture f;
+    SQLite::Statement q(f.db.raw(), R"SQL(
+        SELECT COUNT(*)
+        FROM pragma_table_info('chunks')
+        WHERE name IN ('vchunk_start', 'vchunk_end', 'alloc_block_id')
+    )SQL");
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 0);
 }
 
 TEST_CASE("large domain: worker gets chunk of correct target size", "[vchunk][large]") {
