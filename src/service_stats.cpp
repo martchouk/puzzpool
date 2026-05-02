@@ -264,12 +264,12 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     }
     out["chunks_vis"] = chunksVis;
 
-    int64_t virtualTotal     = 0;
+    json virtualTotalJ   = nullptr;
     int64_t virtualStarted   = 0;
     int64_t virtualCompleted = 0;
     std::string strategy = puzzle.allocStrategy.empty() ? cfg_.allocStrategyLegacy : puzzle.allocStrategy;
     if (strategy == cfg_.allocStrategyVChunks) {
-        virtualTotal = puzzle.virtualChunkCount;
+        virtualTotalJ = bigToDec(puzzle.virtualChunkCount);
         SQLite::Statement st(db_.raw(),
             "SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL");
         st.bind(1, puzzle.id); st.executeStep();
@@ -279,11 +279,11 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         ct.bind(1, puzzle.id); ct.executeStep();
         virtualCompleted = ct.getColumn(0).getInt64();
     } else {
-        virtualTotal     = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ?");
+        virtualTotalJ    = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ?");
         virtualStarted   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
         virtualCompleted = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
-    out["virtual_chunks"] = {{"total", virtualTotal}, {"started", virtualStarted}, {"completed", virtualCompleted}};
+    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started", virtualStarted}, {"completed", virtualCompleted}};
     out["shards"]         = out["virtual_chunks"];
 
     json generations = {{"legacy", 0}, {"affine", 0}, {"feistel", 0}};

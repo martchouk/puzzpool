@@ -30,9 +30,9 @@ struct PuzzleRow {
     std::string testEndHex;
     std::string allocStrategy;
     std::string allocSeed;
-    int64_t allocCursor = 0;
+    cpp_int allocCursor = 0;
     std::string virtualChunkSizeKeys;
-    int64_t virtualChunkCount = 0;
+    cpp_int virtualChunkCount = 0;
     int bootstrapStage = 0;
 };
 

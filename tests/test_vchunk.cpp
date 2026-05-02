@@ -159,7 +159,7 @@ TEST_CASE("vchunk submitDone: decimal-string underscan reclaims chunk", "[vchunk
     CHECK(result.errorCode == 400);
 }
 
-// ── reclaimTimedOutChunks returns count ──────────────────────────────────────
+// ── reclaimTimedOutChunks returns count ─────────────────────────────────────��
 
 TEST_CASE("reclaimTimedOutChunks: returns number of reclaimed chunks", "[vchunk][reclaim]") {
     VChunkFixture f;
@@ -173,4 +173,93 @@ TEST_CASE("reclaimTimedOutChunks: returns number of reclaimed chunks", "[vchunk]
 
     int count = f.ws.reclaimTimedOutChunks();
     CHECK(count == 2);
+}
+
+// ── large domain (> INT64_MAX chunk count) ────────────────────────────────────
+
+struct LargeDomainFixture {
+    Config          cfg;
+    PoolDb          db;
+    Allocator       alloc;
+    WorkService     ws;
+
+    // All BTC keyspace: 0x1 to secp256k1 order — range ≈ 2^256
+    static constexpr const char* START = "0000000000000000000000000000000000000000000000000000000000000001";
+    static constexpr const char* END   = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+    static constexpr const char* SEED  = "allbtcseed";
+
+    // chunk size 2^25 ≈ 33M keys — total virtual chunks ≈ 2^231, far beyond INT64_MAX
+    static constexpr const char* CHUNK_SIZE = "33554432";
+
+    int64_t puzzleId = 0;
+
+    LargeDomainFixture() : cfg(memConfig()), db(cfg), alloc(db), ws(db, alloc) {
+        cfg.defaultVirtualChunkSizeKeys = cpp_int(CHUNK_SIZE);
+        db.exec("UPDATE puzzles SET active = 0");
+        SQLite::Statement ins(db.raw(), R"SQL(
+            INSERT INTO puzzles
+                (name, start_hex, end_hex, active, alloc_strategy, alloc_seed,
+                 alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage)
+            VALUES ('allbtc', ?, ?, 1, 'virtual_random_chunks_v1', ?, 0, ?, NULL, 0)
+        )SQL");
+        ins.bind(1, START);
+        ins.bind(2, END);
+        ins.bind(3, SEED);
+        ins.bind(4, CHUNK_SIZE);
+        ins.exec();
+        puzzleId = db.raw().getLastInsertRowid();
+        alloc.seedVirtualChunks(puzzleId, START, END, SEED, cpp_int(CHUNK_SIZE));
+    }
+};
+
+TEST_CASE("large domain: seedVirtualChunks does not throw", "[vchunk][large]") {
+    REQUIRE_NOTHROW(LargeDomainFixture{});
+}
+
+TEST_CASE("large domain: virtual_chunk_count_hex is stored and > INT64_MAX", "[vchunk][large]") {
+    LargeDomainFixture f;
+    SQLite::Statement q(f.db.raw(),
+        "SELECT virtual_chunk_count_hex FROM puzzles WHERE id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    std::string hexStr = q.getColumn(0).getString();
+    REQUIRE_FALSE(hexStr.empty());
+    CHECK(hexStr.size() == 64);
+
+    cpp_int count = hexToInt(hexStr);
+    CHECK(count > cpp_int(std::numeric_limits<int64_t>::max()));
+}
+
+TEST_CASE("large domain: virtual_chunk_count INTEGER is NULL for huge count", "[vchunk][large]") {
+    LargeDomainFixture f;
+    SQLite::Statement q(f.db.raw(),
+        "SELECT virtual_chunk_count FROM puzzles WHERE id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.isColumnNull(0));
+}
+
+TEST_CASE("large domain: worker gets chunk of correct target size", "[vchunk][large]") {
+    LargeDomainFixture f;
+    // 100 MH/s, target 5 min → 100e6 * 300 = 30 billion keys → 30B / 33M ≈ 897 virtual chunks
+    // Each virtual chunk = 33M keys → package ≈ 30B keys, near target
+    auto r = f.ws.assignWork("alice", 100000000.0, "v1", {}, {});
+    REQUIRE(r.ok);
+    cpp_int rangeSize = hexToInt(r.endHex) - hexToInt(r.startHex);
+    // Package should be at least the configured chunk size (one virtual chunk minimum)
+    CHECK(rangeSize >= cpp_int(LargeDomainFixture::CHUNK_SIZE));
+    // Package should be much smaller than 2^100 (not the old inflated size)
+    CHECK(rangeSize < (cpp_int(1) << 100));
+}
+
+TEST_CASE("large domain: two workers get non-overlapping ranges", "[vchunk][large]") {
+    LargeDomainFixture f;
+    auto r1 = f.ws.assignWork("alice", 100000000.0, "v1", {}, {});
+    auto r2 = f.ws.assignWork("bob",   100000000.0, "v1", {}, {});
+    REQUIRE(r1.ok);
+    REQUIRE(r2.ok);
+
+    cpp_int s1 = hexToInt(r1.startHex), e1 = hexToInt(r1.endHex);
+    cpp_int s2 = hexToInt(r2.startHex), e2 = hexToInt(r2.endHex);
+    CHECK((e1 <= s2 || e2 <= s1));
 }

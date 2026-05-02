@@ -44,22 +44,22 @@ public:
 
 private:
     int64_t             readWorkerHashrate(const std::string& worker);
-    void                setAllocCursor(int64_t puzzleId, int64_t cursor);
+    void                setAllocCursor(int64_t puzzleId, const cpp_int& cursor);
     void                advanceBootstrapStage(int64_t puzzleId, int stage);
-    bool                rangeIsFree(int64_t puzzleId, int64_t start, int64_t endExclusive);
-    int64_t             normalizeRunStartForCandidate(int64_t candidateIndex, int64_t neededChunks, int64_t totalChunks);
+    bool                rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
+    cpp_int             normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks);
 
     std::optional<WorkAssignResult> assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
-                                                    int64_t totalChunks, int64_t neededChunks, int stage);
-    std::optional<int64_t> findBeginBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks);
-    std::optional<int64_t> findEndBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks);
-    std::optional<int64_t> findMidBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks);
+                                                    const cpp_int& totalChunks, const cpp_int& neededChunks, int stage);
+    std::optional<cpp_int> findBeginBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks);
+    std::optional<cpp_int> findEndBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks);
+    std::optional<cpp_int> findMidBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks);
 
     WorkAssignResult assignVirtualChunkRun(const std::string& worker, const PuzzleRow& puzzle,
-                                           int64_t runStart, int64_t runCount, const std::string& generation);
+                                           const cpp_int& runStart, const cpp_int& runCount, const std::string& generation);
 
     std::pair<std::string, std::string> virtualChunkRangeToHex(const PuzzleRow& puzzle,
-                                                                int64_t start, int64_t endExclusive);
+                                                                const cpp_int& start, const cpp_int& endExclusive);
 
     PoolDb&       db_;
     const Config& cfg_;

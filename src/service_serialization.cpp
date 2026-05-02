@@ -24,9 +24,9 @@ json PoolService::puzzleJson(const PuzzleRow& p) {
     else
         j["test_chunk"] = nullptr;
     j["alloc_strategy"]          = p.allocStrategy.empty() ? cfg_.allocStrategyLegacy : p.allocStrategy;
-    j["alloc_cursor"]            = p.allocCursor;
+    j["alloc_cursor"]            = bigToDec(p.allocCursor);
     j["virtual_chunk_size_keys"] = p.virtualChunkSizeKeys.empty() ? json(nullptr) : json(p.virtualChunkSizeKeys);
-    j["virtual_chunk_count"]     = p.virtualChunkCount > 0 ? json(p.virtualChunkCount) : json(nullptr);
+    j["virtual_chunk_count"]     = p.virtualChunkCount > 0 ? json(bigToDec(p.virtualChunkCount)) : json(nullptr);
     j["bootstrap_stage"]         = p.bootstrapStage;
     return j;
 }

@@ -1,4 +1,5 @@
 #include <puzzpool/db.hpp>
+#include <puzzpool/hex_bigint.hpp>
 
 #include <cstdint>
 #include <string>
@@ -84,8 +85,10 @@ void PoolDb::migrate() {
     addColumnIfMissing("puzzles", "alloc_strategy TEXT");
     addColumnIfMissing("puzzles", "alloc_seed TEXT");
     addColumnIfMissing("puzzles", "alloc_cursor INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing("puzzles", "alloc_cursor_hex TEXT");
     addColumnIfMissing("puzzles", "virtual_chunk_size_keys TEXT");
     addColumnIfMissing("puzzles", "virtual_chunk_count INTEGER");
+    addColumnIfMissing("puzzles", "virtual_chunk_count_hex TEXT");
     addColumnIfMissing("puzzles", "bootstrap_stage INTEGER NOT NULL DEFAULT 0");
 
     addColumnIfMissing("workers", "version TEXT");
@@ -97,10 +100,27 @@ void PoolDb::migrate() {
     addColumnIfMissing("chunks", "alloc_block_id INTEGER");
     addColumnIfMissing("chunks", "vchunk_start INTEGER");
     addColumnIfMissing("chunks", "vchunk_end INTEGER");
+    addColumnIfMissing("chunks", "vchunk_start_hex TEXT");
+    addColumnIfMissing("chunks", "vchunk_end_hex TEXT");
     addColumnIfMissing("chunks", "heartbeat_at DATETIME");
     addColumnIfMissing("chunks", "alloc_generation TEXT");
 
     exec("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_span ON chunks (puzzle_id, vchunk_start, vchunk_end, status)");
+    exec("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_hex_span ON chunks (puzzle_id, vchunk_start_hex, vchunk_end_hex, status)");
+
+    exec(R"SQL(
+        UPDATE chunks SET
+            vchunk_start_hex = printf('%064x', vchunk_start),
+            vchunk_end_hex   = printf('%064x', vchunk_end)
+        WHERE vchunk_start IS NOT NULL AND vchunk_start_hex IS NULL
+    )SQL");
+
+    exec(R"SQL(
+        UPDATE puzzles SET
+            alloc_cursor_hex        = printf('%064x', alloc_cursor),
+            virtual_chunk_count_hex = printf('%064x', virtual_chunk_count)
+        WHERE virtual_chunk_count IS NOT NULL AND virtual_chunk_count_hex IS NULL
+    )SQL");
     exec("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL");
     exec("UPDATE puzzles SET alloc_strategy = 'legacy_random_shards_v1' WHERE alloc_strategy IS NULL");
     exec(R"SQL(
@@ -199,9 +219,13 @@ PuzzleRow PoolDb::readPuzzle(SQLite::Statement& q) {
     p.testEndHex          = getStr("test_end_hex");
     p.allocStrategy       = getStr("alloc_strategy");
     p.allocSeed           = getStr("alloc_seed");
-    p.allocCursor         = getI64("alloc_cursor");
+    std::string cursorHex = getStr("alloc_cursor_hex");
+    p.allocCursor = cursorHex.empty() ? cpp_int(getI64("alloc_cursor")) : hexToInt(cursorHex);
+
     p.virtualChunkSizeKeys = getStr("virtual_chunk_size_keys");
-    p.virtualChunkCount   = getI64("virtual_chunk_count");
+
+    std::string countHex = getStr("virtual_chunk_count_hex");
+    p.virtualChunkCount = countHex.empty() ? cpp_int(getI64("virtual_chunk_count")) : hexToInt(countHex);
     p.bootstrapStage      = getI("bootstrap_stage");
     return p;
 }

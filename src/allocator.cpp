@@ -29,12 +29,12 @@ void Allocator::ensureAllocatorForPuzzle(int64_t puzzleId) {
             try {
                 cpp_int stored(p->virtualChunkSizeKeys);
                 cpp_int actual = minBig(stored, rn.range);
-                if (ceilDiv(rn.range, actual) <= std::numeric_limits<int64_t>::max()) size = actual;
+                if (actual > 0) size = actual;
             } catch (...) {}
         }
 
         cpp_int expectedCount = ceilDiv(rn.range, size);
-        if (p->virtualChunkCount <= 0 || cpp_int(p->virtualChunkCount) != expectedCount) {
+        if (p->virtualChunkCount <= 0 || p->virtualChunkCount != expectedCount) {
             seedVirtualChunks(puzzleId, p->startHex, p->endHex,
                               defaultAllocSeedForPuzzle(*p, cfg_.allocStrategyVChunks), size);
         } else if (cfg_.autoReseedEmptyVChunkPuzzles && issued == 0 && size != desiredDefault) {
@@ -51,10 +51,6 @@ void Allocator::ensureAllocatorForPuzzle(int64_t puzzleId) {
 cpp_int Allocator::chooseDefaultVirtualChunkSize(const cpp_int& range) const {
     cpp_int size = cfg_.defaultVirtualChunkSizeKeys > 0 ? cfg_.defaultVirtualChunkSizeKeys : cpp_int(1);
     if (size > range) size = range;
-    while (ceilDiv(range, size) > std::numeric_limits<int64_t>::max()) {
-        size <<= 1;
-        if (size > range) { size = range; break; }
-    }
     return size;
 }
 
@@ -92,9 +88,6 @@ void Allocator::seedVirtualChunks(int64_t puzzleId, const std::string& startHex,
     auto rn = normalizedRange(startHex, endHex);
     cpp_int chunkSize = minBig(virtualChunkSizeKeys > 0 ? virtualChunkSizeKeys : chooseDefaultVirtualChunkSize(rn.range), rn.range);
     cpp_int chunkCountBig = ceilDiv(rn.range, chunkSize);
-    if (chunkCountBig > std::numeric_limits<int64_t>::max()) {
-        throw std::runtime_error("virtual chunk count exceeds sqlite integer capacity in prod-compatible schema");
-    }
 
     SQLite::Transaction tx(db_.raw());
     SQLite::Statement q(db_.raw(), R"SQL(
@@ -102,16 +95,23 @@ void Allocator::seedVirtualChunks(int64_t puzzleId, const std::string& startHex,
         SET alloc_strategy = ?,
             alloc_seed = ?,
             alloc_cursor = 0,
+            alloc_cursor_hex = ?,
             virtual_chunk_size_keys = ?,
             virtual_chunk_count = ?,
+            virtual_chunk_count_hex = ?,
             bootstrap_stage = 0
         WHERE id = ?
     )SQL");
     q.bind(1, cfg_.allocStrategyVChunks);
     q.bind(2, allocSeed);
-    q.bind(3, bigToDec(chunkSize));
-    q.bind(4, static_cast<int64_t>(chunkCountBig));
-    q.bind(5, puzzleId);
+    q.bind(3, intToHex(cpp_int(0), 64));
+    q.bind(4, bigToDec(chunkSize));
+    if (chunkCountBig <= cpp_int(std::numeric_limits<int64_t>::max()))
+        q.bind(5, static_cast<int64_t>(chunkCountBig));
+    else
+        q.bind(5);
+    q.bind(6, intToHex(chunkCountBig, 64));
+    q.bind(7, puzzleId);
     q.exec();
     tx.commit();
 }
@@ -214,16 +214,15 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
                                   const PuzzleRow& puzzle) {
     if (puzzle.virtualChunkSizeKeys.empty() || puzzle.virtualChunkCount <= 0) return std::nullopt;
 
-    cpp_int totalChunksBig = puzzle.virtualChunkCount;
-    int64_t totalChunks    = puzzle.virtualChunkCount;
-    cpp_int hashrateBig    = normalizeHashrate(hashrate.value_or(static_cast<double>(readWorkerHashrate(worker))));
+    const cpp_int totalChunks = puzzle.virtualChunkCount;
+    cpp_int hashrateBig = normalizeHashrate(hashrate.value_or(static_cast<double>(readWorkerHashrate(worker))));
     cpp_int minKeys  = minChunkKeys    ? parsePositiveBigInt(*minChunkKeys, 0)    : cpp_int(0);
     cpp_int quantum  = chunkQuantumKeys ? parsePositiveBigInt(*chunkQuantumKeys, 1) : cpp_int(1);
     cpp_int requestedKeys = computeWorkerRequestedKeys(hashrateBig, minKeys, quantum);
     cpp_int vchunkSize(puzzle.virtualChunkSizeKeys);
-    int64_t neededChunks = static_cast<int64_t>(ceilDiv(requestedKeys, vchunkSize));
+    cpp_int neededChunks = ceilDiv(requestedKeys, vchunkSize);
     if (neededChunks < 1) neededChunks = 1;
-    if (cpp_int(neededChunks) > totalChunksBig) neededChunks = totalChunks;
+    if (neededChunks > totalChunks) neededChunks = totalChunks;
 
     int freshChunkCount = static_cast<int>(db_.chunkCountNonTest(puzzle.id));
     int stage = puzzle.bootstrapStage;
@@ -241,22 +240,22 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
     const std::string permKey = puzzle.allocSeed.empty()
         ? defaultAllocSeedForPuzzle(puzzle, cfg_.allocStrategyVChunks)
         : puzzle.allocSeed;
-    cpp_int rawCursorBig = puzzle.allocCursor;
-    int64_t probeLimit   = std::min<int64_t>(totalChunks, static_cast<int64_t>(cfg_.maxAllocProbes));
+    const cpp_int rawCursorBig = puzzle.allocCursor;
+    int64_t probeLimit = static_cast<int64_t>(std::min(totalChunks, cpp_int(cfg_.maxAllocProbes)));
 
     std::optional<AffineParams> affine;
-    if (cfg_.permutationMode == "affine") affine = deriveAffinePermutationParams(permKey, totalChunksBig);
+    if (cfg_.permutationMode == "affine") affine = deriveAffinePermutationParams(permKey, totalChunks);
 
-    std::set<int64_t> triedStarts;
+    std::set<cpp_int> triedStarts;
     for (int64_t offset = 0; offset < probeLimit; ++offset) {
-        cpp_int orderIndex    = (rawCursorBig + offset) % totalChunksBig;
+        cpp_int orderIndex    = (rawCursorBig + offset) % totalChunks;
         cpp_int candidateIndex = (cfg_.permutationMode == "affine")
-            ? permuteIndexAffine(orderIndex, totalChunksBig, affine->a, affine->b)
-            : permuteIndexFeistel(orderIndex, totalChunksBig, permKey);
-        int64_t runStart = normalizeRunStartForCandidate(static_cast<int64_t>(candidateIndex), neededChunks, totalChunks);
+            ? permuteIndexAffine(orderIndex, totalChunks, affine->a, affine->b)
+            : permuteIndexFeistel(orderIndex, totalChunks, permKey);
+        cpp_int runStart = normalizeRunStartForCandidate(candidateIndex, neededChunks, totalChunks);
         if (!triedStarts.insert(runStart).second) continue;
         if (rangeIsFree(puzzle.id, runStart, runStart + neededChunks)) {
-            int64_t nextCursor = static_cast<int64_t>((orderIndex + 1) % totalChunksBig);
+            cpp_int nextCursor = (orderIndex + 1) % totalChunks;
             setAllocCursor(puzzle.id, nextCursor);
             auto res = assignVirtualChunkRun(worker, puzzle, runStart, neededChunks, cfg_.permutationMode);
             if (stage < 3) advanceBootstrapStage(puzzle.id, 3);
@@ -265,17 +264,17 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
         }
     }
 
-    for (int64_t fallback = neededChunks - 1; fallback >= 1; --fallback) {
+    for (cpp_int fallback = neededChunks - 1; fallback >= 1; --fallback) {
         triedStarts.clear();
         for (int64_t offset = 0; offset < probeLimit; ++offset) {
-            cpp_int orderIndex    = (rawCursorBig + offset) % totalChunksBig;
+            cpp_int orderIndex    = (rawCursorBig + offset) % totalChunks;
             cpp_int candidateIndex = (cfg_.permutationMode == "affine")
-                ? permuteIndexAffine(orderIndex, totalChunksBig, affine->a, affine->b)
-                : permuteIndexFeistel(orderIndex, totalChunksBig, permKey);
-            int64_t runStart = normalizeRunStartForCandidate(static_cast<int64_t>(candidateIndex), fallback, totalChunks);
+                ? permuteIndexAffine(orderIndex, totalChunks, affine->a, affine->b)
+                : permuteIndexFeistel(orderIndex, totalChunks, permKey);
+            cpp_int runStart = normalizeRunStartForCandidate(candidateIndex, fallback, totalChunks);
             if (!triedStarts.insert(runStart).second) continue;
             if (rangeIsFree(puzzle.id, runStart, runStart + fallback)) {
-                int64_t nextCursor = static_cast<int64_t>((orderIndex + 1) % totalChunksBig);
+                cpp_int nextCursor = (orderIndex + 1) % totalChunks;
                 setAllocCursor(puzzle.id, nextCursor);
                 auto res = assignVirtualChunkRun(worker, puzzle, runStart, fallback, cfg_.permutationMode);
                 if (stage < 3) advanceBootstrapStage(puzzle.id, 3);
@@ -312,10 +311,18 @@ int64_t Allocator::readWorkerHashrate(const std::string& worker) {
     return static_cast<int64_t>(std::max(1.0, q.getColumn(0).getDouble()));
 }
 
-void Allocator::setAllocCursor(int64_t puzzleId, int64_t cursor) {
-    SQLite::Statement q(db_.raw(), "UPDATE puzzles SET alloc_cursor = ? WHERE id = ?");
-    q.bind(1, cursor);
-    q.bind(2, puzzleId);
+void Allocator::setAllocCursor(int64_t puzzleId, const cpp_int& cursor) {
+    SQLite::Statement q(db_.raw(), R"SQL(
+        UPDATE puzzles SET alloc_cursor_hex = ?,
+            alloc_cursor = ?
+        WHERE id = ?
+    )SQL");
+    q.bind(1, intToHex(cursor, 64));
+    if (cursor <= cpp_int(std::numeric_limits<int64_t>::max()))
+        q.bind(2, static_cast<int64_t>(cursor));
+    else
+        q.bind(2);
+    q.bind(3, puzzleId);
     q.exec();
 }
 
@@ -326,29 +333,31 @@ void Allocator::advanceBootstrapStage(int64_t puzzleId, int stage) {
     q.exec();
 }
 
-bool Allocator::rangeIsFree(int64_t puzzleId, int64_t start, int64_t endExclusive) {
+bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
     if (start < 0 || endExclusive <= start) return false;
+    std::string startHexPad = intToHex(start, 64);
+    std::string endHexPad   = intToHex(endExclusive, 64);
     SQLite::Statement q(db_.raw(), R"SQL(
         SELECT 1
         FROM chunks
         WHERE puzzle_id = ?
           AND is_test = 0
           AND status IN ('assigned', 'reclaimed', 'completed', 'FOUND')
-          AND vchunk_start IS NOT NULL
-          AND vchunk_end IS NOT NULL
-          AND vchunk_start < ?
-          AND vchunk_end > ?
+          AND vchunk_start_hex IS NOT NULL
+          AND vchunk_end_hex IS NOT NULL
+          AND vchunk_start_hex < ?
+          AND vchunk_end_hex > ?
         LIMIT 1
     )SQL");
     q.bind(1, puzzleId);
-    q.bind(2, endExclusive);
-    q.bind(3, start);
+    q.bind(2, endHexPad);
+    q.bind(3, startHexPad);
     return !q.executeStep();
 }
 
-int64_t Allocator::normalizeRunStartForCandidate(int64_t candidateIndex, int64_t neededChunks, int64_t totalChunks) {
-    if (neededChunks >= totalChunks) return 0;
-    int64_t start = candidateIndex;
+cpp_int Allocator::normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks) {
+    if (neededChunks >= totalChunks) return cpp_int(0);
+    cpp_int start = candidateIndex;
     if (start + neededChunks > totalChunks) start = totalChunks - neededChunks;
     if (start < 0) start = 0;
     return start;
@@ -356,8 +365,8 @@ int64_t Allocator::normalizeRunStartForCandidate(int64_t candidateIndex, int64_t
 
 std::optional<Allocator::WorkAssignResult>
 Allocator::assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
-                            int64_t totalChunks, int64_t neededChunks, int stage) {
-    std::optional<int64_t> runStart;
+                            const cpp_int& totalChunks, const cpp_int& neededChunks, int stage) {
+    std::optional<cpp_int> runStart;
     if      (stage == 0) runStart = findMidBootstrapRun(puzzle.id, totalChunks, neededChunks);
     else if (stage == 1) runStart = findBeginBootstrapRun(puzzle.id, totalChunks, neededChunks);
     else if (stage == 2) runStart = findEndBootstrapRun(puzzle.id, totalChunks, neededChunks);
@@ -368,7 +377,7 @@ Allocator::assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
         return res;
     }
 
-    for (int64_t fallback = neededChunks - 1; fallback >= 1; --fallback) {
+    for (cpp_int fallback = neededChunks - 1; fallback >= 1; --fallback) {
         if      (stage == 0) runStart = findMidBootstrapRun(puzzle.id, totalChunks, fallback);
         else if (stage == 1) runStart = findBeginBootstrapRun(puzzle.id, totalChunks, fallback);
         else if (stage == 2) runStart = findEndBootstrapRun(puzzle.id, totalChunks, fallback);
@@ -381,44 +390,46 @@ Allocator::assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
     return std::nullopt;
 }
 
-std::optional<int64_t> Allocator::findBeginBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks) {
-    int64_t maxStart = totalChunks - neededChunks;
-    if (maxStart < 0) return std::nullopt;
-    int64_t probes = std::min<int64_t>(maxStart + 1, static_cast<int64_t>(cfg_.maxAllocProbes));
+std::optional<cpp_int> Allocator::findBeginBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks) {
+    if (neededChunks > totalChunks) return std::nullopt;
+    cpp_int maxStart = totalChunks - neededChunks;
+    int64_t probes = static_cast<int64_t>(minBig(cpp_int(maxStart + 1), cpp_int(cfg_.maxAllocProbes)));
     for (int64_t i = 0; i < probes; ++i) {
-        if (rangeIsFree(puzzleId, i, i + neededChunks)) return i;
-    }
-    return std::nullopt;
-}
-
-std::optional<int64_t> Allocator::findEndBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks) {
-    int64_t maxStart = totalChunks - neededChunks;
-    if (maxStart < 0) return std::nullopt;
-    int64_t probes = std::min<int64_t>(maxStart + 1, static_cast<int64_t>(cfg_.maxAllocProbes));
-    for (int64_t i = 0; i < probes; ++i) {
-        int64_t start = maxStart - i;
+        cpp_int start = cpp_int(i);
         if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
     }
     return std::nullopt;
 }
 
-std::optional<int64_t> Allocator::findMidBootstrapRun(int64_t puzzleId, int64_t totalChunks, int64_t neededChunks) {
+std::optional<cpp_int> Allocator::findEndBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks) {
+    if (neededChunks > totalChunks) return std::nullopt;
+    cpp_int maxStart = totalChunks - neededChunks;
+    int64_t probes = static_cast<int64_t>(minBig(cpp_int(maxStart + 1), cpp_int(cfg_.maxAllocProbes)));
+    for (int64_t i = 0; i < probes; ++i) {
+        cpp_int start = maxStart - i;
+        if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+    }
+    return std::nullopt;
+}
+
+std::optional<cpp_int> Allocator::findMidBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks) {
     if (totalChunks <= 0) return std::nullopt;
-    int64_t anchor   = totalChunks / 2;
-    int64_t maxStart = totalChunks - neededChunks;
-    if (maxStart < 0) return std::nullopt;
-    std::set<int64_t> tried;
-    int64_t probes = std::min<int64_t>(totalChunks, static_cast<int64_t>(cfg_.maxAllocProbes));
+    if (neededChunks > totalChunks) return std::nullopt;
+    cpp_int anchor   = totalChunks / 2;
+    cpp_int maxStart = totalChunks - neededChunks;
+    std::set<cpp_int> tried;
+    int64_t probes = static_cast<int64_t>(minBig(totalChunks, cpp_int(cfg_.maxAllocProbes)));
     for (int64_t dist = 0; dist < probes; ++dist) {
-        int64_t left = anchor - dist;
-        if (left >= 0) {
-            int64_t start = normalizeRunStartForCandidate(left, neededChunks, totalChunks);
+        cpp_int cdist(dist);
+        if (anchor >= cdist) {
+            cpp_int left  = anchor - cdist;
+            cpp_int start = normalizeRunStartForCandidate(left, neededChunks, totalChunks);
             if (tried.insert(start).second && rangeIsFree(puzzleId, start, start + neededChunks)) return start;
         }
         if (dist == 0) continue;
-        int64_t right = anchor + dist;
+        cpp_int right = anchor + cdist;
         if (right < totalChunks) {
-            int64_t start = normalizeRunStartForCandidate(right, neededChunks, totalChunks);
+            cpp_int start = normalizeRunStartForCandidate(right, neededChunks, totalChunks);
             if (tried.insert(start).second && rangeIsFree(puzzleId, start, start + neededChunks)) return start;
         }
     }
@@ -427,8 +438,8 @@ std::optional<int64_t> Allocator::findMidBootstrapRun(int64_t puzzleId, int64_t 
 
 Allocator::WorkAssignResult
 Allocator::assignVirtualChunkRun(const std::string& worker, const PuzzleRow& puzzle,
-                                  int64_t runStart, int64_t runCount, const std::string& generation) {
-    int64_t runEnd = runStart + runCount;
+                                  const cpp_int& runStart, const cpp_int& runCount, const std::string& generation) {
+    cpp_int runEnd = runStart + runCount;
     auto span = virtualChunkRangeToHex(puzzle, runStart, runEnd);
 
     SQLite::Statement ins(db_.raw(), R"SQL(
@@ -437,27 +448,36 @@ Allocator::assignVirtualChunkRun(const std::string& worker, const PuzzleRow& puz
             worker_name, assigned_at, heartbeat_at, is_test,
             sector_id, alloc_block_id,
             vchunk_start, vchunk_end,
+            vchunk_start_hex, vchunk_end_hex,
             alloc_generation
-        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'assigned', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL, NULL, ?, ?, ?, ?, ?)
     )SQL");
     ins.bind(1, puzzle.id);
     ins.bind(2, span.first);
     ins.bind(3, span.second);
     ins.bind(4, worker);
-    ins.bind(5, runStart);
-    ins.bind(6, runEnd);
-    ins.bind(7, generation);
+    if (runStart <= cpp_int(std::numeric_limits<int64_t>::max()))
+        ins.bind(5, static_cast<int64_t>(runStart));
+    else
+        ins.bind(5);
+    if (runEnd <= cpp_int(std::numeric_limits<int64_t>::max()))
+        ins.bind(6, static_cast<int64_t>(runEnd));
+    else
+        ins.bind(6);
+    ins.bind(7, intToHex(runStart, 64));
+    ins.bind(8, intToHex(runEnd, 64));
+    ins.bind(9, generation);
     ins.exec();
     return WorkAssignResult{db_.raw().getLastInsertRowid(), span.first, span.second};
 }
 
 std::pair<std::string, std::string>
-Allocator::virtualChunkRangeToHex(const PuzzleRow& puzzle, int64_t start, int64_t endExclusive) {
+Allocator::virtualChunkRangeToHex(const PuzzleRow& puzzle, const cpp_int& start, const cpp_int& endExclusive) {
     cpp_int pStart = hexToInt(puzzle.startHex);
     cpp_int pEnd   = hexToInt(puzzle.endHex);
     cpp_int size(puzzle.virtualChunkSizeKeys);
-    cpp_int absStart = pStart + cpp_int(start) * size;
-    cpp_int absEnd   = minBig(pStart + cpp_int(endExclusive) * size, pEnd);
+    cpp_int absStart = pStart + start * size;
+    cpp_int absEnd   = minBig(pStart + endExclusive * size, pEnd);
     return {intToHex(absStart), intToHex(absEnd)};
 }
 
