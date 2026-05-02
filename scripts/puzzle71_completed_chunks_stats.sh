@@ -3,6 +3,8 @@ set -euo pipefail
 
 OLD_DB="${OLD_DB:-/home/jan/git/puzzpool/pool.db}"
 NEW_DB="${NEW_DB:-/home/jan/git/puzzpool.test/pool.db}"
+PUZZLE_START_HEX="${PUZZLE_START_HEX:-0000000000000000000000000000000000000000000000400000000000000000}"
+PUZZLE_END_HEX="${PUZZLE_END_HEX:-00000000000000000000000000000000000000000000007fffffffffffffffff}"
 
 if [[ ! -f "$OLD_DB" ]]; then
     printf 'old db not found: %s\n' "$OLD_DB" >&2
@@ -25,7 +27,8 @@ CREATE TEMP TABLE source_puzzle AS
 SELECT id AS old_puzzle_id, name, start_hex, end_hex, active, alloc_strategy,
        alloc_seed, alloc_cursor, virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
 FROM olddb.puzzles
-WHERE name IN ('Puzzle #71', 'Puzzle 71')
+WHERE start_hex = '$PUZZLE_START_HEX'
+  AND end_hex = '$PUZZLE_END_HEX'
 ORDER BY id ASC
 LIMIT 1;
 
@@ -40,7 +43,8 @@ LIMIT 1;
 
 SELECT 'source_puzzle_matches' AS metric, COUNT(*) AS value
 FROM olddb.puzzles
-WHERE name IN ('Puzzle #71', 'Puzzle 71');
+WHERE start_hex = '$PUZZLE_START_HEX'
+  AND end_hex = '$PUZZLE_END_HEX';
 
 SELECT 'destination_puzzle_matches' AS metric, COUNT(*) AS value
 FROM puzzles
