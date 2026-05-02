@@ -1,18 +1,21 @@
+# Private Codex config — never publish
+AGENTS.md
+
 # Private Claude config — never publish
 CLAUDE.md
 skills.md
 .claude
 
 # Runtime / generated
-node_modules/
+frontend/node_modules/
 pool.db
 *.db
 .env
 BINGO_FOUND_KEYS.txt
 
+# C++ build output
+build/
+.cache/
+
 # macOS
 .DS_Store
-
-changes.patch
-server.js.bak
-server.js.orig

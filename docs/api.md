@@ -58,6 +58,7 @@ Report completion of a chunk, or a key discovery.
 **Request — chunk completed**
 ```json
 { "name": "worker-hostname", "job_id": 42, "status": "done", "keys_scanned": 500000000 }
+{ "name": "worker-hostname", "job_id": 42, "status": "done", "keys_scanned": "99999999999999999999" }
 ```
 
 **Request — key found**
@@ -77,7 +78,7 @@ Report completion of a chunk, or a key discovery.
 | `name` | string | yes | Must match the worker name used in `/work` |
 | `job_id` | number | yes | Job ID returned by `/work` |
 | `status` | string | yes | `"done"` or `"FOUND"` |
-| `keys_scanned` | number | yes (when done) | Keys actually scanned (only used with `status: "done"`). Must be a non-negative integer. If less than the chunk size, the chunk is reclaimed instead of completed. Values equal to or greater than the chunk size are accepted (clients may overshoot due to fixed batch granularity). |
+| `keys_scanned` | number or string | yes (when done) | Keys actually scanned (only used with `status: "done"`). Accepts a JSON integer or a decimal string (e.g. `"99999999999999999999"`) for chunks larger than `int64_t`. Must be non-negative. If less than the chunk size, the chunk is reclaimed instead of completed. Values equal to or greater than the chunk size are accepted (clients may overshoot due to fixed batch granularity). |
 | `findings` | array | when FOUND | Non-empty array of found key objects. Each object must include `found_key` (hex string, `0x` prefix optional) and may optionally include `found_address` (Bitcoin address or 40-char hash160 hex). All keys found in the chunk go here. |
 
 **Response 200**
@@ -142,9 +143,9 @@ Dashboard data — polled every 3 seconds by `index.html`.
     "total_keys": "2361183241434822606848",
     "test_chunk": null,
     "alloc_strategy": "virtual_random_chunks_v1",
-    "alloc_cursor": 10452,
+    "alloc_cursor": "10452",
     "virtual_chunk_size_keys": "30000000",
-    "virtual_chunk_count": 78706,
+    "virtual_chunk_count": "78706",
     "bootstrap_stage": 3
   },
   "stage": "PROD",
@@ -179,7 +180,7 @@ Dashboard data — polled every 3 seconds by `index.html`.
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
   "finders": [
-    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": 223735, "vchunk_end": 223745 }
+    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
   ],
   "chunks_vis": [
     { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
@@ -205,10 +206,10 @@ Dashboard data — polled every 3 seconds by `index.html`.
 | `current_job_start_hex` | string\|null | `start_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_end_hex` | string\|null | `end_hex` of the currently assigned chunk; null if no chunk |
 | `current_job_keys` | string\|null | Size of the current job in keys (decimal integer string); null if no chunk |
-| `current_job_elapsed_seconds` | number\|null | Seconds elapsed since the current chunk was assigned; null if no chunk |
-| `current_job_progress_percent` | number\|null | Estimated scan progress 0–100 based on `hashrate × elapsed / job_keys`; null if no chunk or no hashrate |
 | `min_chunk_keys` | string\|null | Worker's reported minimum job size (decimal integer string); null if not reported |
 | `chunk_quantum_keys` | string\|null | Worker's reported job size quantum (decimal integer string); null if not reported |
+| `fresh` | boolean | `true` if this worker was reactivated (transitioned from inactive to active) in the current stats response |
+| `assigned_here` | boolean | `true` if the worker's current chunk is assigned to the puzzle currently being viewed |
 
 **Top-level stats fields**
 
@@ -241,9 +242,9 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | Field | Type | Description |
 |-------|------|-------------|
 | `alloc_strategy` | string | Active allocator: `"virtual_random_chunks_v1"` or `"legacy_random_shards_v1"` |
-| `alloc_cursor` | number | Next position in the randomized permutation to allocate from |
+| `alloc_cursor` | string | Next position in the randomized permutation to allocate from |
 | `virtual_chunk_size_keys` | string\|null | Size of each virtual chunk in keys (decimal integer string); `virtual_random_chunks_v1` only |
-| `virtual_chunk_count` | number\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
+| `virtual_chunk_count` | string\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
 | `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
@@ -324,6 +325,22 @@ List all puzzles (active and historical).
 ```json
 { "puzzles": [ { "id": 1, "name": "Puzzle #71", "active": 1, ... } ] }
 ```
+
+---
+
+### POST /api/v1/admin/reclaim
+
+Force-reclaim all timed-out chunks immediately, without waiting for the background
+60-second reclaimer thread. Useful after a sudden loss of workers.
+
+**Request** — empty body or `{}`
+
+**Response 200**
+```json
+{ "ok": true, "reclaimed": 3 }
+```
+
+`reclaimed` is the number of chunks whose status was changed to `'reclaimed'`.
 
 ---
 

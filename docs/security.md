@@ -86,9 +86,26 @@ SQL injection is not possible.
 
 ## XSS Prevention
 
-The frontend (`public/index.html`) uses only `element.textContent` for all dynamic
-content from the API. No `innerHTML`, `eval`, or `document.write` calls exist.
-Worker names, hash values, and addresses are displayed safely.
+The dashboard uses two rendering paths:
+
+**`textContent`** — used for simple scalar updates (stat card values, puzzle name, frontier range). Safe by construction.
+
+**`innerHTML` with `esc()`** — used for table rows and tooltips where HTML structure (e.g. coloured spans, progress bars) is needed. All untrusted fields from the API are passed through `esc()` in `frontend/src/format.ts` before interpolation. `esc()` escapes `& < > " '`.
+
+Untrusted fields (worker-supplied or stored from unauthenticated input):
+- Worker `name`, `version`
+- Score and finder `worker_name`
+- Finder `found_address`
+- Chunk `w` (worker name in canvas tooltips)
+- Puzzle `name` (admin-set but stored in DB)
+
+Trusted fields interpolated without escaping (server-formatted or enum-bounded):
+- Formatted numbers from `formatIntegerDots`, `formatBigInt`, etc.
+- CSS variable strings (`var(--accent-cyan)`)
+- `ChunkStatus` enum values mapped through `CHUNK_COLORS`
+- `alloc_strategy` (mapped to known display names; unknown values escaped via `allocatorFriendlyName`)
+
+No `eval` or `document.write` calls exist.
 
 ---
 
@@ -101,7 +118,7 @@ Cross-origin API calls from other domains will be blocked by the browser.
 
 ## TLS
 
-TLS is terminated at Nginx. The Node.js process only listens on `127.0.0.1:8888` and
+TLS is terminated at Nginx. The C++ server only listens on `127.0.0.1:8888` and
 is never exposed directly to the internet. Certificates are managed by Let's Encrypt /
 Certbot with auto-renewal.
 
@@ -115,7 +132,7 @@ Certbot with auto-renewal.
   limit_req_zone $binary_remote_addr zone=pool:10m rate=10r/s;
   location /api/v1/ { limit_req zone=pool burst=20 nodelay; }
   ```
-- Run the Node.js process as a non-root user (the provided systemd unit does this)
+- Run the server process as a non-root user (the provided systemd unit does this)
 - Enable `NoNewPrivileges=true` in the systemd unit (already in `deploy/puzzpool.service`)
-- Keep Node.js and `better-sqlite3` updated for security patches
+- Keep system packages (`libboost`, `libsqlite3`) updated for security patches
 - Use GitHub's private vulnerability reporting for security issues (see SECURITY.md template)

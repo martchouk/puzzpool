@@ -1,0 +1,9 @@
+[submodule "third_party/crow"]
+	path = third_party/crow
+	url = https://github.com/CrowCpp/Crow.git
+[submodule "third_party/SQLiteCpp"]
+	path = third_party/SQLiteCpp
+	url = https://github.com/SRombauts/SQLiteCpp.git
+[submodule "third_party/Catch2"]
+	path = third_party/Catch2
+	url = https://github.com/catchorg/Catch2.git

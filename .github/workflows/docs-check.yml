@@ -10,20 +10,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # need full history to diff against base branch
+          fetch-depth: 0
 
       - name: Fail if API routes changed without docs/api.md update
         run: |
-          # Detect new or changed route registrations in server.js
-          git diff origin/${{ github.base_ref }}...HEAD -- server.js \
-            | grep -E '^\+(app\.(get|post|put|delete|patch)|router\.)' \
+          # Detect new or changed CROW_ROUTE registrations in src/main.cpp
+          git diff origin/${{ github.base_ref }}...HEAD -- src/main.cpp \
+            | grep -E '^\+.*CROW_ROUTE' \
             > /tmp/route_changes.txt || true
 
           if [ -s /tmp/route_changes.txt ]; then
-            echo "Route changes detected in server.js:"
+            echo "Route changes detected in src/main.cpp:"
             cat /tmp/route_changes.txt
             echo ""
-            # Check that docs/api.md was also modified in this PR
             if ! git diff origin/${{ github.base_ref }}...HEAD -- docs/api.md | grep -q '^+'; then
               echo "ERROR: API routes changed but docs/api.md was not updated."
               echo "Please update docs/api.md to document the new/changed routes."

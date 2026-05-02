@@ -1,6 +1,6 @@
 # Database
 
-puzzpool uses **SQLite 3** via the `better-sqlite3` synchronous driver.
+puzzpool uses **SQLite 3** via the [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) synchronous C++ wrapper.
 The database file defaults to `pool.db` in the working directory (override with `DB_PATH`).
 WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the dashboard.
 
@@ -19,9 +19,9 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ test_end_hex         │ TEXT NULL   │ Test chunk end   (nullable)        │
 │ alloc_strategy       │ TEXT NULL   │ virtual_random_chunks_v1 or legacy │
 │ alloc_seed           │ TEXT NULL   │ Hex seed for deterministic perm.   │
-│ alloc_cursor         │ INTEGER     │ Next permutation index to allocate │
+│ alloc_cursor_hex     │ TEXT NULL   │ Next permutation index, hex text   │
 │ virtual_chunk_size_keys│ TEXT NULL │ Chunk size in keys (decimal string)│
-│ virtual_chunk_count  │ INTEGER NULL│ Total virtual chunks in puzzle     │
+│ virtual_chunk_count_hex│ TEXT NULL │ Total virtual chunks, hex text     │
 │ bootstrap_stage      │ INTEGER     │ 0–3: bootstrap progress (see below)│
 └──────────────────────┴─────────────┴────────────────────────────────────┘
 
@@ -54,9 +54,8 @@ WAL (Write-Ahead Logging) mode is enabled for concurrent read access from the da
 │ found_address    │ TEXT NULL   │ Bitcoin address (populated on FOUND)   │
 │ is_test          │ INTEGER     │ 1 = test chunk, excluded from stats    │
 │ sector_id        │ INTEGER NULL│ FK → sectors.id (legacy allocator)     │
-│ alloc_block_id   │ INTEGER NULL│ (unused, legacy)                       │
-│ vchunk_start     │ INTEGER NULL│ First virtual chunk index in this job  │
-│ vchunk_end       │ INTEGER NULL│ Last virtual chunk index + 1 (exclusive)│
+│ vchunk_start_hex │ TEXT NULL   │ First virtual chunk index, hex text    │
+│ vchunk_end_hex   │ TEXT NULL   │ Last virtual chunk index + 1, hex text │
 │ alloc_generation │ TEXT NULL   │ Permutation mode when assigned:        │
 │                  │             │ "feistel", "affine", "legacy", "test"  │
 └──────────────────┴─────────────┴────────────────────────────────────────┘
@@ -121,44 +120,29 @@ before random permutation begins:
 
 ## Migrations
 
-All schema additions run as idempotent `ALTER TABLE` statements at startup.
-The `try/catch` ensures existing databases with those columns are unaffected:
+All schema additions run as idempotent `ALTER TABLE … ADD COLUMN` statements at startup
+inside `src/db.cpp` (`PoolDb::migrate()`). Each statement is wrapped in a try/catch so
+existing databases with those columns already present are unaffected.
 
-```js
-// puzzles
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_start_hex TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN test_end_hex TEXT").run(); }          catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_strategy TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_seed TEXT").run(); }            catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN alloc_cursor INTEGER ...").run(); }   catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_size_keys TEXT").run(); } catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN virtual_chunk_count INTEGER").run(); } catch (_) {}
-try { db.prepare("ALTER TABLE puzzles ADD COLUMN bootstrap_stage INTEGER ...").run(); } catch (_) {}
+Columns added by migration (in addition to the base schema created on first run):
 
-// workers
-try { db.prepare("ALTER TABLE workers ADD COLUMN version TEXT").run(); }               catch (_) {}
-try { db.prepare("ALTER TABLE workers ADD COLUMN min_chunk_keys TEXT").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE workers ADD COLUMN chunk_quantum_keys TEXT").run(); }    catch (_) {}
-
-// chunks
-try { db.prepare("ALTER TABLE chunks ADD COLUMN is_test INTEGER ...").run(); }         catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN prev_worker_name TEXT").run(); }       catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_block_id INTEGER").run(); }      catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_start INTEGER").run(); }        catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN vchunk_end INTEGER").run(); }          catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN heartbeat_at DATETIME").run(); }       catch (_) {}
-try { db.prepare("ALTER TABLE chunks ADD COLUMN alloc_generation TEXT").run(); }       catch (_) {}
-// Backfill: carry assigned_at into heartbeat_at for old rows
-UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL
 ```
+puzzles:  test_start_hex, test_end_hex, alloc_strategy, alloc_seed,
+          alloc_cursor_hex, virtual_chunk_size_keys, virtual_chunk_count_hex, bootstrap_stage
+
+workers:  version, min_chunk_keys, chunk_quantum_keys
+
+chunks:   is_test, prev_worker_name, vchunk_start_hex, vchunk_end_hex,
+          heartbeat_at, alloc_generation
+```
+
+A backfill runs after migrations to copy `assigned_at` into `heartbeat_at` for any
+chunk rows that pre-date the heartbeat column.
 
 ## WAL Mode
 
-```js
-db.pragma('journal_mode = WAL');
-```
-
-WAL allows concurrent readers (dashboard polling) while a writer holds the lock.
+WAL (Write-Ahead Logging) is enabled at startup via `PRAGMA journal_mode = WAL`.
+It allows concurrent readers (dashboard polling) while a writer holds the lock.
 Without WAL, the dashboard would occasionally see `SQLITE_BUSY` errors during chunk
 assignment writes.
 
@@ -176,16 +160,15 @@ sudo systemctl start puzzpool
 sqlite3 pool.db
 
 -- Active puzzle
-SELECT name, start_hex, end_hex, alloc_strategy, virtual_chunk_count FROM puzzles WHERE active = 1;
+SELECT name, start_hex, end_hex, alloc_strategy, virtual_chunk_count_hex FROM puzzles WHERE active = 1;
 
 -- Chunk counts by status
 SELECT status, COUNT(*) FROM chunks WHERE is_test = 0 GROUP BY status;
 
 -- Leaderboard
-SELECT worker_name, COUNT(*) chunks,
-       SUM(vchunk_end - vchunk_start) vchunks_done
+SELECT worker_name, COUNT(*) chunks
 FROM chunks WHERE status IN ('completed','FOUND') AND is_test = 0
-GROUP BY worker_name ORDER BY vchunks_done DESC;
+GROUP BY worker_name ORDER BY chunks DESC;
 
 -- All findings
 SELECT * FROM findings;
