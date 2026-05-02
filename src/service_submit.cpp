@@ -1,5 +1,7 @@
 #include <puzzpool/service.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <string>
 
 namespace puzzpool {
@@ -15,9 +17,18 @@ crow::response PoolService::handleSubmit(const crow::request& req) {
             name = body["name"].get<std::string>();
         if (!body.contains("job_id") || !body["job_id"].is_number_integer())
             return errorResponse(400, "job_id must be an integer");
-        if (body["job_id"].is_number_unsigned())
-            return errorResponse(400, "job_id out of int64 range");
-        int64_t jobId = body["job_id"].get<int64_t>();
+        int64_t jobId;
+        {
+            const auto& jv = body["job_id"];
+            if (jv.is_number_unsigned()) {
+                uint64_t uv = jv.get<uint64_t>();
+                if (uv > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                    return errorResponse(400, "job_id out of int64 range");
+                jobId = static_cast<int64_t>(uv);
+            } else {
+                jobId = jv.get<int64_t>();
+            }
+        }
         std::string status;
         if (body.contains("status") && body["status"].is_string())
             status = body["status"].get<std::string>();
