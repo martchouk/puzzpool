@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <sstream>
 #include <string>
 
 namespace puzzpool {
@@ -86,8 +87,8 @@ bool WorkService::heartbeat(const std::string& name, int64_t jobId) {
 int WorkService::reclaimTimedOutChunks() {
     const auto& cfg = db_.cfg();
 
-    const std::string timeoutExpr =
-        std::string("-") + std::to_string(cfg.timeoutMinutes) + " minutes";
+    std::ostringstream _to; _to << '-' << cfg.timeoutMinutes << " minutes";
+    const std::string timeoutExpr = _to.str();
 
     SQLite::Statement q(db_.raw(), R"SQL(
         UPDATE chunks
@@ -110,8 +111,8 @@ bool WorkService::upsertWorkerAndDetectReactivation(
 
     const auto& cfg = db_.cfg();
 
-    const std::string reactivateExpr =
-        std::string("-") + std::to_string(cfg.reactivateMinutes) + " minutes";
+    std::ostringstream _ra; _ra << '-' << cfg.reactivateMinutes << " minutes";
+    const std::string reactivateExpr = _ra.str();
 
     SQLite::Statement prev(
         db_.raw(),

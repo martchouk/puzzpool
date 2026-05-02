@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -84,11 +85,16 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
           )
         ORDER BY w.hashrate DESC
     )SQL");
-    wq.bind(1, "-" + formatDouble(cfg_.activeMinutes) + " minutes");
+    auto mkInterval = [](const std::string& n) {
+        std::ostringstream oss; oss << '-' << n << " minutes"; return oss.str();
+    };
+    const std::string activeParam  = mkInterval(formatDouble(cfg_.activeMinutes));
+    const std::string timeoutParam = mkInterval(std::to_string(cfg_.timeoutMinutes));
+    wq.bind(1, activeParam);
     wq.bind(2, puzzle.id);
-    wq.bind(3, "-" + formatDouble(cfg_.activeMinutes) + " minutes");
+    wq.bind(3, activeParam);
     wq.bind(4, puzzle.id);
-    wq.bind(5, "-" + std::to_string(cfg_.timeoutMinutes) + " minutes");
+    wq.bind(5, timeoutParam);
     wq.bind(6, puzzle.id);
 
     std::map<std::string, json> workerAssignedMap;
