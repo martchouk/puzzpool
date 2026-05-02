@@ -2,7 +2,6 @@
 #include <puzzpool/hex_bigint.hpp>
 
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 
@@ -71,8 +70,6 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             }
             else
                 vchunkSize = allocator_.chooseDefaultVirtualChunkSize(puzzleRange);
-            if (ceilDiv(puzzleRange, *vchunkSize) > std::numeric_limits<int64_t>::max())
-                return errorResponse(400, "virtual chunk count exceeds current prod-compatible DB schema");
         }
 
         SQLite::Transaction tx(db_.raw());
@@ -185,13 +182,22 @@ crow::response PoolService::handleAdminPuzzles() {
     try {
         SQLite::Statement q(db_.raw(), R"SQL(
             SELECT id, name, active, start_hex, end_hex,
-                   alloc_strategy, alloc_seed, alloc_cursor,
-                   virtual_chunk_size_keys, virtual_chunk_count, bootstrap_stage
+                   alloc_strategy, alloc_seed,
+                   alloc_cursor, alloc_cursor_hex,
+                   virtual_chunk_size_keys,
+                   virtual_chunk_count, virtual_chunk_count_hex,
+                   bootstrap_stage
             FROM puzzles
             ORDER BY id ASC
         )SQL");
         json arr = json::array();
         while (q.executeStep()) {
+            json cursorJ = q.isColumnNull(8)
+                ? (q.isColumnNull(7) ? json(nullptr) : json(q.getColumn(7).getInt64()))
+                : json(bigToDec(hexToInt(q.getColumn(8).getString())));
+            json countJ = q.isColumnNull(11)
+                ? (q.isColumnNull(10) ? json(nullptr) : json(q.getColumn(10).getInt64()))
+                : json(bigToDec(hexToInt(q.getColumn(11).getString())));
             arr.push_back({
                 {"id",                      q.getColumn(0).getInt64()},
                 {"name",                    q.getColumn(1).getString()},
@@ -200,10 +206,10 @@ crow::response PoolService::handleAdminPuzzles() {
                 {"end_hex",                 q.getColumn(4).getString()},
                 {"alloc_strategy",          q.isColumnNull(5) ? json(nullptr) : json(q.getColumn(5).getString())},
                 {"alloc_seed",              q.isColumnNull(6) ? json(nullptr) : json(q.getColumn(6).getString())},
-                {"alloc_cursor",            q.isColumnNull(7) ? json(nullptr) : json(q.getColumn(7).getInt64())},
-                {"virtual_chunk_size_keys", q.isColumnNull(8) ? json(nullptr) : json(q.getColumn(8).getString())},
-                {"virtual_chunk_count",     q.isColumnNull(9) ? json(nullptr) : json(q.getColumn(9).getInt64())},
-                {"bootstrap_stage",         q.isColumnNull(10) ? 0 : q.getColumn(10).getInt()}
+                {"alloc_cursor",            cursorJ},
+                {"virtual_chunk_size_keys", q.isColumnNull(9) ? json(nullptr) : json(q.getColumn(9).getString())},
+                {"virtual_chunk_count",     countJ},
+                {"bootstrap_stage",         q.isColumnNull(12) ? 0 : q.getColumn(12).getInt()}
             });
         }
         return jsonResponse({{"puzzles", arr}});

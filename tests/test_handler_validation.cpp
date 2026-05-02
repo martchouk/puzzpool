@@ -157,6 +157,21 @@ TEST_CASE("handleAdminPuzzles: returns 200 with non-empty puzzle array", "[handl
     CHECK(b["puzzles"].size() >= 1);
 }
 
+TEST_CASE("handleSetPuzzle: All BTC keyspace returns 200 (not 400)", "[handler][admin]") {
+    Config cfg = memConfig(); PoolService svc{cfg};
+    auto resp = svc.handleSetPuzzle(body(
+        R"({"name":"allbtc",)"
+        R"("start_hex":"0000000000000000000000000000000000000000000000000000000000000001",)"
+        R"("end_hex":"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",)"
+        R"("alloc_strategy":"virtual_random_chunks_v1","virtual_chunk_size_keys":"33554432"})"));
+    CHECK(resp.code == 200);
+    auto b = json::parse(resp.body);
+    CHECK(b["ok"] == true);
+    CHECK(b["puzzle"]["name"] == "allbtc");
+    // virtual_chunk_count should be a string (decimal) since it exceeds int64
+    CHECK(b["puzzle"]["virtual_chunk_count"].is_string());
+}
+
 // ── handleStats puzzle_id validation ─────────────────────────────────────────
 
 TEST_CASE("handleStats: puzzle_id=abc returns 400", "[handler][validation]") {

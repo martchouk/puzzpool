@@ -93,7 +93,8 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
 
     std::map<std::string, json> workerAssignedMap;
     SQLite::Statement aq(db_.raw(), R"SQL(
-        SELECT id, worker_name, vchunk_start, vchunk_end, assigned_at, heartbeat_at, start_hex, end_hex
+        SELECT id, worker_name, vchunk_start, vchunk_end, assigned_at, heartbeat_at, start_hex, end_hex,
+               vchunk_start_hex, vchunk_end_hex
         FROM chunks WHERE status = 'assigned' AND puzzle_id = ? AND is_test = 0
     )SQL");
     aq.bind(1, puzzle.id);
@@ -101,12 +102,20 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         std::string worker = aq.getColumn(1).getString();
         json j;
         j["current_chunk"] = aq.getColumn(0).getInt64();
-        if (!aq.isColumnNull(2) && !aq.isColumnNull(3)) {
+        bool hasHex = !aq.isColumnNull(8) && !aq.isColumnNull(9);
+        bool hasInt = !aq.isColumnNull(2) && !aq.isColumnNull(3);
+        if (hasHex) {
+            cpp_int s = hexToInt(aq.getColumn(8).getString());
+            cpp_int e = hexToInt(aq.getColumn(9).getString());
+            j["current_vchunk_run"]       = bigToDec(s) + ".." + bigToDec(e - 1);
+            j["current_vchunk_run_start"] = bigToDec(s);
+            j["current_vchunk_run_end"]   = bigToDec(e);
+        } else if (hasInt) {
             auto s = aq.getColumn(2).getInt64();
             auto e = aq.getColumn(3).getInt64();
             j["current_vchunk_run"]       = std::to_string(s) + ".." + std::to_string(e - 1);
-            j["current_vchunk_run_start"] = s;
-            j["current_vchunk_run_end"]   = e;
+            j["current_vchunk_run_start"] = std::to_string(s);
+            j["current_vchunk_run_end"]   = std::to_string(e);
         } else {
             j["current_vchunk_run"]       = nullptr;
             j["current_vchunk_run_start"] = nullptr;
@@ -264,26 +273,37 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     }
     out["chunks_vis"] = chunksVis;
 
-    json virtualTotalJ   = nullptr;
-    int64_t virtualStarted   = 0;
-    int64_t virtualCompleted = 0;
+    json virtualTotalJ     = nullptr;
+    json virtualStartedJ   = json(0);
+    json virtualCompletedJ = json(0);
     std::string strategy = puzzle.allocStrategy.empty() ? cfg_.allocStrategyLegacy : puzzle.allocStrategy;
     if (strategy == cfg_.allocStrategyVChunks) {
         virtualTotalJ = bigToDec(puzzle.virtualChunkCount);
-        SQLite::Statement st(db_.raw(),
-            "SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL");
-        st.bind(1, puzzle.id); st.executeStep();
-        virtualStarted = st.getColumn(0).getInt64();
-        SQLite::Statement ct(db_.raw(),
-            "SELECT COALESCE(SUM(vchunk_end - vchunk_start), 0) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND status IN ('completed', 'FOUND') AND vchunk_start IS NOT NULL AND vchunk_end IS NOT NULL");
-        ct.bind(1, puzzle.id); ct.executeStep();
-        virtualCompleted = ct.getColumn(0).getInt64();
+        cpp_int started = 0, completed = 0;
+        SQLite::Statement vc(db_.raw(), R"SQL(
+            SELECT vchunk_start_hex, vchunk_end_hex, status
+            FROM chunks
+            WHERE puzzle_id = ? AND is_test = 0
+              AND vchunk_start_hex IS NOT NULL AND vchunk_end_hex IS NOT NULL
+        )SQL");
+        vc.bind(1, puzzle.id);
+        while (vc.executeStep()) {
+            cpp_int s = hexToInt(vc.getColumn(0).getString());
+            cpp_int e = hexToInt(vc.getColumn(1).getString());
+            if (e > s) {
+                started += (e - s);
+                std::string st2 = vc.getColumn(2).getString();
+                if (st2 == "completed" || st2 == "FOUND") completed += (e - s);
+            }
+        }
+        virtualStartedJ   = bigToDec(started);
+        virtualCompletedJ = bigToDec(completed);
     } else {
-        virtualTotalJ    = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ?");
-        virtualStarted   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
-        virtualCompleted = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
+        virtualTotalJ     = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ?");
+        virtualStartedJ   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
+        virtualCompletedJ = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
-    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started", virtualStarted}, {"completed", virtualCompleted}};
+    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started", virtualStartedJ}, {"completed", virtualCompletedJ}};
     out["shards"]         = out["virtual_chunks"];
 
     json generations = {{"legacy", 0}, {"affine", 0}, {"feistel", 0}};
