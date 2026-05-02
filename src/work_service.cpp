@@ -85,6 +85,10 @@ bool WorkService::heartbeat(const std::string& name, int64_t jobId) {
 
 int WorkService::reclaimTimedOutChunks() {
     const auto& cfg = db_.cfg();
+
+    const std::string timeoutExpr =
+        std::string("-") + std::to_string(cfg.timeoutMinutes) + " minutes";
+
     SQLite::Statement q(db_.raw(), R"SQL(
         UPDATE chunks
         SET status = 'reclaimed', prev_worker_name = worker_name, worker_name = NULL,
@@ -92,23 +96,29 @@ int WorkService::reclaimTimedOutChunks() {
         WHERE status = 'assigned' AND is_test = 0
           AND heartbeat_at < datetime('now', ?)
     )SQL");
-    q.bind(1, "-" + std::to_string(cfg.timeoutMinutes) + " minutes");
+    q.bind(1, timeoutExpr);
     q.exec();
     return db_.raw().getChanges();
 }
 
 bool WorkService::upsertWorkerAndDetectReactivation(
-    const std::string&              name,
-    double                          hashrate,
-    const std::string&              version,
+    const std::string&                name,
+    double                            hashrate,
+    const std::string&                version,
     const std::optional<std::string>& minChunkKeys,
     const std::optional<std::string>& chunkQuantumKeys) {
 
     const auto& cfg = db_.cfg();
 
-    SQLite::Statement prev(db_.raw(),
-        "SELECT CASE WHEN last_seen < datetime('now', ?) THEN 1 ELSE 0 END FROM workers WHERE name = ?");
-    prev.bind(1, "-" + std::to_string(cfg.reactivateMinutes) + " minutes");
+    const std::string reactivateExpr =
+        std::string("-") + std::to_string(cfg.reactivateMinutes) + " minutes";
+
+    SQLite::Statement prev(
+        db_.raw(),
+        "SELECT CASE WHEN last_seen < datetime('now', ?) THEN 1 ELSE 0 END "
+        "FROM workers WHERE name = ?"
+    );
+    prev.bind(1, reactivateExpr);
     prev.bind(2, name);
     bool inactive = prev.executeStep() && prev.getColumn(0).getInt() == 1;
 
