@@ -94,6 +94,13 @@ foreach(_tgt puzzpool_core puzzpool)
     endif()
 endforeach()
 
+# main.cpp pulls in asio system headers via crow which trigger false
+# -Wnull-dereference from inlined third-party code; suppress only for
+# the executable target so puzzpool_core still warns on our own code.
+if(NOT MSVC)
+    target_compile_options(puzzpool PRIVATE -Wno-null-dereference)
+endif()
+
 find_package(Threads REQUIRED)
 target_link_libraries(puzzpool_core PUBLIC Threads::Threads)
 
