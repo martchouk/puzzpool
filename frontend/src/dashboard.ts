@@ -218,6 +218,7 @@ async function updateDashboard(): Promise<void> {
     renderKeyspaceTabs(data.puzzles ?? []);
 
     document.getElementById('total-hashrate')!.textContent  = formatHashrate(data.total_hashrate);
+    document.getElementById('pool-id')!.textContent         = data.puzzle ? 'Pool ID: ' + data.puzzle.id : '—';
     document.getElementById('active-workers')!.textContent  = formatIntegerDots(data.active_workers_count);
     document.getElementById('inactive-workers')!.textContent = data.puzzle
       ? 'Inactive: ' + formatIntegerDots(data.inactive_workers_count)
