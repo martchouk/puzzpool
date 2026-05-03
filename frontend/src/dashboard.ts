@@ -287,9 +287,8 @@ async function updateDashboard(): Promise<void> {
       `feistel <span style="color:var(--accent-green)">${formatIntegerDots(gens.feistel)}</span>`;
 
     // Workers section title
-    document.getElementById('workers-section-title')!.textContent = data.puzzle
-      ? `Visible Workers · Active: ${data.active_workers_count} · Inactive: ${data.inactive_workers_count}`
-      : 'Visible Workers';
+    document.getElementById('workers-section-title')!.textContent =
+      `Visible Workers · Active: ${data.active_workers_count} · Inactive: ${data.inactive_workers_count}`;
 
     // Workers table
     const tbody = document.getElementById('worker-list')!;
