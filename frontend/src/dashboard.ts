@@ -218,6 +218,7 @@ async function updateDashboard(): Promise<void> {
     renderKeyspaceTabs(data.puzzles ?? []);
 
     document.getElementById('total-hashrate')!.textContent  = formatHashrate(data.total_hashrate);
+    document.getElementById('pool-id')!.textContent         = data.puzzle ? 'Pool ID: ' + data.puzzle.id : '—';
     document.getElementById('active-workers')!.textContent  = formatIntegerDots(data.active_workers_count);
     document.getElementById('inactive-workers')!.textContent = data.puzzle
       ? 'Inactive: ' + formatIntegerDots(data.inactive_workers_count)
@@ -284,6 +285,10 @@ async function updateDashboard(): Promise<void> {
       `legacy <span style="color:var(--accent-amber)">${formatIntegerDots(gens.legacy)}</span> · ` +
       `affine <span style="color:var(--accent-cyan)">${formatIntegerDots(gens.affine)}</span> · ` +
       `feistel <span style="color:var(--accent-green)">${formatIntegerDots(gens.feistel)}</span>`;
+
+    // Workers section title
+    document.getElementById('workers-section-title')!.textContent =
+      `Visible Workers · Active: ${data.active_workers_count} · Inactive: ${data.inactive_workers_count}`;
 
     // Workers table
     const tbody = document.getElementById('worker-list')!;

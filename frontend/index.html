@@ -773,6 +773,7 @@
             <div class="stat-card">
                 <div class="stat-label">Pool Hashrate</div>
                 <div id="total-hashrate" class="stat-value cyan">—</div>
+                <div id="pool-id" class="stat-subtext">—</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Active Workers</div>
@@ -780,7 +781,7 @@
                 <div id="inactive-workers" class="stat-subtext">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Chunks Done</div>
+                <div class="stat-label">Jobs Done</div>
                 <div id="completed-chunks" class="stat-value green">—</div>
                 <div id="reclaimed-chunks" class="stat-subtext">—</div>
             </div>
@@ -826,7 +827,7 @@
 
         <div id="ks-tooltip"></div>
 
-        <div class="section-title">Visible Workers</div>
+        <div id="workers-section-title" class="section-title">Visible Workers</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
                 <thead>
@@ -849,7 +850,7 @@
         <div class="section-title">Scores — All Time</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th></th><th>Worker</th><th>Keys Completed</th><th>Chunks</th></tr></thead>
+                <thead><tr><th></th><th>Worker</th><th>Keys Completed</th><th>Jobs</th></tr></thead>
                 <tbody id="score-list"></tbody>
             </table>
         </div>

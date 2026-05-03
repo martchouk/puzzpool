@@ -105,7 +105,7 @@ cp .env.example .env
 |----------|---------|-------------|
 | `PORT` | `8888` | Bind port (localhost only) |
 | `DB_PATH` | `pool.db` | SQLite database file path |
-| `TARGET_MINUTES` | `5` | Expected time to complete one chunk |
+| `TARGET_MINUTES` | `10` | Expected time to complete one chunk |
 | `TIMEOUT_MINUTES` | `15` | Minutes before an inactive chunk is reclaimed |
 | `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
 | `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
