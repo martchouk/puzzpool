@@ -120,7 +120,7 @@ Call every 60–120 seconds while scanning a large chunk.
 
 ### GET /api/v1/stats
 
-Dashboard data — polled every 3 seconds by `index.html`.
+Dashboard data — polled every 5 seconds by the dashboard.
 
 **Query parameters**
 
