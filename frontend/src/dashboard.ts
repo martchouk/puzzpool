@@ -286,6 +286,11 @@ async function updateDashboard(): Promise<void> {
       `affine <span style="color:var(--accent-cyan)">${formatIntegerDots(gens.affine)}</span> · ` +
       `feistel <span style="color:var(--accent-green)">${formatIntegerDots(gens.feistel)}</span>`;
 
+    // Workers section title
+    document.getElementById('workers-section-title')!.textContent = data.puzzle
+      ? `Visible Workers · Active: ${data.active_workers_count} · Inactive: ${data.inactive_workers_count}`
+      : 'Visible Workers';
+
     // Workers table
     const tbody = document.getElementById('worker-list')!;
     if (!data.workers?.length) {
