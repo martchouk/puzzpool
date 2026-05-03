@@ -19,7 +19,7 @@ progress in real time: stat cards (hashrate, ETA, keys completed), three canvas-
 
 ```bash
 # Ubuntu / Debian
-sudo apt-get install -y cmake build-essential libboost-dev nlohmann-json3-dev libssl-dev
+sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev
 
 git clone --recurse-submodules https://github.com/martchouk/puzzpool.git
 cd puzzpool
@@ -119,7 +119,7 @@ cp .env.example .env
 
 ### Prerequisites
 
-- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `nlohmann-json3-dev`, `libssl-dev`
+- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `libasio-dev`, `nlohmann-json3-dev`, `libssl-dev`
 - Node.js 20+ (only needed at build time to compile the TypeScript dashboard)
 - Nginx, Certbot, systemd
 - DNS A record pointing your domain to the server
@@ -128,7 +128,7 @@ cp .env.example .env
 
 ```bash
 # 1. Install build dependencies
-sudo apt-get install -y cmake build-essential libboost-dev nlohmann-json3-dev libssl-dev nodejs npm
+sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev nodejs npm
 
 # 2. Clone with submodules
 git clone --recurse-submodules https://github.com/martchouk/puzzpool.git ~/git/puzzpool
