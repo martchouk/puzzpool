@@ -43,7 +43,7 @@ crow::response PoolService::handleStats(const crow::request& req) {
             out["completed_chunks"]       = 0;
             out["reclaimed_chunks"]       = 0;
             out["total_keys_completed"]   = "0";
-            out["virtual_chunks"] = {{"total", 0}, {"started", 0}, {"completed", 0}};
+            out["virtual_chunks"] = {{"total", 0}, {"started_vchunks", 0}, {"completed_vchunks", 0}, {"virtual_chunk_size_keys", nullptr}};
             out["shards"]         = out["virtual_chunks"];
             out["workers"]        = json::array();
             out["scores"]         = json::array();
@@ -302,7 +302,8 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         virtualStartedJ   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
         virtualCompletedJ = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
-    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started", virtualStartedJ}, {"completed", virtualCompletedJ}};
+    json vchunkSizeJ = puzzle.virtualChunkSizeKeys.empty() ? json(nullptr) : json(puzzle.virtualChunkSizeKeys);
+    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started_vchunks", virtualStartedJ}, {"completed_vchunks", virtualCompletedJ}, {"virtual_chunk_size_keys", vchunkSizeJ}};
     out["shards"]         = out["virtual_chunks"];
 
     json generations = {{"legacy", 0}, {"affine", 0}, {"feistel", 0}};

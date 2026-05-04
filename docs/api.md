@@ -5,6 +5,32 @@ Base URL: `https://puzzle.b58.de` (production) or `http://127.0.0.1:8888` (local
 All request and response bodies are JSON. All hex strings are lowercase, 64 characters,
 zero-padded (256-bit representation).
 
+## Large integer transport
+
+Values that may exceed JavaScript's `Number.MAX_SAFE_INTEGER` (2^53−1) are transported as
+**decimal strings**, not JSON numbers. Clients must parse these with `BigInt()` or an
+equivalent arbitrary-precision library — do not coerce them with `Number()` or `parseFloat()`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `total_keys_completed` | decimal string | Total keys scanned across all completed chunks |
+| `puzzle.total_keys` | decimal string | Total keys in the puzzle keyspace |
+| `puzzle.virtual_chunk_size_keys` | decimal string \| null | Size of one virtual chunk in keys |
+| `puzzle.virtual_chunk_count` | decimal string \| null | Total number of virtual chunks (may exceed 2^63) |
+| `puzzle.alloc_cursor` | decimal string | Current allocator position in permutation order |
+| `worker.current_job_keys` | decimal string \| null | Key count of the worker's current job |
+| `worker.current_vchunk_run_start` | decimal string \| null | First virtual chunk index in the worker's current run |
+| `worker.current_vchunk_run_end` | decimal string \| null | Exclusive end virtual chunk index (last + 1) |
+| `finder.vchunk_start` | decimal string \| null | First virtual chunk index of the chunk where the key was found |
+| `finder.vchunk_end` | decimal string \| null | Exclusive end virtual chunk index |
+| `virtual_chunks.total` | decimal string \| 0 | Total virtual chunk count |
+| `virtual_chunks.started_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for started jobs |
+| `virtual_chunks.completed_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for completed jobs |
+| `score.total_keys` | decimal string | Total keys attributed to a worker |
+
+All hex fields (`start_hex`, `end_hex`, etc.) are fixed-width 64-character strings.
+Regular counts (`active_workers_count`, `completed_chunks`, etc.) are safe JSON integers.
+
 ---
 
 ## Worker API
@@ -159,16 +185,17 @@ Dashboard data — polled every 5 seconds by the dashboard.
   "reclaimed_chunks": 3,
   "total_keys_completed": "12345678901234567890",
   "virtual_chunks": {
-    "total": 78706,
-    "started": 200,
-    "completed": 187
+    "total": "78706",
+    "started_vchunks": "200",
+    "completed_vchunks": "187",
+    "virtual_chunk_size_keys": "1000000"
   },
   "workers": [
     {
       "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56",
       "version": "1.2.1", "active": true,
       "current_chunk": 42, "current_vchunk_run": "223735..223744",
-      "current_vchunk_run_start": 223735, "current_vchunk_run_end": 223745,
+      "current_vchunk_run_start": "223735", "current_vchunk_run_end": "223745",
       "assigned_at": "2024-01-15 12:30:00", "heartbeat_at": "2024-01-15 12:34:30",
       "current_job_start_hex": "000...06000000000", "current_job_end_hex": "000...060002bf200",
       "current_job_keys": "900000000",
@@ -230,12 +257,14 @@ Dashboard data — polled every 5 seconds by the dashboard.
 **`virtual_chunks` field**
 
 ```json
-{ "virtual_chunks": { "total": 78706, "started": 200, "completed": 187 } }
+{ "virtual_chunks": { "total": "78706", "started_vchunks": "200", "completed_vchunks": "187", "virtual_chunk_size_keys": "1000000" } }
 ```
 
-For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle, `started` is the count of virtual chunks covered by any live or completed job, `completed` is the count covered by completed or FOUND jobs.
+All four fields are decimal strings (may exceed 2^53 for large keyspaces).
 
-For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks` and the backward-compatible `shards` alias).
+For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle. `started_vchunks` is the sum of virtual chunk index spans covered by any live or completed job. `completed_vchunks` is the same sum for completed or FOUND jobs only. To derive keys: `started_vchunks × virtual_chunk_size_keys`.
+
+For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks` and the backward-compatible `shards` alias). `virtual_chunk_size_keys` is `null` for the legacy strategy.
 
 **`puzzle` allocator fields** (present when a puzzle is active)
 

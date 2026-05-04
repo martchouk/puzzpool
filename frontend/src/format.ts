@@ -83,24 +83,29 @@ export function trimHexRange(h: string | null | undefined): string {
 // ── vchunk run display ────────────────────────────────────────────────────────
 
 export function formatRunShort(
-  start: number | null | undefined,
-  endExclusive: number | null | undefined,
+  start: string | bigint | null | undefined,
+  endExclusive: string | bigint | null | undefined,
 ): string {
   if (start == null || endExclusive == null) return '—';
-  const len = Number(endExclusive) - Number(start);
-  if (!Number.isFinite(len) || len <= 0) return String(start);
-  return `${formatIntegerDots(start)} + ${formatIntegerDots(len - 1)}`;
+  try {
+    const s = BigInt(start);
+    const e = BigInt(endExclusive);
+    if (e <= s) return formatBigInt(String(s));
+    return `${formatBigInt(String(s))} + ${formatBigInt(String(e - s - 1n))}`;
+  } catch { return '—'; }
 }
 
 export function formatRunCompact(
-  start: number | null | undefined,
-  endExclusive: number | null | undefined,
+  start: string | bigint | null | undefined,
+  endExclusive: string | bigint | null | undefined,
 ): string {
   if (start == null || endExclusive == null) return '—';
-  const s = Number(start);
-  const e = Number(endExclusive);
-  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return '—';
-  return `${formatIntegerDots(s)} + ${formatIntegerDots(e - s)}`;
+  try {
+    const s = BigInt(start);
+    const e = BigInt(endExclusive);
+    if (e <= s) return '—';
+    return `${formatBigInt(String(s))} + ${formatBigInt(String(e - s))}`;
+  } catch { return '—'; }
 }
 
 // ── ETA ───────────────────────────────────────────────────────────────────────

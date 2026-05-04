@@ -234,13 +234,13 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
         ? defaultAllocSeedForPuzzle(puzzle, cfg_.allocStrategyVChunks)
         : puzzle.allocSeed;
     const cpp_int rawCursorBig = puzzle.allocCursor;
-    int64_t probeLimit = static_cast<int64_t>(std::min(totalChunks, cpp_int(cfg_.maxAllocProbes)));
+    cpp_int probeLimit = minBig(totalChunks, cpp_int(cfg_.maxAllocProbes));
 
     std::optional<AffineParams> affine;
     if (cfg_.permutationMode == "affine") affine = deriveAffinePermutationParams(permKey, totalChunks);
 
     std::set<cpp_int> triedStarts;
-    for (int64_t offset = 0; offset < probeLimit; ++offset) {
+    for (cpp_int offset = 0; offset < probeLimit; ++offset) {
         cpp_int orderIndex    = (rawCursorBig + offset) % totalChunks;
         cpp_int candidateIndex = (cfg_.permutationMode == "affine")
             ? permuteIndexAffine(orderIndex, totalChunks, affine->a, affine->b)
@@ -259,7 +259,7 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
 
     for (cpp_int fallback = neededChunks - 1; fallback >= 1; --fallback) {
         triedStarts.clear();
-        for (int64_t offset = 0; offset < probeLimit; ++offset) {
+        for (cpp_int offset = 0; offset < probeLimit; ++offset) {
             cpp_int orderIndex    = (rawCursorBig + offset) % totalChunks;
             cpp_int candidateIndex = (cfg_.permutationMode == "affine")
                 ? permuteIndexAffine(orderIndex, totalChunks, affine->a, affine->b)
@@ -381,10 +381,9 @@ Allocator::assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
 std::optional<cpp_int> Allocator::findBeginBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks) {
     if (neededChunks > totalChunks) return std::nullopt;
     cpp_int maxStart = totalChunks - neededChunks;
-    int64_t probes = static_cast<int64_t>(minBig(cpp_int(maxStart + 1), cpp_int(cfg_.maxAllocProbes)));
-    for (int64_t i = 0; i < probes; ++i) {
-        cpp_int start = cpp_int(i);
-        if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
+    cpp_int probes = minBig(maxStart + 1, cpp_int(cfg_.maxAllocProbes));
+    for (cpp_int i = 0; i < probes; ++i) {
+        if (rangeIsFree(puzzleId, i, i + neededChunks)) return i;
     }
     return std::nullopt;
 }
@@ -392,8 +391,8 @@ std::optional<cpp_int> Allocator::findBeginBootstrapRun(int64_t puzzleId, const 
 std::optional<cpp_int> Allocator::findEndBootstrapRun(int64_t puzzleId, const cpp_int& totalChunks, const cpp_int& neededChunks) {
     if (neededChunks > totalChunks) return std::nullopt;
     cpp_int maxStart = totalChunks - neededChunks;
-    int64_t probes = static_cast<int64_t>(minBig(cpp_int(maxStart + 1), cpp_int(cfg_.maxAllocProbes)));
-    for (int64_t i = 0; i < probes; ++i) {
+    cpp_int probes = minBig(maxStart + 1, cpp_int(cfg_.maxAllocProbes));
+    for (cpp_int i = 0; i < probes; ++i) {
         cpp_int start = maxStart - i;
         if (rangeIsFree(puzzleId, start, start + neededChunks)) return start;
     }
@@ -406,9 +405,9 @@ std::optional<cpp_int> Allocator::findMidBootstrapRun(int64_t puzzleId, const cp
     cpp_int anchor   = totalChunks / 2;
     cpp_int maxStart = totalChunks - neededChunks;
     std::set<cpp_int> tried;
-    int64_t probes = static_cast<int64_t>(minBig(totalChunks, cpp_int(cfg_.maxAllocProbes)));
-    for (int64_t dist = 0; dist < probes; ++dist) {
-        cpp_int cdist(dist);
+    cpp_int probes = minBig(totalChunks, cpp_int(cfg_.maxAllocProbes));
+    for (cpp_int dist = 0; dist < probes; ++dist) {
+        cpp_int cdist = dist;
         if (anchor >= cdist) {
             cpp_int left  = anchor - cdist;
             cpp_int start = normalizeRunStartForCandidate(left, neededChunks, totalChunks);

@@ -277,3 +277,43 @@ TEST_CASE("large domain: two workers get non-overlapping ranges", "[vchunk][larg
     cpp_int s2 = hexToInt(r2.startHex), e2 = hexToInt(r2.endHex);
     CHECK((e1 <= s2 || e2 <= s1));
 }
+
+TEST_CASE("large domain: ten workers all get non-overlapping ranges", "[vchunk][large]") {
+    LargeDomainFixture f;
+    struct Range { cpp_int s, e; };
+    std::vector<Range> ranges;
+    for (int i = 0; i < 10; ++i) {
+        auto r = f.ws.assignWork("worker" + std::to_string(i), 100000000.0, "v1", {}, {});
+        REQUIRE(r.ok);
+        ranges.push_back({hexToInt(r.startHex), hexToInt(r.endHex)});
+    }
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        for (size_t j = i + 1; j < ranges.size(); ++j) {
+            bool disjoint = (ranges[i].e <= ranges[j].s) || (ranges[j].e <= ranges[i].s);
+            CHECK(disjoint);
+        }
+    }
+}
+
+TEST_CASE("large domain: bootstrap stages produce valid non-overlapping allocations", "[vchunk][large]") {
+    LargeDomainFixture f;
+    // Assign three workers — exercises bootstrap stages 0 (mid), 1 (begin), 2 (end)
+    // before the allocator transitions to normal permutation mode (stage 3+)
+    std::vector<std::pair<cpp_int, cpp_int>> ranges;
+    for (int i = 0; i < 3; ++i) {
+        auto r = f.ws.assignWork("bootstrap" + std::to_string(i), 100000000.0, "v1", {}, {});
+        REQUIRE(r.ok);
+        cpp_int s = hexToInt(r.startHex);
+        cpp_int e = hexToInt(r.endHex);
+        CHECK(e > s);
+        CHECK(s >= hexToInt(LargeDomainFixture::START));
+        CHECK(e <= hexToInt(LargeDomainFixture::END));
+        ranges.push_back({s, e});
+    }
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        for (size_t j = i + 1; j < ranges.size(); ++j) {
+            bool disjoint = (ranges[i].second <= ranges[j].first) || (ranges[j].second <= ranges[i].first);
+            CHECK(disjoint);
+        }
+    }
+}
