@@ -12,7 +12,10 @@
 // | current_job_keys            | string | null  | BigInt decimal — display only   |
 // | start_hex / end_hex         | string        | 256-bit hex — display only       |
 // | Counts (completed_chunks…)  | number        | Safe — expected < 2^53           |
-// | vchunk_start / _end         | number | null  | DB int64, fits safely in Number  |
+// | vchunk_start / _end         | string | null  | BigInt decimal — may exceed 2^53 |
+// | vchunk_run_start / _end     | string | null  | BigInt decimal — may exceed 2^53 |
+// | alloc_cursor                | string        | BigInt decimal — may exceed 2^53 |
+// | virtual_chunk_count         | string | null  | BigInt decimal — may exceed 2^53 |
 // | Canvas positions (s, e)     | number        | Normalised float [0, 1]          |
 // | Timestamps                  | string | null  | ISO 8601 UTC string              |
 // | hashrate                    | number        | keys/second — safe as float      |
@@ -46,8 +49,8 @@ export interface WorkerInfo {
   // Present only when the worker has an active chunk assignment
   current_chunk: number | null;
   current_vchunk_run: string | null;       // "startIndex..endIndex" string
-  current_vchunk_run_start: number | null;
-  current_vchunk_run_end: number | null;
+  current_vchunk_run_start: string | null;
+  current_vchunk_run_end: string | null;
   assigned_at: string | null;
   heartbeat_at: string | null;
   current_job_start_hex: string | null;
@@ -69,8 +72,8 @@ export interface FinderEntry {
   found_address: string | null;
   created_at: string | null;
   chunk_global: number | null;
-  vchunk_start: number | null;
-  vchunk_end: number | null;
+  vchunk_start: string | null;
+  vchunk_end: string | null;
 }
 
 // ── Puzzle ────────────────────────────────────────────────────────────────────
@@ -83,9 +86,9 @@ export interface PuzzleInfo {
   active: boolean;
   test_chunk: { start_hex: string; end_hex: string } | null;
   alloc_strategy: string;
-  alloc_cursor: number;
+  alloc_cursor: string;                    // BigInt decimal string
   virtual_chunk_size_keys: string | null;  // BigInt decimal string
-  virtual_chunk_count: number | null;
+  virtual_chunk_count: string | null;      // BigInt decimal string
   bootstrap_stage: number;
   total_keys: string;                       // BigInt decimal string
 }
@@ -100,9 +103,10 @@ export interface PuzzleListEntry {
 // ── Virtual chunk / shard counts ─────────────────────────────────────────────
 
 export interface VirtualChunks {
-  total: number;
-  started: number;
-  completed: number;
+  total: string | number;            // BigInt decimal string (large domains) or 0
+  started_vchunks: string | number;  // virtual chunk spans covered
+  completed_vchunks: string | number;
+  virtual_chunk_size_keys: string | null;
 }
 
 // ── Alloc generation counts ───────────────────────────────────────────────────

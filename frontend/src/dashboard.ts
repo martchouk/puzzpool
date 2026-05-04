@@ -251,9 +251,9 @@ async function updateDashboard(): Promise<void> {
       document.getElementById('puzzle-total-keys')!.innerHTML =
         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
 
-      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started: 0, completed: 0 };
-      document.getElementById('puzzle-vchunks')!.innerHTML = vchunks.total > 0
-        ? `Virtual chunks total: ${a(formatIntegerDots(vchunks.total))} · started: ${c(formatIntegerDots(vchunks.started))} · completed: ${g(formatIntegerDots(vchunks.completed))}`
+      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null };
+      document.getElementById('puzzle-vchunks')!.innerHTML = vchunks.total !== 0 && vchunks.total !== '0'
+        ? `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))}`
         : '';
 
       document.getElementById('puzzle-alloc')!.innerHTML = allocatorDiagnosticsHtml(data.puzzle);
@@ -302,17 +302,21 @@ async function updateDashboard(): Promise<void> {
         let runStart = '—';
         let runCount = '—';
         if (w.current_vchunk_run_start != null && w.current_vchunk_run_end != null) {
-          const s = Number(w.current_vchunk_run_start);
-          const e = Number(w.current_vchunk_run_end);
-          if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
-            runStart = formatIntegerDots(s);
-            runCount = formatIntegerDots(e - s);
-          }
+          try {
+            const s = BigInt(w.current_vchunk_run_start);
+            const e = BigInt(w.current_vchunk_run_end);
+            if (e > s) {
+              runStart = formatBigInt(w.current_vchunk_run_start);
+              runCount = formatBigInt(String(e - s));
+            }
+          } catch { /* leave as — */ }
         } else if (typeof w.current_vchunk_run === 'string') {
           const m = w.current_vchunk_run.match(/^(\d+)\.\.(\d+)$/);
           if (m) {
-            runStart = formatIntegerDots(Number(m[1]));
-            runCount = formatIntegerDots(Number(m[2]) - Number(m[1]) + 1);
+            try {
+              runStart = formatBigInt(m[1]);
+              runCount = formatBigInt(String(BigInt(m[2]) - BigInt(m[1]) + 1n));
+            } catch { /* leave as — */ }
           }
         }
 
@@ -351,8 +355,8 @@ async function updateDashboard(): Promise<void> {
       ftbody.innerHTML = data.finders.map(f => `<tr>
         <td class="td-finder">${esc(f.worker_name)}</td>
         <td class="td-addr">${esc(f.found_address ?? 'Unknown')}</td>
-        <td class="td-key">${f.vchunk_start != null ? formatIntegerDots(f.vchunk_start) : '—'}</td>
-        <td class="td-key">${f.vchunk_end  != null ? formatIntegerDots(Number(f.vchunk_end) - 1) : '—'}</td>
+        <td class="td-key">${f.vchunk_start != null ? formatBigInt(f.vchunk_start) : '—'}</td>
+        <td class="td-key">${f.vchunk_end  != null ? formatBigInt(String(BigInt(f.vchunk_end) - 1n)) : '—'}</td>
         <td class="td-key">${f.chunk_global != null ? '#' + formatIntegerDots(f.chunk_global) : '—'}</td>
         <td class="td-time">${fmtUtc(f.created_at)}</td>
       </tr>`).join('');
