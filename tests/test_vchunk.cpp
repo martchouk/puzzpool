@@ -270,6 +270,28 @@ TEST_CASE("blocked ranges: insertOrMergeBlockedRange is idempotent", "[vchunk][b
     CHECK(q.getColumn(0).getInt() == 1);
 }
 
+TEST_CASE("blocked ranges: insertOrMergeBlockedRange compacts bridged rows", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Two non-adjacent same-source rows; new interval bridges them without expanding outer bounds
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0),  cpp_int(10), "src");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(20), cpp_int(30), "src");
+    int r = f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(5),  cpp_int(25), "src");
+    CHECK(r == 1); // compaction happened — outer bounds same but row count reduced
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 1); // three inserts collapsed to one row
+
+    SQLite::Statement q2(f.db.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q2.bind(1, f.puzzleId);
+    REQUIRE(q2.executeStep());
+    CHECK(hexToInt(q2.getColumn(0).getString()) == cpp_int(0));
+    CHECK(hexToInt(q2.getColumn(1).getString()) == cpp_int(30));
+}
+
 TEST_CASE("blocked ranges: different sources are not merged together", "[vchunk][blocked]") {
     VChunkFixture f;
     f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0), cpp_int(50), "srcA");

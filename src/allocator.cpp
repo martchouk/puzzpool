@@ -365,8 +365,9 @@ int Allocator::insertOrMergeBlockedRange(int64_t puzzleId, const cpp_int& vStart
         return db_.raw().getChanges(); // 1 = inserted, 0 = already existed
     }
 
-    // If the merged result equals what was already stored, nothing changes
-    if (mergedStart == existStart && mergedEnd == existEnd) return 0;
+    // A single existing row already covers [vStart, vEnd) — nothing to change.
+    // (Multiple rows bridged by the input must still be compacted even if outer bounds match.)
+    if (toDelete.size() == 1 && mergedStart == existStart && mergedEnd == existEnd) return 0;
 
     // Delete overlapping rows, then insert the expanded merged interval
     for (int64_t id : toDelete) {
