@@ -299,22 +299,35 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         virtualStartedJ   = bigToDec(started);
         virtualCompletedJ = bigToDec(completed);
 
-        // Blocked vchunk count and vis entries
+        // Blocked vchunk count and vis entries — merge across sources first so
+        // overlapping imports from different sources are counted as union coverage.
         cpp_int blockedTotal = 0;
         if (!puzzle.virtualChunkSizeKeys.empty()) {
             cpp_int vchunkSize;
             try { vchunkSize = cpp_int(puzzle.virtualChunkSizeKeys); } catch (...) {}
             if (vchunkSize > 0) {
-                int64_t blockedId = -1;
+                // Read all rows sorted by start; ORDER BY is lexicographic on 64-char hex (correct)
                 SQLite::Statement bq(db_.raw(),
                     "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ? ORDER BY start_vchunk ASC");
                 bq.bind(1, puzzle.id);
+                std::vector<std::pair<cpp_int, cpp_int>> rawBlocked;
                 while (bq.executeStep()) {
                     cpp_int vs = hexToInt(bq.getColumn(0).getString());
                     cpp_int ve = hexToInt(bq.getColumn(1).getString());
-                    if (ve <= vs) continue;
+                    if (ve > vs) rawBlocked.emplace_back(vs, ve);
+                }
+                // Merge overlapping/adjacent intervals across all sources
+                std::vector<std::pair<cpp_int, cpp_int>> mergedBlocked;
+                for (auto& [vs, ve] : rawBlocked) {
+                    if (mergedBlocked.empty() || vs > mergedBlocked.back().second)
+                        mergedBlocked.emplace_back(vs, ve);
+                    else
+                        mergedBlocked.back().second = maxBig(mergedBlocked.back().second, ve);
+                }
+                // Sum merged intervals and emit one vis entry each
+                int64_t blockedId = -1;
+                for (auto& [vs, ve] : mergedBlocked) {
                     blockedTotal += (ve - vs);
-                    // Compute normalised key positions for the vis entry
                     long double sNorm = (vs * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
                     long double eNorm = (ve * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
                     if (eNorm > 1.0L) eNorm = 1.0L;
