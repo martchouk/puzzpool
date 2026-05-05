@@ -43,7 +43,7 @@ crow::response PoolService::handleStats(const crow::request& req) {
             out["completed_chunks"]       = 0;
             out["reclaimed_chunks"]       = 0;
             out["total_keys_completed"]   = "0";
-            out["virtual_chunks"] = {{"total", 0}, {"started_vchunks", 0}, {"completed_vchunks", 0}, {"virtual_chunk_size_keys", nullptr}};
+            out["virtual_chunks"] = {{"total", 0}, {"started_vchunks", 0}, {"completed_vchunks", 0}, {"virtual_chunk_size_keys", nullptr}, {"blocked_vchunk_count", "0"}};
             out["shards"]         = out["virtual_chunks"];
             out["workers"]        = json::array();
             out["scores"]         = json::array();
@@ -275,6 +275,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     json virtualTotalJ     = nullptr;
     json virtualStartedJ   = json(0);
     json virtualCompletedJ = json(0);
+    json blockedCountJ     = json("0");
     std::string strategy = puzzle.allocStrategy.empty() ? cfg_.allocStrategyLegacy : puzzle.allocStrategy;
     if (strategy == cfg_.allocStrategyVChunks) {
         virtualTotalJ = bigToDec(puzzle.virtualChunkCount);
@@ -297,13 +298,45 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         }
         virtualStartedJ   = bigToDec(started);
         virtualCompletedJ = bigToDec(completed);
+
+        // Blocked vchunk count and vis entries
+        cpp_int blockedTotal = 0;
+        if (!puzzle.virtualChunkSizeKeys.empty()) {
+            cpp_int vchunkSize;
+            try { vchunkSize = cpp_int(puzzle.virtualChunkSizeKeys); } catch (...) {}
+            if (vchunkSize > 0) {
+                int64_t blockedId = -1;
+                SQLite::Statement bq(db_.raw(),
+                    "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ? ORDER BY start_vchunk ASC");
+                bq.bind(1, puzzle.id);
+                while (bq.executeStep()) {
+                    cpp_int vs = hexToInt(bq.getColumn(0).getString());
+                    cpp_int ve = hexToInt(bq.getColumn(1).getString());
+                    if (ve <= vs) continue;
+                    blockedTotal += (ve - vs);
+                    // Compute normalised key positions for the vis entry
+                    long double sNorm = (vs * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
+                    long double eNorm = (ve * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
+                    if (eNorm > 1.0L) eNorm = 1.0L;
+                    chunksVis.push_back({
+                        {"id", blockedId--},
+                        {"st", "blocked"},
+                        {"w",  nullptr},
+                        {"g",  nullptr},
+                        {"s",  static_cast<double>(sNorm)},
+                        {"e",  static_cast<double>(eNorm)}
+                    });
+                }
+            }
+        }
+        blockedCountJ = bigToDec(blockedTotal);
     } else {
         virtualTotalJ     = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ?");
         virtualStartedJ   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
         virtualCompletedJ = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
     json vchunkSizeJ = puzzle.virtualChunkSizeKeys.empty() ? json(nullptr) : json(puzzle.virtualChunkSizeKeys);
-    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started_vchunks", virtualStartedJ}, {"completed_vchunks", virtualCompletedJ}, {"virtual_chunk_size_keys", vchunkSizeJ}};
+    out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started_vchunks", virtualStartedJ}, {"completed_vchunks", virtualCompletedJ}, {"virtual_chunk_size_keys", vchunkSizeJ}, {"blocked_vchunk_count", blockedCountJ}};
     out["shards"]         = out["virtual_chunks"];
 
     json generations = {{"legacy", 0}, {"affine", 0}, {"feistel", 0}};

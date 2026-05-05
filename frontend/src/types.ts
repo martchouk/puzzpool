@@ -22,7 +22,7 @@
 
 // ── Chunk visualisation entry (chunks_vis array) ──────────────────────────────
 
-export type ChunkStatus = 'completed' | 'FOUND' | 'assigned' | 'reclaimed';
+export type ChunkStatus = 'completed' | 'FOUND' | 'assigned' | 'reclaimed' | 'blocked';
 export type AllocGeneration = 'legacy' | 'affine' | 'feistel' | 'test' | null;
 
 export interface ChunkVis {
@@ -103,10 +103,11 @@ export interface PuzzleListEntry {
 // ── Virtual chunk / shard counts ─────────────────────────────────────────────
 
 export interface VirtualChunks {
-  total: string | number;            // BigInt decimal string (large domains) or 0
-  started_vchunks: string | number;  // virtual chunk spans covered
+  total: string | number;              // BigInt decimal string (large domains) or 0
+  started_vchunks: string | number;   // virtual chunk spans covered
   completed_vchunks: string | number;
   virtual_chunk_size_keys: string | null;
+  blocked_vchunk_count: string | number; // vchunk index spans blocked by imported ranges
 }
 
 // ── Alloc generation counts ───────────────────────────────────────────────────

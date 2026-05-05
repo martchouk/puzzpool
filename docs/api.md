@@ -26,6 +26,7 @@ equivalent arbitrary-precision library — do not coerce them with `Number()` or
 | `virtual_chunks.total` | decimal string \| 0 | Total virtual chunk count |
 | `virtual_chunks.started_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for started jobs |
 | `virtual_chunks.completed_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for completed jobs |
+| `virtual_chunks.blocked_vchunk_count` | decimal string \| 0 | Sum of virtual chunk index spans blocked by imported external ranges |
 | `score.total_keys` | decimal string | Total keys attributed to a worker |
 
 All hex fields (`start_hex`, `end_hex`, etc.) are fixed-width 64-character strings.
@@ -188,7 +189,8 @@ Dashboard data — polled every 5 seconds by the dashboard.
     "total": "78706",
     "started_vchunks": "200",
     "completed_vchunks": "187",
-    "virtual_chunk_size_keys": "1000000"
+    "virtual_chunk_size_keys": "1000000",
+    "blocked_vchunk_count": "512"
   },
   "workers": [
     {
@@ -257,12 +259,12 @@ Dashboard data — polled every 5 seconds by the dashboard.
 **`virtual_chunks` field**
 
 ```json
-{ "virtual_chunks": { "total": "78706", "started_vchunks": "200", "completed_vchunks": "187", "virtual_chunk_size_keys": "1000000" } }
+{ "virtual_chunks": { "total": "78706", "started_vchunks": "200", "completed_vchunks": "187", "virtual_chunk_size_keys": "1000000", "blocked_vchunk_count": "512" } }
 ```
 
 All four fields are decimal strings (may exceed 2^53 for large keyspaces).
 
-For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle. `started_vchunks` is the sum of virtual chunk index spans covered by any live or completed job. `completed_vchunks` is the same sum for completed or FOUND jobs only. To derive keys: `started_vchunks × virtual_chunk_size_keys`.
+For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle. `started_vchunks` is the sum of virtual chunk index spans covered by any live or completed job. `completed_vchunks` is the same sum for completed or FOUND jobs only. `blocked_vchunk_count` is the sum of virtual chunk index spans blocked by ranges imported via `/api/v1/admin/import-ranges` — these are excluded from allocation. To derive keys: `started_vchunks × virtual_chunk_size_keys`.
 
 For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks` and the backward-compatible `shards` alias). `virtual_chunk_size_keys` is `null` for the legacy strategy.
 
