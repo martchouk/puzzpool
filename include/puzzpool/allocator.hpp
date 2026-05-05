@@ -22,8 +22,9 @@ public:
         std::string endHex;
     };
 
-    void ensureAllocatorForPuzzle(int64_t puzzleId);
-    void loadBlockedRanges(int64_t puzzleId);
+    void    ensureAllocatorForPuzzle(int64_t puzzleId);
+    void    loadBlockedRanges(int64_t puzzleId);
+    int     insertOrMergeBlockedRange(int64_t puzzleId, const cpp_int& vStart, const cpp_int& vEnd, const std::string& source);
 
     cpp_int     chooseDefaultVirtualChunkSize(const cpp_int& range) const;
     std::string defaultAllocSeedForPuzzle(const PuzzleRow& p, const std::string& strategy) const;

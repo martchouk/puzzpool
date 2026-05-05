@@ -1,6 +1,7 @@
 #include <puzzpool/service.hpp>
 #include <puzzpool/hex_bigint.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -284,58 +285,53 @@ crow::response PoolService::handleImportRanges(const crow::request& req) {
         cpp_int totalChunks  = puzzle->virtualChunkCount;
         if (totalChunks <= 0) return errorResponse(400, "Puzzle has no virtual chunk count");
 
-        int64_t inserted = 0, alreadyBlocked = 0, invalid = 0;
+        // Step 1: Parse range_ids into vchunk intervals, discarding out-of-bounds ones
+        int64_t invalid = 0;
         json errors = json::array();
-
-        SQLite::Transaction tx(db_.raw());
+        struct Ivl { cpp_int s, e; };
+        std::vector<Ivl> rawIvls;
 
         for (const auto& ridJ : body["range_ids"]) {
             cpp_int rangeId;
             try {
-                if (ridJ.is_string())
-                    rangeId = cpp_int(ridJ.get<std::string>());
-                else if (ridJ.is_number_integer())
-                    rangeId = cpp_int(ridJ.get<int64_t>());
+                if (ridJ.is_string())       rangeId = cpp_int(ridJ.get<std::string>());
+                else if (ridJ.is_number_integer()) rangeId = cpp_int(ridJ.get<int64_t>());
                 else { ++invalid; continue; }
             } catch (...) { ++invalid; continue; }
 
             cpp_int keyStart = base + rangeId * step;
             cpp_int keyEnd   = keyStart + step;
-
             if (keyEnd <= puzzleStart || keyStart >= puzzleEnd) { ++invalid; continue; }
 
-            cpp_int clampedStart = maxBig(keyStart, puzzleStart);
-            cpp_int clampedEnd   = minBig(keyEnd,   puzzleEnd);
-
-            cpp_int vStart = (clampedStart - puzzleStart) / vchunkSize;
-            cpp_int vEnd   = ceilDiv(clampedEnd - puzzleStart, vchunkSize);
+            cpp_int vStart = (maxBig(keyStart, puzzleStart) - puzzleStart) / vchunkSize;
+            cpp_int vEnd   = ceilDiv(minBig(keyEnd, puzzleEnd) - puzzleStart, vchunkSize);
             vStart = maxBig(vStart, cpp_int(0));
             vEnd   = minBig(vEnd,   totalChunks);
-
             if (vEnd <= vStart) { ++invalid; continue; }
+            rawIvls.push_back({vStart, vEnd});
+        }
 
-            std::string vStartHex = intToHex(vStart, 64);
-            std::string vEndHex   = intToHex(vEnd,   64);
+        // Step 2: Sort and merge input intervals before touching the DB
+        std::sort(rawIvls.begin(), rawIvls.end(), [](const Ivl& a, const Ivl& b){ return a.s < b.s; });
+        std::vector<Ivl> merged;
+        for (auto& iv : rawIvls) {
+            if (merged.empty() || iv.s > merged.back().e)
+                merged.push_back(iv);
+            else
+                merged.back().e = maxBig(merged.back().e, iv.e);
+        }
 
+        // Step 3: Persist — each merged interval is folded into same-source existing rows
+        int64_t inserted = 0, alreadyBlocked = 0;
+        SQLite::Transaction tx(db_.raw());
+        for (const auto& iv : merged) {
             try {
-                SQLite::Statement ins(db_.raw(), R"SQL(
-                    INSERT OR IGNORE INTO blocked_vchunk_ranges
-                        (puzzle_id, start_vchunk, end_vchunk, source)
-                    VALUES (?, ?, ?, ?)
-                )SQL");
-                ins.bind(1, puzzleId);
-                ins.bind(2, vStartHex);
-                ins.bind(3, vEndHex);
-                ins.bind(4, source);
-                ins.exec();
-                if (db_.raw().getChanges() > 0) ++inserted;
-                else ++alreadyBlocked;
+                int r = allocator_.insertOrMergeBlockedRange(puzzleId, iv.s, iv.e, source);
+                if (r > 0) ++inserted; else ++alreadyBlocked;
             } catch (const std::exception& e) {
-                ++invalid;
                 errors.push_back(std::string(e.what()));
             }
         }
-
         tx.commit();
         allocator_.loadBlockedRanges(puzzleId);
 
