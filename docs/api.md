@@ -373,6 +373,69 @@ Force-reclaim all timed-out chunks immediately, without waiting for the backgrou
 
 ---
 
+### POST /api/v1/admin/import-ranges
+
+Import externally-searched key ranges and mark the corresponding virtual chunks as
+blocked. Blocked virtual chunks are never assigned to workers.
+
+The conversion formula maps each integer `range_id` to a contiguous key range:
+- `key_start = base + range_id * step`
+- `key_end   = key_start + step`
+
+These key bounds are converted to virtual chunk indices using the puzzle's
+`virtual_chunk_size_keys` and stored in `blocked_vchunk_ranges`. The endpoint is
+idempotent: importing the same `(puzzle_id, computed vchunk range, source)` tuple
+twice is safe.
+
+**Request**
+```json
+{
+  "puzzle_id":  1,
+  "source":     "btcpuzzle.info",
+  "base_hex":   "0000000000000000000000000000000000000000000000000000000000000001",
+  "step":       "33554432",
+  "range_ids":  ["0", "1", "42", "99"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `puzzle_id` | integer | yes | ID of the target puzzle (must use `virtual_random_chunks_v1`) |
+| `source` | string | yes | Label identifying the origin of the data (e.g. `"btcpuzzle.info"`) |
+| `base_hex` | hex string | yes | Key value corresponding to `range_id = 0` |
+| `step` | decimal string or integer | yes | Number of keys per range unit |
+| `range_ids` | array of decimal strings or integers | yes | Range identifiers to block |
+
+**Response 200**
+```json
+{
+  "ok": true,
+  "inserted_ranges": 3,
+  "already_blocked": 1,
+  "invalid": 0,
+  "errors": []
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `inserted_ranges` | Number of new rows written to `blocked_vchunk_ranges` |
+| `already_blocked` | Number of range_ids that were already present (idempotent duplicates) |
+| `invalid` | Number of range_ids skipped (out of puzzle bounds, unparseable, etc.) |
+| `errors` | Array of error strings from any DB-level failures |
+
+**Response 400** — invalid request
+```json
+{ "error": "Puzzle does not use virtual_random_chunks_v1 strategy" }
+```
+
+**Response 404** — puzzle not found
+```json
+{ "error": "Puzzle not found" }
+```
+
+---
+
 ### POST /api/v1/admin/activate-puzzle
 
 Switch the active puzzle. The previously active puzzle is deactivated.

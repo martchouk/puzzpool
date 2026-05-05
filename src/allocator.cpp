@@ -40,6 +40,7 @@ void Allocator::ensureAllocatorForPuzzle(int64_t puzzleId) {
             seedVirtualChunks(puzzleId, p->startHex, p->endHex,
                               defaultAllocSeedForPuzzle(*p, cfg_.allocStrategyVChunks), desiredDefault);
         }
+        loadBlockedRanges(puzzleId);
     } else {
         if (db_.sectorCount(puzzleId) == 0) {
             seedSectors(puzzleId, p->startHex, p->endHex);
@@ -321,6 +322,47 @@ void Allocator::advanceBootstrapStage(int64_t puzzleId, int stage) {
     q.exec();
 }
 
+void Allocator::loadBlockedRanges(int64_t puzzleId) {
+    SQLite::Statement q(db_.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges "
+        "WHERE puzzle_id = ? ORDER BY start_vchunk ASC");
+    q.bind(1, puzzleId);
+    std::vector<std::pair<cpp_int, cpp_int>> raw;
+    while (q.executeStep()) {
+        cpp_int s = hexToInt(q.getColumn(0).getString());
+        cpp_int e = hexToInt(q.getColumn(1).getString());
+        if (e > s) raw.emplace_back(s, e);
+    }
+    // Merge overlapping/adjacent intervals (input is already sorted by start)
+    std::vector<std::pair<cpp_int, cpp_int>> merged;
+    for (auto& [s, e] : raw) {
+        if (merged.empty() || s > merged.back().second)
+            merged.emplace_back(s, e);
+        else
+            merged.back().second = maxBig(merged.back().second, e);
+    }
+    blockedRanges_[puzzleId] = std::move(merged);
+}
+
+bool Allocator::overlapsBlockedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
+    auto it = blockedRanges_.find(puzzleId);
+    if (it == blockedRanges_.end()) return false;
+    const auto& v = it->second;
+    if (v.empty()) return false;
+    // Find first interval with start >= our start
+    auto pos = std::lower_bound(v.begin(), v.end(),
+        std::make_pair(start, cpp_int(0)),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    // Check interval before pos: its end might reach into our range
+    if (pos != v.begin()) {
+        --pos;
+        if (pos->second > start) return true;
+        ++pos;
+    }
+    // Check interval at pos: overlaps if its start is before our end
+    return pos != v.end() && pos->first < endExclusive;
+}
+
 bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
     if (start < 0 || endExclusive <= start) return false;
     std::string startHexPad = intToHex(start, 64);
@@ -340,7 +382,8 @@ bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_in
     q.bind(1, puzzleId);
     q.bind(2, endHexPad);
     q.bind(3, startHexPad);
-    return !q.executeStep();
+    if (q.executeStep()) return false;
+    return !overlapsBlockedInMemory(puzzleId, start, endExclusive);
 }
 
 cpp_int Allocator::normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks) {

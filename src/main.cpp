@@ -95,6 +95,12 @@ int main() {
             return service.handleAdminReclaim();
         });
 
+        CROW_ROUTE(app, "/api/v1/admin/import-ranges").methods(crow::HTTPMethod::POST)
+        ([&](const crow::request& req) {
+            if (auto denied = adminGuard(req)) return std::move(*denied);
+            return service.handleImportRanges(req);
+        });
+
         std::thread reclaimer([&service] {
             using namespace std::chrono_literals;
             for (;;) {
