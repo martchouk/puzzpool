@@ -17,6 +17,8 @@ import {
 
 let chunksVis: ChunkVis[] = [];
 let allocGenerationFilter = 'feistel';
+let hmLayerFilter = 'native';
+let hilLayerFilter = 'native';
 let heatmapBuckets: ReturnType<typeof drawHeatmap> = [];
 let pendingActivateId: number | null = null;
 let lastPuzzles: (PuzzleListEntry & { active: boolean | number })[] = [];
@@ -45,11 +47,17 @@ function getFilteredChunks(): ChunkVis[] {
   return nonBlocked.filter(c => (c.g ?? 'legacy') === allocGenerationFilter);
 }
 
+function applyLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
+  if (filter === 'native')  return chunks.filter(c => c.st !== 'blocked');
+  if (filter === 'blocked') return chunks.filter(c => c.st === 'blocked');
+  return chunks;
+}
+
 function redrawAll(): void {
   draw1DBar(ksCanvas, chunksVis);
-  heatmapBuckets = drawHeatmap(hmCanvas, chunksVis);
+  heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
   drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
-  drawHilbert(hilCanvas, chunksVis);
+  drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
 }
 
 // ── Stage indicator ───────────────────────────────────────────────────────────
@@ -206,6 +214,42 @@ function initAllocatorGenerationFilter(): void {
       allocGenerationFilter = next;
       syncButtons();
       drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
+    });
+  });
+}
+
+function initHmLayerFilter(): void {
+  const root = document.getElementById('hm-layer-filter');
+  if (!root) return;
+  const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.layer === hmLayerFilter);
+  });
+  sync();
+  root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.layer ?? 'native';
+      if (next === hmLayerFilter) return;
+      hmLayerFilter = next;
+      sync();
+      heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
+    });
+  });
+}
+
+function initHilLayerFilter(): void {
+  const root = document.getElementById('hil-layer-filter');
+  if (!root) return;
+  const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.layer === hilLayerFilter);
+  });
+  sync();
+  root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.layer ?? 'native';
+      if (next === hilLayerFilter) return;
+      hilLayerFilter = next;
+      sync();
+      drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
     });
   });
 }
@@ -433,6 +477,8 @@ new ResizeObserver(() => {
 
 requestAnimationFrame(() => {
   initAllocatorGenerationFilter();
+  initHmLayerFilter();
+  initHilLayerFilter();
   void updateDashboard();
   setInterval(() => { void updateDashboard(); }, 5000);
 });

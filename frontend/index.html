@@ -820,7 +820,13 @@
         </div>
 
         <div class="heatmap-wrap">
-            <div class="keyspace-label">Night Sky Heatmap</div>
+            <div class="keyspace-label">Night Sky Heatmap
+                <div class="alloc-filter-group" id="hm-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                </div>
+            </div>
             <div class="canvas-2d-box">
                 <canvas id="heatmap-canvas"></canvas>
             </div>
@@ -912,7 +918,13 @@
         </div>
 
         <div class="hilbert-wrap">
-            <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)</div>
+            <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)
+                <div class="alloc-filter-group" id="hil-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                </div>
+            </div>
             <div class="canvas-2d-box">
                 <canvas id="hilbert-canvas"></canvas>
             </div>
