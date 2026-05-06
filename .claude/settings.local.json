@@ -31,7 +31,10 @@
       "Bash(brew info *)",
       "Bash(ctest --output-on-failure -V)",
       "Bash(ctest *)",
-      "Bash(awk '/^    <script>/{found=1} found{count++} END{print \"JS lines: \" count}' /Users/john/git/puzzpool/public/index.html)"
+      "Bash(awk '/^    <script>/{found=1} found{count++} END{print \"JS lines: \" count}' /Users/john/git/puzzpool/public/index.html)",
+      "Bash(npm run *)",
+      "Bash(GIT_SSH_COMMAND=\"ssh -o ConnectTimeout=30\" git push *)",
+      "Bash(gh auth *)"
     ]
   }
 }

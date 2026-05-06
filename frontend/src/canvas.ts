@@ -144,9 +144,9 @@ export function drawHeatmap(
     const cx = col * cellW + cellW / 2;
     const cy = row * cellH + cellH / 2;
     const loadNorm = Math.log(bucket.total + 1) / Math.log(maxBucketLoad + 1);
-    const radiusBase = Math.min(4.5, Math.max(1.6, cellW * 1.15));
+    const radiusBase = Math.max(1, Math.min(2.5, W / 500));
     const radiusJitter = 0.85 + ((bucket.sizeJitter & 0xff) / 255) * 0.45;
-    const r = radiusBase * (0.65 + loadNorm * 0.9) * radiusJitter;
+    const r = Math.min(2.5, radiusBase * (0.65 + loadNorm * 0.9) * radiusJitter);
     const dx = ((((bucket.offsetJitter >>> 0) & 0xff) / 255) - 0.5) * cellW * 0.22;
     const dy = ((((bucket.offsetJitter >>> 8) & 0xff) / 255) - 0.5) * cellH * 0.22;
     ctx.fillStyle = baseColor;
@@ -217,7 +217,7 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
       if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) continue;
       ctx.beginPath();
       ctx.arc(hx * cellSize + cellSize / 2, hy * cellSize + cellSize / 2,
-              Math.min(4, Math.max(1.5, cellSize * 1.2)), 0, Math.PI * 2);
+              Math.max(1, Math.min(2.5, size / 500)), 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -467,10 +467,13 @@ export function exportNormalizedGapMetrics(chunks: ChunkVis[]) {
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
 export function formatTooltipLine(c: ChunkVis): string {
-  const status = c.st === 'FOUND' ? '🔑 FOUND' :
-                 c.st === 'assigned' ? '⚡ In Progress' :
-                 c.st === 'completed' ? '✓ Done' : '↩ Reclaimed';
-  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span> &nbsp;Chunk #${c.id} &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
+  const status = c.st === 'FOUND'      ? '🔑 FOUND' :
+                 c.st === 'assigned'   ? '⚡ In Progress' :
+                 c.st === 'completed'  ? '✓ Done' :
+                 c.st === 'blocked'    ? '⊘ Blocked' : '↩ Reclaimed';
+  const idPart = c.st === 'blocked' ? '' : ` &nbsp;Chunk #${c.id}`;
+  const wPart  = c.st === 'blocked' ? '' : ` &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
+  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span>${idPart}${wPart}`;
 }
 
 export function showTooltip(tooltipEl: HTMLElement, e: MouseEvent, hits: ChunkVis[]): void {

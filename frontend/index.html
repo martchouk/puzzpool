@@ -697,8 +697,8 @@
             gap: 0.35rem;
             background: rgba(255,255,255,0.02);
             border: 1px solid var(--border-default);
-            border-radius: 999px;
-            padding: 0.25rem;
+            border-radius: 9px;
+            padding: 0.2rem;
         }
 
         .alloc-filter-btn {
@@ -710,8 +710,8 @@
             font-size: 0.72rem;
             font-weight: 600;
             letter-spacing: 0.04em;
-            padding: 0.38rem 0.8rem;
-            border-radius: 999px;
+            padding: 0.24rem 0.6rem;
+            border-radius: 6px;
             cursor: pointer;
             transition: var(--transition);
         }
@@ -820,7 +820,13 @@
         </div>
 
         <div class="heatmap-wrap">
-            <div class="keyspace-label">Night Sky Heatmap</div>
+            <div class="keyspace-label">Night Sky Heatmap
+                <div class="alloc-filter-group" id="hm-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                </div>
+            </div>
             <div class="canvas-2d-box">
                 <canvas id="heatmap-canvas"></canvas>
             </div>
@@ -912,7 +918,13 @@
         </div>
 
         <div class="hilbert-wrap">
-            <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)</div>
+            <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)
+                <div class="alloc-filter-group" id="hil-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                </div>
+            </div>
             <div class="canvas-2d-box">
                 <canvas id="hilbert-canvas"></canvas>
             </div>
