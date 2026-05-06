@@ -467,10 +467,13 @@ export function exportNormalizedGapMetrics(chunks: ChunkVis[]) {
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
 export function formatTooltipLine(c: ChunkVis): string {
-  const status = c.st === 'FOUND' ? '🔑 FOUND' :
-                 c.st === 'assigned' ? '⚡ In Progress' :
-                 c.st === 'completed' ? '✓ Done' : '↩ Reclaimed';
-  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span> &nbsp;Chunk #${c.id} &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
+  const status = c.st === 'FOUND'      ? '🔑 FOUND' :
+                 c.st === 'assigned'   ? '⚡ In Progress' :
+                 c.st === 'completed'  ? '✓ Done' :
+                 c.st === 'blocked'    ? '⊘ Blocked' : '↩ Reclaimed';
+  const idPart = c.st === 'blocked' ? '' : ` &nbsp;Chunk #${c.id}`;
+  const wPart  = c.st === 'blocked' ? '' : ` &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
+  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span>${idPart}${wPart}`;
 }
 
 export function showTooltip(tooltipEl: HTMLElement, e: MouseEvent, hits: ChunkVis[]): void {

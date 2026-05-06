@@ -463,7 +463,7 @@ hilCanvas.addEventListener('mousemove', (e: MouseEvent) => {
   const totalCells = HILBERT_N * HILBERT_N;
   const cell_s     = index / totalCells;
   const cell_e     = (index + 1) / totalCells;
-  showTooltip(tooltip, e, chunksVis.filter(c => c.s <= cell_e && c.e >= cell_s));
+  showTooltip(tooltip, e, applyLayerFilter(chunksVis, hilLayerFilter).filter(c => c.s <= cell_e && c.e >= cell_s));
 });
 hilCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
