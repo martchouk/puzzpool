@@ -270,8 +270,6 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
             {"e",  static_cast<double>(e)}
         });
     }
-    out["chunks_vis"] = chunksVis;
-
     json virtualTotalJ     = nullptr;
     json virtualStartedJ   = json(0);
     json virtualCompletedJ = json(0);
@@ -348,6 +346,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         virtualStartedJ   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
         virtualCompletedJ = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
+    out["chunks_vis"] = chunksVis;
     json vchunkSizeJ = puzzle.virtualChunkSizeKeys.empty() ? json(nullptr) : json(puzzle.virtualChunkSizeKeys);
     out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started_vchunks", virtualStartedJ}, {"completed_vchunks", virtualCompletedJ}, {"virtual_chunk_size_keys", vchunkSizeJ}, {"blocked_vchunk_count", blockedCountJ}};
     out["shards"]         = out["virtual_chunks"];
