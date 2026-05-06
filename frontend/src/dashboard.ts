@@ -239,10 +239,22 @@ async function updateDashboard(): Promise<void> {
 
       const totalP = BigInt(data.puzzle.total_keys);
       const comp   = BigInt(data.total_keys_completed);
+      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null, blocked_vchunk_count: 0 };
       if (totalP > 0n && comp >= 0n) {
         const pctBig = (comp * 10n ** 18n) / totalP;
-        document.getElementById('completed-keys-pct')!.textContent =
-          formatPrecisePercentage(Number(pctBig) / 10 ** 16);
+        let pctDisplay = formatPrecisePercentage(Number(pctBig) / 10 ** 16);
+        const blockedVchunks = String(vchunks.blocked_vchunk_count ?? 0);
+        const vchunkSize = vchunks.virtual_chunk_size_keys;
+        if (blockedVchunks !== '0' && vchunkSize) {
+          try {
+            const blockedKeys = BigInt(blockedVchunks) * BigInt(vchunkSize);
+            if (blockedKeys > 0n) {
+              const pct2Big = ((comp + blockedKeys) * 10n ** 18n) / totalP;
+              pctDisplay += ' / ' + formatPrecisePercentage(Number(pct2Big) / 10 ** 16);
+            }
+          } catch { /* ignore if blocked count not parseable as BigInt */ }
+        }
+        document.getElementById('completed-keys-pct')!.textContent = pctDisplay;
       }
 
       const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
@@ -252,8 +264,6 @@ async function updateDashboard(): Promise<void> {
 
       document.getElementById('puzzle-total-keys')!.innerHTML =
         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
-
-      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null, blocked_vchunk_count: 0 };
       if (vchunks.total !== 0 && vchunks.total !== '0') {
         const blockedCount = vchunks.blocked_vchunk_count ?? 0;
         const w = (s: string) => `<span style="color:#fff">${s}</span>`;
