@@ -177,6 +177,145 @@ TEST_CASE("reclaimTimedOutChunks: returns number of reclaimed chunks", "[vchunk]
     CHECK(count == 2);
 }
 
+// ── blocked vchunk ranges ──────────────────────────────────────────────────────
+
+TEST_CASE("blocked ranges: all vchunks blocked means no work available", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Block the entire range [0, 100) covering all 100 vchunks
+    SQLite::Statement ins(f.db.raw(),
+        "INSERT INTO blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source) VALUES (?,?,?,?)");
+    ins.bind(1, f.puzzleId);
+    ins.bind(2, intToHex(cpp_int(0), 64));
+    ins.bind(3, intToHex(cpp_int(100), 64));
+    ins.bind(4, "test");
+    ins.exec();
+    f.alloc.loadBlockedRanges(f.puzzleId);
+
+    auto r = f.ws.assignWork("alice", 1.0, "v1", {}, {});
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("blocked ranges: partial block still assigns from free vchunks", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Block vchunks [0, 99) — only vchunk 99 remains free
+    SQLite::Statement ins(f.db.raw(),
+        "INSERT INTO blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source) VALUES (?,?,?,?)");
+    ins.bind(1, f.puzzleId);
+    ins.bind(2, intToHex(cpp_int(0), 64));
+    ins.bind(3, intToHex(cpp_int(99), 64));
+    ins.bind(4, "test");
+    ins.exec();
+    f.alloc.loadBlockedRanges(f.puzzleId);
+
+    auto r = f.ws.assignWork("alice", 1.0, "v1", {}, {});
+    REQUIRE(r.ok);
+    // Assigned range must fall within vchunk 99: keys [99*1000, 100*1000) relative to START
+    cpp_int puzzleStart = hexToInt(VChunkFixture::START);
+    cpp_int assignedStart = hexToInt(r.startHex);
+    cpp_int assignedEnd   = hexToInt(r.endHex);
+    CHECK(assignedStart >= puzzleStart + 99 * 1000);
+    CHECK(assignedEnd   <= puzzleStart + 100 * 1000);
+}
+
+TEST_CASE("blocked ranges: insertOrMergeBlockedRange merges adjacent same-source rows", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Insert [0, 50), then insert adjacent [50, 100) — should collapse to one row [0, 100)
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0),  cpp_int(50),  "src");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(50), cpp_int(100), "src");
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 1);
+
+    SQLite::Statement q2(f.db.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q2.bind(1, f.puzzleId);
+    REQUIRE(q2.executeStep());
+    CHECK(hexToInt(q2.getColumn(0).getString()) == cpp_int(0));
+    CHECK(hexToInt(q2.getColumn(1).getString()) == cpp_int(100));
+}
+
+TEST_CASE("blocked ranges: insertOrMergeBlockedRange merges overlapping rows", "[vchunk][blocked]") {
+    VChunkFixture f;
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(10), cpp_int(60), "src");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(40), cpp_int(90), "src");
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 1);
+
+    SQLite::Statement q2(f.db.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q2.bind(1, f.puzzleId);
+    REQUIRE(q2.executeStep());
+    CHECK(hexToInt(q2.getColumn(0).getString()) == cpp_int(10));
+    CHECK(hexToInt(q2.getColumn(1).getString()) == cpp_int(90));
+}
+
+TEST_CASE("blocked ranges: insertOrMergeBlockedRange is idempotent", "[vchunk][blocked]") {
+    VChunkFixture f;
+    int r1 = f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(5), cpp_int(15), "src");
+    int r2 = f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(5), cpp_int(15), "src");
+    CHECK(r1 == 1);
+    CHECK(r2 == 0);
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 1);
+}
+
+TEST_CASE("blocked ranges: insertOrMergeBlockedRange compacts bridged rows", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Two non-adjacent same-source rows; new interval bridges them without expanding outer bounds
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0),  cpp_int(10), "src");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(20), cpp_int(30), "src");
+    int r = f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(5),  cpp_int(25), "src");
+    CHECK(r == 1); // compaction happened — outer bounds same but row count reduced
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 1); // three inserts collapsed to one row
+
+    SQLite::Statement q2(f.db.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q2.bind(1, f.puzzleId);
+    REQUIRE(q2.executeStep());
+    CHECK(hexToInt(q2.getColumn(0).getString()) == cpp_int(0));
+    CHECK(hexToInt(q2.getColumn(1).getString()) == cpp_int(30));
+}
+
+TEST_CASE("blocked ranges: different sources are not merged together", "[vchunk][blocked]") {
+    VChunkFixture f;
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0), cpp_int(50), "srcA");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0), cpp_int(50), "srcB");
+
+    SQLite::Statement q(f.db.raw(),
+        "SELECT COUNT(*) FROM blocked_vchunk_ranges WHERE puzzle_id = ?");
+    q.bind(1, f.puzzleId);
+    REQUIRE(q.executeStep());
+    CHECK(q.getColumn(0).getInt() == 2);
+}
+
+TEST_CASE("blocked ranges: loadBlockedRanges merges adjacent rows in memory", "[vchunk][blocked]") {
+    VChunkFixture f;
+    // Two adjacent rows in DB (different sources so not merged at DB level)
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(0),  cpp_int(50),  "srcA");
+    f.alloc.insertOrMergeBlockedRange(f.puzzleId, cpp_int(50), cpp_int(100), "srcB");
+    f.alloc.loadBlockedRanges(f.puzzleId);
+
+    // Combined they cover all 100 vchunks — no work should be available
+    auto r = f.ws.assignWork("alice", 1.0, "v1", {}, {});
+    CHECK_FALSE(r.ok);
+}
+
 // ── large domain (> INT64_MAX chunk count) ────────────────────────────────────
 
 struct LargeDomainFixture {

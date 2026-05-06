@@ -8,6 +8,7 @@ export const CHUNK_COLORS: Record<ChunkStatus, string> = {
   'FOUND':     '#f36',
   'assigned':  '#0cf',
   'reclaimed': '#b80',
+  'blocked':   '#fff',
 };
 
 export const CHUNK_GLOW_COLORS: Record<ChunkStatus, string> = {
@@ -15,6 +16,7 @@ export const CHUNK_GLOW_COLORS: Record<ChunkStatus, string> = {
   'FOUND':     'rgba(255, 51, 102, 1.0)',
   'assigned':  'rgba(0, 204, 255, 0.5)',
   'reclaimed': 'rgba(255, 187, 0, 0.3)',
+  'blocked':   'rgba(255, 255, 255, 0.55)',
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -32,7 +34,7 @@ export function draw1DBar(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const order: ChunkStatus[] = ['completed', 'reclaimed', 'assigned', 'FOUND'];
+  const order: ChunkStatus[] = ['completed', 'reclaimed', 'assigned', 'FOUND', 'blocked'];
   for (const status of order) {
     ctx.fillStyle = CHUNK_COLORS[status];
     for (const c of chunks) {
@@ -51,6 +53,7 @@ interface Bucket {
   assigned: number;
   reclaimed: number;
   FOUND: number;
+  blocked: number;
   sizeJitter: number;
   offsetJitter: number;
 }
@@ -84,7 +87,7 @@ export function buildHeatmapBuckets(chunks: ChunkVis[], totalCells: number): (Bu
     const hp = chunkHashPoint(c, totalCells);
     let bucket = buckets[hp.index];
     if (!bucket) {
-      bucket = { hits: [], total: 0, completed: 0, assigned: 0, reclaimed: 0, FOUND: 0,
+      bucket = { hits: [], total: 0, completed: 0, assigned: 0, reclaimed: 0, FOUND: 0, blocked: 0,
                  sizeJitter: hp.sizeJitter, offsetJitter: hp.offsetJitter };
       buckets[hp.index] = bucket;
     }
@@ -94,12 +97,14 @@ export function buildHeatmapBuckets(chunks: ChunkVis[], totalCells: number): (Bu
     else if (c.st === 'assigned') bucket.assigned++;
     else if (c.st === 'reclaimed') bucket.reclaimed++;
     else if (c.st === 'FOUND') bucket.FOUND++;
+    else if (c.st === 'blocked') bucket.blocked++;
   }
   return buckets;
 }
 
 function bucketDominantStatus(bucket: Bucket | undefined): ChunkStatus | null {
   if (!bucket) return null;
+  if (bucket.blocked > 0) return 'blocked';
   if (bucket.FOUND > 0) return 'FOUND';
   if (bucket.assigned > 0) return 'assigned';
   if (bucket.completed > 0) return 'completed';
@@ -202,7 +207,7 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, size, size);
   ctx.globalCompositeOperation = 'lighter';
-  const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND'];
+  const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND', 'blocked'];
   for (const status of order) {
     ctx.fillStyle = CHUNK_GLOW_COLORS[status];
     for (const c of chunks) {

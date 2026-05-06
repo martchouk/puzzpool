@@ -26,6 +26,7 @@ equivalent arbitrary-precision library — do not coerce them with `Number()` or
 | `virtual_chunks.total` | decimal string \| 0 | Total virtual chunk count |
 | `virtual_chunks.started_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for started jobs |
 | `virtual_chunks.completed_vchunks` | decimal string \| 0 | Sum of virtual chunk index spans for completed jobs |
+| `virtual_chunks.blocked_vchunk_count` | decimal string \| 0 | Sum of virtual chunk index spans blocked by imported external ranges |
 | `score.total_keys` | decimal string | Total keys attributed to a worker |
 
 All hex fields (`start_hex`, `end_hex`, etc.) are fixed-width 64-character strings.
@@ -188,7 +189,8 @@ Dashboard data — polled every 5 seconds by the dashboard.
     "total": "78706",
     "started_vchunks": "200",
     "completed_vchunks": "187",
-    "virtual_chunk_size_keys": "1000000"
+    "virtual_chunk_size_keys": "1000000",
+    "blocked_vchunk_count": "512"
   },
   "workers": [
     {
@@ -257,12 +259,12 @@ Dashboard data — polled every 5 seconds by the dashboard.
 **`virtual_chunks` field**
 
 ```json
-{ "virtual_chunks": { "total": "78706", "started_vchunks": "200", "completed_vchunks": "187", "virtual_chunk_size_keys": "1000000" } }
+{ "virtual_chunks": { "total": "78706", "started_vchunks": "200", "completed_vchunks": "187", "virtual_chunk_size_keys": "1000000", "blocked_vchunk_count": "512" } }
 ```
 
 All four fields are decimal strings (may exceed 2^53 for large keyspaces).
 
-For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle. `started_vchunks` is the sum of virtual chunk index spans covered by any live or completed job. `completed_vchunks` is the same sum for completed or FOUND jobs only. To derive keys: `started_vchunks × virtual_chunk_size_keys`.
+For `virtual_random_chunks_v1`: `total` is the total number of virtual chunks in the puzzle. `started_vchunks` is the sum of virtual chunk index spans covered by any live or completed job. `completed_vchunks` is the same sum for completed or FOUND jobs only. `blocked_vchunk_count` is the sum of virtual chunk index spans blocked by ranges imported via `/api/v1/admin/import-ranges` — these are excluded from allocation. To derive keys: `started_vchunks × virtual_chunk_size_keys`.
 
 For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks` and the backward-compatible `shards` alias). `virtual_chunk_size_keys` is `null` for the legacy strategy.
 
@@ -370,6 +372,69 @@ Force-reclaim all timed-out chunks immediately, without waiting for the backgrou
 ```
 
 `reclaimed` is the number of chunks whose status was changed to `'reclaimed'`.
+
+---
+
+### POST /api/v1/admin/import-ranges
+
+Import externally-searched key ranges and mark the corresponding virtual chunks as
+blocked. Blocked virtual chunks are never assigned to workers.
+
+The conversion formula maps each integer `range_id` to a contiguous key range:
+- `key_start = base + range_id * step`
+- `key_end   = key_start + step`
+
+These key bounds are converted to virtual chunk indices using the puzzle's
+`virtual_chunk_size_keys` and stored in `blocked_vchunk_ranges`. The endpoint is
+idempotent: importing the same `(puzzle_id, computed vchunk range, source)` tuple
+twice is safe.
+
+**Request**
+```json
+{
+  "puzzle_id":  1,
+  "source":     "btcpuzzle.info",
+  "base_hex":   "0000000000000000000000000000000000000000000000000000000000000001",
+  "step":       "33554432",
+  "range_ids":  ["0", "1", "42", "99"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `puzzle_id` | integer | yes | ID of the target puzzle (must use `virtual_random_chunks_v1`) |
+| `source` | string | yes | Label identifying the origin of the data (e.g. `"btcpuzzle.info"`) |
+| `base_hex` | hex string | yes | Key value corresponding to `range_id = 0` |
+| `step` | decimal string or integer | yes | Number of keys per range unit |
+| `range_ids` | array of decimal strings or integers | yes | Range identifiers to block |
+
+**Response 200**
+```json
+{
+  "ok": true,
+  "inserted_ranges": 3,
+  "already_blocked": 1,
+  "invalid": 0,
+  "errors": []
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `inserted_ranges` | Number of new rows written to `blocked_vchunk_ranges` |
+| `already_blocked` | Number of range_ids that were already present (idempotent duplicates) |
+| `invalid` | Number of range_ids skipped (out of puzzle bounds, unparseable, etc.) |
+| `errors` | Array of error strings from any DB-level failures |
+
+**Response 400** — invalid request
+```json
+{ "error": "Puzzle does not use virtual_random_chunks_v1 strategy" }
+```
+
+**Response 404** — puzzle not found
+```json
+{ "error": "Puzzle not found" }
+```
 
 ---
 

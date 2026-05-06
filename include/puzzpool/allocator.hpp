@@ -4,8 +4,11 @@
 #include <puzzpool/types.hpp>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace puzzpool {
 
@@ -19,7 +22,9 @@ public:
         std::string endHex;
     };
 
-    void ensureAllocatorForPuzzle(int64_t puzzleId);
+    void    ensureAllocatorForPuzzle(int64_t puzzleId);
+    void    loadBlockedRanges(int64_t puzzleId);
+    int     insertOrMergeBlockedRange(int64_t puzzleId, const cpp_int& vStart, const cpp_int& vEnd, const std::string& source);
 
     cpp_int     chooseDefaultVirtualChunkSize(const cpp_int& range) const;
     std::string defaultAllocSeedForPuzzle(const PuzzleRow& p, const std::string& strategy) const;
@@ -47,6 +52,7 @@ private:
     void                setAllocCursor(int64_t puzzleId, const cpp_int& cursor);
     void                advanceBootstrapStage(int64_t puzzleId, int stage);
     bool                rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
+    bool                overlapsBlockedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
     cpp_int             normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks);
 
     std::optional<WorkAssignResult> assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
@@ -63,6 +69,7 @@ private:
 
     PoolDb&       db_;
     const Config& cfg_;
+    std::map<int64_t, std::vector<std::pair<cpp_int, cpp_int>>> blockedRanges_;
 };
 
 } // namespace puzzpool

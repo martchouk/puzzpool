@@ -32,6 +32,7 @@ public:
     crow::response handleSetTestChunk(const crow::request& req);
     crow::response handleAdminPuzzles();
     crow::response handleAdminReclaim();
+    crow::response handleImportRanges(const crow::request& req);
 
     int reclaimTimedOutChunks();
 

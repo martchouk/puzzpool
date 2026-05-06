@@ -193,3 +193,47 @@ TEST_CASE("handleStats: no puzzle_id returns 200", "[handler][validation]") {
     crow::request req;
     CHECK(svc.handleStats(req).code == 200);
 }
+
+// ── blocked_vchunk_count union semantics ──────────────────────────────────────
+
+TEST_CASE("handleStats: blocked_vchunk_count is cross-source union, not sum", "[handler][blocked]") {
+    Config cfg = memConfig();
+    PoolService svc{cfg};
+
+    // Create a vchunk puzzle: keys [1, 100001), chunk size 1000 → 100 vchunks
+    auto pr = svc.handleSetPuzzle(body(R"({
+        "name": "union-test",
+        "start_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+        "end_hex": "00000000000000000000000000000000000000000000000000000000000186a1",
+        "alloc_strategy": "virtual_random_chunks_v1",
+        "virtual_chunk_size_keys": "1000"
+    })"));
+    REQUIRE(pr.code == 200);
+    int64_t pid = json::parse(pr.body)["puzzle"]["id"].get<int64_t>();
+
+    // Source A covers vchunks [0, 10)  (range_ids 0..9, step=1000)
+    auto ia = svc.handleImportRanges(body(json{
+        {"puzzle_id", pid}, {"source", "A"},
+        {"base_hex", "0000000000000000000000000000000000000000000000000000000000000001"},
+        {"step", "1000"},
+        {"range_ids", {0,1,2,3,4,5,6,7,8,9}}
+    }.dump()));
+    REQUIRE(ia.code == 200);
+
+    // Source B covers vchunks [5, 15) — overlaps A in [5, 10)
+    auto ib = svc.handleImportRanges(body(json{
+        {"puzzle_id", pid}, {"source", "B"},
+        {"base_hex", "0000000000000000000000000000000000000000000000000000000000000001"},
+        {"step", "1000"},
+        {"range_ids", {5,6,7,8,9,10,11,12,13,14}}
+    }.dump()));
+    REQUIRE(ib.code == 200);
+
+    // Union is [0, 15) = 15 vchunks; raw sum (A:10 + B:10) would be 20
+    crow::request req;
+    auto sr = svc.handleStats(req);
+    REQUIRE(sr.code == 200);
+    auto sj = json::parse(sr.body);
+    std::string count = sj["virtual_chunks"]["blocked_vchunk_count"].get<std::string>();
+    CHECK(count == "15");
+}

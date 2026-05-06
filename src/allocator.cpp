@@ -40,6 +40,7 @@ void Allocator::ensureAllocatorForPuzzle(int64_t puzzleId) {
             seedVirtualChunks(puzzleId, p->startHex, p->endHex,
                               defaultAllocSeedForPuzzle(*p, cfg_.allocStrategyVChunks), desiredDefault);
         }
+        loadBlockedRanges(puzzleId);
     } else {
         if (db_.sectorCount(puzzleId) == 0) {
             seedSectors(puzzleId, p->startHex, p->endHex);
@@ -321,6 +322,111 @@ void Allocator::advanceBootstrapStage(int64_t puzzleId, int stage) {
     q.exec();
 }
 
+int Allocator::insertOrMergeBlockedRange(int64_t puzzleId, const cpp_int& vStart, const cpp_int& vEnd, const std::string& source) {
+    std::string vStartHex = intToHex(vStart, 64);
+    std::string vEndHex   = intToHex(vEnd,   64);
+
+    // Find same-source rows that overlap or are adjacent with [vStart, vEnd)
+    SQLite::Statement sel(db_.raw(), R"SQL(
+        SELECT id, start_vchunk, end_vchunk
+        FROM blocked_vchunk_ranges
+        WHERE puzzle_id = ?
+          AND source = ?
+          AND start_vchunk <= ?
+          AND end_vchunk >= ?
+        ORDER BY start_vchunk ASC
+    )SQL");
+    sel.bind(1, puzzleId);
+    sel.bind(2, source);
+    sel.bind(3, vEndHex);   // existing.start <= our end
+    sel.bind(4, vStartHex); // existing.end >= our start
+    cpp_int mergedStart = vStart, mergedEnd = vEnd;
+    cpp_int existStart  = vStart, existEnd  = vEnd; // bounds of the existing rows found
+    bool    hasExisting = false;
+    std::vector<int64_t> toDelete;
+    while (sel.executeStep()) {
+        cpp_int s = hexToInt(sel.getColumn(1).getString());
+        cpp_int e = hexToInt(sel.getColumn(2).getString());
+        toDelete.push_back(sel.getColumn(0).getInt64());
+        if (!hasExisting) { existStart = s; existEnd = e; hasExisting = true; }
+        else              { existStart = minBig(existStart, s); existEnd = maxBig(existEnd, e); }
+        mergedStart = minBig(mergedStart, s);
+        mergedEnd   = maxBig(mergedEnd,   e);
+    }
+
+    if (toDelete.empty()) {
+        // No overlap — try a fresh insert (INSERT OR IGNORE handles exact duplicates)
+        SQLite::Statement ins(db_.raw(), R"SQL(
+            INSERT OR IGNORE INTO blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source)
+            VALUES (?, ?, ?, ?)
+        )SQL");
+        ins.bind(1, puzzleId); ins.bind(2, vStartHex); ins.bind(3, vEndHex); ins.bind(4, source);
+        ins.exec();
+        return db_.raw().getChanges(); // 1 = inserted, 0 = already existed
+    }
+
+    // A single existing row already covers [vStart, vEnd) — nothing to change.
+    // (Multiple rows bridged by the input must still be compacted even if outer bounds match.)
+    if (toDelete.size() == 1 && mergedStart == existStart && mergedEnd == existEnd) return 0;
+
+    // Delete overlapping rows, then insert the expanded merged interval
+    for (int64_t id : toDelete) {
+        SQLite::Statement del(db_.raw(), "DELETE FROM blocked_vchunk_ranges WHERE id = ?");
+        del.bind(1, id);
+        del.exec();
+    }
+    std::string mergedStartHex = intToHex(mergedStart, 64);
+    std::string mergedEndHex   = intToHex(mergedEnd,   64);
+    SQLite::Statement ins(db_.raw(), R"SQL(
+        INSERT INTO blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source)
+        VALUES (?, ?, ?, ?)
+    )SQL");
+    ins.bind(1, puzzleId); ins.bind(2, mergedStartHex); ins.bind(3, mergedEndHex); ins.bind(4, source);
+    ins.exec();
+    return 1;
+}
+
+void Allocator::loadBlockedRanges(int64_t puzzleId) {
+    SQLite::Statement q(db_.raw(),
+        "SELECT start_vchunk, end_vchunk FROM blocked_vchunk_ranges "
+        "WHERE puzzle_id = ? ORDER BY start_vchunk ASC");
+    q.bind(1, puzzleId);
+    std::vector<std::pair<cpp_int, cpp_int>> raw;
+    while (q.executeStep()) {
+        cpp_int s = hexToInt(q.getColumn(0).getString());
+        cpp_int e = hexToInt(q.getColumn(1).getString());
+        if (e > s) raw.emplace_back(s, e);
+    }
+    // Merge overlapping/adjacent intervals (input is already sorted by start)
+    std::vector<std::pair<cpp_int, cpp_int>> merged;
+    for (auto& [s, e] : raw) {
+        if (merged.empty() || s > merged.back().second)
+            merged.emplace_back(s, e);
+        else
+            merged.back().second = maxBig(merged.back().second, e);
+    }
+    blockedRanges_[puzzleId] = std::move(merged);
+}
+
+bool Allocator::overlapsBlockedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
+    auto it = blockedRanges_.find(puzzleId);
+    if (it == blockedRanges_.end()) return false;
+    const auto& v = it->second;
+    if (v.empty()) return false;
+    // Find first interval with start >= our start
+    auto pos = std::lower_bound(v.begin(), v.end(),
+        std::make_pair(start, cpp_int(0)),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    // Check interval before pos: its end might reach into our range
+    if (pos != v.begin()) {
+        --pos;
+        if (pos->second > start) return true;
+        ++pos;
+    }
+    // Check interval at pos: overlaps if its start is before our end
+    return pos != v.end() && pos->first < endExclusive;
+}
+
 bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
     if (start < 0 || endExclusive <= start) return false;
     std::string startHexPad = intToHex(start, 64);
@@ -340,7 +446,8 @@ bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_in
     q.bind(1, puzzleId);
     q.bind(2, endHexPad);
     q.bind(3, startHexPad);
-    return !q.executeStep();
+    if (q.executeStep()) return false;
+    return !overlapsBlockedInMemory(puzzleId, start, endExclusive);
 }
 
 cpp_int Allocator::normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks) {

@@ -1,6 +1,7 @@
 #include <puzzpool/service.hpp>
 #include <puzzpool/hex_bigint.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -223,6 +224,124 @@ crow::response PoolService::handleAdminReclaim() {
     try {
         int count = reclaimTimedOutChunks();
         return jsonResponse({{"ok", true}, {"reclaimed", count}});
+    } catch (const std::exception& e) {
+        return errorResponse(500, e.what());
+    }
+}
+
+crow::response PoolService::handleImportRanges(const crow::request& req) {
+    std::unique_lock lock(mu_);
+    try {
+        auto body = json::parse(req.body.empty() ? "{}" : req.body);
+
+        if (!body.contains("puzzle_id") || !body["puzzle_id"].is_number_integer())
+            return errorResponse(400, "Missing or invalid puzzle_id");
+        int64_t puzzleId = body["puzzle_id"].get<int64_t>();
+
+        if (!body.contains("source") || !body["source"].is_string())
+            return errorResponse(400, "Missing source");
+        std::string source = body["source"].get<std::string>();
+
+        if (!body.contains("base_hex") || !body["base_hex"].is_string())
+            return errorResponse(400, "Missing base_hex");
+        std::string baseHex = body["base_hex"].get<std::string>();
+        if (!isValidHex(baseHex))
+            return errorResponse(400, "base_hex must be a valid hex string");
+        cpp_int base = hexToInt(normalizeHex(baseHex));
+
+        if (!body.contains("step"))
+            return errorResponse(400, "Missing step");
+        cpp_int step;
+        try {
+            if (body["step"].is_string())
+                step = cpp_int(body["step"].get<std::string>());
+            else if (body["step"].is_number_integer())
+                step = cpp_int(body["step"].get<int64_t>());
+            else
+                return errorResponse(400, "step must be a decimal integer or string");
+        } catch (...) {
+            return errorResponse(400, "Invalid step value");
+        }
+        if (step <= 0) return errorResponse(400, "step must be positive");
+
+        if (!body.contains("range_ids") || !body["range_ids"].is_array())
+            return errorResponse(400, "Missing range_ids array");
+
+        auto puzzle = db_.puzzleById(puzzleId);
+        if (!puzzle) return errorResponse(404, "Puzzle not found");
+        if (puzzle->allocStrategy != cfg_.allocStrategyVChunks)
+            return errorResponse(400, "Puzzle does not use virtual_random_chunks_v1 strategy");
+        if (puzzle->virtualChunkSizeKeys.empty())
+            return errorResponse(400, "Puzzle has no virtual_chunk_size_keys");
+
+        cpp_int vchunkSize;
+        try { vchunkSize = cpp_int(puzzle->virtualChunkSizeKeys); } catch (...) {
+            return errorResponse(500, "Invalid virtual_chunk_size_keys on puzzle");
+        }
+        if (vchunkSize <= 0) return errorResponse(500, "virtual_chunk_size_keys must be positive");
+
+        cpp_int puzzleStart  = hexToInt(puzzle->startHex);
+        cpp_int puzzleEnd    = hexToInt(puzzle->endHex);
+        cpp_int totalChunks  = puzzle->virtualChunkCount;
+        if (totalChunks <= 0) return errorResponse(400, "Puzzle has no virtual chunk count");
+
+        // Step 1: Parse range_ids into vchunk intervals, discarding out-of-bounds ones
+        int64_t invalid = 0;
+        json errors = json::array();
+        struct Ivl { cpp_int s, e; };
+        std::vector<Ivl> rawIvls;
+
+        for (const auto& ridJ : body["range_ids"]) {
+            cpp_int rangeId;
+            try {
+                if (ridJ.is_string())       rangeId = cpp_int(ridJ.get<std::string>());
+                else if (ridJ.is_number_integer()) rangeId = cpp_int(ridJ.get<int64_t>());
+                else { ++invalid; continue; }
+            } catch (...) { ++invalid; continue; }
+
+            cpp_int keyStart = base + rangeId * step;
+            cpp_int keyEnd   = keyStart + step;
+            if (keyEnd <= puzzleStart || keyStart >= puzzleEnd) { ++invalid; continue; }
+
+            cpp_int vStart = (maxBig(keyStart, puzzleStart) - puzzleStart) / vchunkSize;
+            cpp_int vEnd   = ceilDiv(minBig(keyEnd, puzzleEnd) - puzzleStart, vchunkSize);
+            vStart = maxBig(vStart, cpp_int(0));
+            vEnd   = minBig(vEnd,   totalChunks);
+            if (vEnd <= vStart) { ++invalid; continue; }
+            rawIvls.push_back({vStart, vEnd});
+        }
+
+        // Step 2: Sort and merge input intervals before touching the DB
+        std::sort(rawIvls.begin(), rawIvls.end(), [](const Ivl& a, const Ivl& b){ return a.s < b.s; });
+        std::vector<Ivl> merged;
+        for (auto& iv : rawIvls) {
+            if (merged.empty() || iv.s > merged.back().e)
+                merged.push_back(iv);
+            else
+                merged.back().e = maxBig(merged.back().e, iv.e);
+        }
+
+        // Step 3: Persist — each merged interval is folded into same-source existing rows
+        int64_t inserted = 0, alreadyBlocked = 0;
+        SQLite::Transaction tx(db_.raw());
+        for (const auto& iv : merged) {
+            try {
+                int r = allocator_.insertOrMergeBlockedRange(puzzleId, iv.s, iv.e, source);
+                if (r > 0) ++inserted; else ++alreadyBlocked;
+            } catch (const std::exception& e) {
+                errors.push_back(std::string(e.what()));
+            }
+        }
+        tx.commit();
+        allocator_.loadBlockedRanges(puzzleId);
+
+        return jsonResponse({
+            {"ok",              true},
+            {"inserted_ranges", inserted},
+            {"already_blocked", alreadyBlocked},
+            {"invalid",         invalid},
+            {"errors",          errors}
+        });
     } catch (const std::exception& e) {
         return errorResponse(500, e.what());
     }

@@ -40,8 +40,9 @@ const gapMetricsEl = document.getElementById('alloc-gap-metrics')!;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getFilteredChunks(): ChunkVis[] {
-  if (allocGenerationFilter === 'all') return chunksVis;
-  return chunksVis.filter(c => (c.g ?? 'legacy') === allocGenerationFilter);
+  const nonBlocked = chunksVis.filter(c => c.st !== 'blocked');
+  if (allocGenerationFilter === 'all') return nonBlocked;
+  return nonBlocked.filter(c => (c.g ?? 'legacy') === allocGenerationFilter);
 }
 
 function redrawAll(): void {
@@ -173,6 +174,7 @@ function updateAllocatorGenerationFilterCounts(): void {
   if (!root) return;
   const counts: Record<string, number> = { all: 0, legacy: 0, affine: 0, feistel: 0 };
   for (const c of chunksVis) {
+    if (c.st === 'blocked') continue;
     counts['all']++;
     const g = c.g ?? 'legacy';
     if (g in counts) counts[g]++;
@@ -237,10 +239,22 @@ async function updateDashboard(): Promise<void> {
 
       const totalP = BigInt(data.puzzle.total_keys);
       const comp   = BigInt(data.total_keys_completed);
+      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null, blocked_vchunk_count: 0 };
       if (totalP > 0n && comp >= 0n) {
         const pctBig = (comp * 10n ** 18n) / totalP;
-        document.getElementById('completed-keys-pct')!.textContent =
-          formatPrecisePercentage(Number(pctBig) / 10 ** 16);
+        let pctDisplay = formatPrecisePercentage(Number(pctBig) / 10 ** 16);
+        const blockedVchunks = String(vchunks.blocked_vchunk_count ?? 0);
+        const vchunkSize = vchunks.virtual_chunk_size_keys;
+        if (blockedVchunks !== '0' && vchunkSize) {
+          try {
+            const blockedKeys = BigInt(blockedVchunks) * BigInt(vchunkSize);
+            if (blockedKeys > 0n) {
+              const pct2Big = ((comp + blockedKeys) * 10n ** 18n) / totalP;
+              pctDisplay += ' / ' + formatPrecisePercentage(Number(pct2Big) / 10 ** 16);
+            }
+          } catch { /* ignore if blocked count not parseable as BigInt */ }
+        }
+        document.getElementById('completed-keys-pct')!.textContent = pctDisplay;
       }
 
       const eta = formatETA(data.puzzle.total_keys, data.total_keys_completed, data.total_hashrate);
@@ -250,11 +264,14 @@ async function updateDashboard(): Promise<void> {
 
       document.getElementById('puzzle-total-keys')!.innerHTML =
         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
-
-      const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null };
-      document.getElementById('puzzle-vchunks')!.innerHTML = vchunks.total !== 0 && vchunks.total !== '0'
-        ? `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))}`
-        : '';
+      if (vchunks.total !== 0 && vchunks.total !== '0') {
+        const blockedCount = vchunks.blocked_vchunk_count ?? 0;
+        const w = (s: string) => `<span style="color:#fff">${s}</span>`;
+        document.getElementById('puzzle-vchunks')!.innerHTML =
+          `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))} · Blocked: ${w(formatBigInt(String(blockedCount)))}`;
+      } else {
+        document.getElementById('puzzle-vchunks')!.innerHTML = '';
+      }
 
       document.getElementById('puzzle-alloc')!.innerHTML = allocatorDiagnosticsHtml(data.puzzle);
       document.getElementById('puzzle-eta')!.innerHTML   = `ETA: ${a(eta)}`;

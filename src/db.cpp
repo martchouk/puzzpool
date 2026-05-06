@@ -116,6 +116,19 @@ void PoolDb::migrate() {
     addColumnIfMissing("chunks", "alloc_generation TEXT");
 
     exec("CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_hex_span ON chunks (puzzle_id, vchunk_start_hex, vchunk_end_hex, status)");
+    exec(R"SQL(
+        CREATE TABLE IF NOT EXISTS blocked_vchunk_ranges (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            puzzle_id   INTEGER NOT NULL,
+            start_vchunk TEXT NOT NULL,
+            end_vchunk   TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT ''
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_vchunk_unique
+            ON blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source);
+        CREATE INDEX IF NOT EXISTS idx_blocked_vchunk_lookup
+            ON blocked_vchunk_ranges (puzzle_id, start_vchunk ASC);
+    )SQL");
     exec("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL");
     exec("UPDATE puzzles SET alloc_strategy = 'legacy_random_shards_v1' WHERE alloc_strategy IS NULL");
     exec(R"SQL(
