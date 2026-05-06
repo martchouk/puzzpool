@@ -256,11 +256,9 @@ async function updateDashboard(): Promise<void> {
       const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null, blocked_vchunk_count: 0 };
       if (vchunks.total !== 0 && vchunks.total !== '0') {
         const blockedCount = vchunks.blocked_vchunk_count ?? 0;
-        const hasBlocked = blockedCount !== 0 && blockedCount !== '0';
         const w = (s: string) => `<span style="color:#fff">${s}</span>`;
         document.getElementById('puzzle-vchunks')!.innerHTML =
-          `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))}` +
-          (hasBlocked ? ` · Blocked: ${w(formatBigInt(String(blockedCount)))}` : '');
+          `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))} · Blocked: ${w(formatBigInt(String(blockedCount)))}`;
       } else {
         document.getElementById('puzzle-vchunks')!.innerHTML = '';
       }

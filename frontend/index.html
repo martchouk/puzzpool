@@ -1195,6 +1195,54 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
         <div class="api-block">
             <div class="api-header">
                 <span class="method method-post">POST</span>
+                <span class="api-path">/api/v1/admin/import-ranges</span>
+                <span class="api-desc">Block externally-searched key ranges</span>
+            </div>
+            <table class="api-table">
+                <tbody>
+                    <tr>
+                        <td class="api-table-label">Request</td>
+                        <td class="api-table-content">
+<pre class="request">{
+  "puzzle_id": 1,
+  "source":    "btcpuzzle.info",
+  "base_hex":  "0000000000000000000000000000000000000000000000000000000000000001",
+  "step":      "33554432",
+  "range_ids": ["0", "1", "42", "99"]
+}</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Response</td>
+                        <td class="api-table-content">
+<pre>{
+  "ok": true,
+  "inserted_ranges": 3,
+  "already_blocked": 1,
+  "invalid": 0,
+  "errors": []
+}
+
+{ "error": "Puzzle does not use virtual_random_chunks_v1 strategy" }
+{ "error": "Puzzle not found" }</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Example Usage</td>
+                        <td class="api-table-content">
+<pre class="example">curl -sS -X POST "$POOL_SERVER/api/v1/admin/import-ranges" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"puzzle_id":1,"source":"btcpuzzle.info","base_hex":"0000000000000000000000000000000000000000000000000000000000000001","step":"33554432","range_ids":["0","1","42"]}'</pre>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="api-block">
+            <div class="api-header">
+                <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/admin/activate-puzzle</span>
                 <span class="api-desc">Switch active keyspace</span>
             </div>
