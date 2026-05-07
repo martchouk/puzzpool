@@ -294,7 +294,7 @@ async function updateDashboard(): Promise<void> {
             const blockedKeys = BigInt(blockedVchunks) * BigInt(vchunkSize);
             if (blockedKeys > 0n) {
               const pct2Big = ((comp + blockedKeys) * 10n ** 18n) / totalP;
-              pctDisplay += ' ( ' + (formatPrecisePercentage(Number(pct2Big) / 10 ** 16) + ' )');
+              pctDisplay += ' (' + (formatPrecisePercentage(Number(pct2Big) / 10 ** 16) + ')');
             }
           } catch { /* ignore if blocked count not parseable as BigInt */ }
         }
