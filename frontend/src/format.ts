@@ -76,8 +76,7 @@ export function formatGapNumber(x: number): string {
 // ── Hex ranges ────────────────────────────────────────────────────────────────
 
 export function trimHexRange(h: string | null | undefined): string {
-  const s = (h ?? '').replace(/^0+/, '') || '0';
-  return s.length > 16 ? s.slice(0, 8) + '-' + s.slice(-6) : s;
+  return ((h ?? '').replace(/^0+/, '') || '0').toUpperCase();
 }
 
 // ── vchunk run display ────────────────────────────────────────────────────────

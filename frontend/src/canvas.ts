@@ -34,14 +34,70 @@ export function draw1DBar(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const order: ChunkStatus[] = ['completed', 'reclaimed', 'assigned', 'FOUND', 'blocked'];
-  for (const status of order) {
-    ctx.fillStyle = CHUNK_COLORS[status];
-    for (const c of chunks) {
-      if (c.st !== status) continue;
-      ctx.fillRect(c.s * W, 0, Math.max(1, (c.e - c.s) * W), H);
+  if (chunks.length === 0) return;
+
+  // Difference arrays (prefix-sum trick): O(chunks + W) regardless of chunk span.
+  // Each array has W+1 slots so arr[e+1] is always in bounds.
+  const dCompleted = new Int32Array(W + 1);
+  const dAssigned  = new Int32Array(W + 1);
+  const dReclaimed = new Int32Array(W + 1);
+  const dFound     = new Int32Array(W + 1);
+  const dBlocked   = new Int32Array(W + 1);
+
+  for (const c of chunks) {
+    const s = Math.max(0, Math.floor(c.s * W));
+    const e = Math.min(W - 1, Math.floor(c.e * W));
+    const arr = c.st === 'completed' ? dCompleted
+              : c.st === 'assigned'  ? dAssigned
+              : c.st === 'reclaimed' ? dReclaimed
+              : c.st === 'FOUND'     ? dFound
+              :                        dBlocked;
+    arr[s]++;
+    arr[e + 1]--;
+  }
+
+  // Scan prefix sums, compute colour per column, write direct to ImageData.
+  const imgData = ctx.createImageData(W, H);
+  const px = imgData.data;
+  let completed = 0, assigned = 0, reclaimed = 0, found = 0, blocked = 0;
+
+  for (let x = 0; x < W; x++) {
+    completed += dCompleted[x];
+    assigned  += dAssigned[x];
+    reclaimed += dReclaimed[x];
+    found     += dFound[x];
+    blocked   += dBlocked[x];
+
+    const total = completed + assigned + reclaimed + found + blocked;
+    if (total === 0) continue;
+
+    let r = 10, g = 10, b = 10;
+    if (found > 0) {
+      r = 255; g = 51; b = 102;                          // FOUND → red
+    } else {
+      const cf = completed / total;
+      const af = assigned  / total;
+      const bf = blocked   / total;
+      const rf = reclaimed / total;
+      // completed → green #0f8 (0, 255, 136)
+      g += 245 * cf; b += 126 * cf;
+      // assigned  → cyan  #0cf (0, 204, 255)
+      g += 194 * af; b += 245 * af;
+      // blocked   → white
+      r += 255 * bf; g += 255 * bf; b += 255 * bf;
+      // reclaimed → amber #b80 (187, 136, 0)
+      r += 177 * rf; g += 126 * rf;
+    }
+
+    const ri = Math.min(255, r) | 0;
+    const gi = Math.min(255, g) | 0;
+    const bi = Math.min(255, b) | 0;
+    for (let y = 0; y < H; y++) {
+      const i = (y * W + x) << 2;
+      px[i] = ri; px[i + 1] = gi; px[i + 2] = bi; px[i + 3] = 255;
     }
   }
+  ctx.putImageData(imgData, 0, 0);
 }
 
 // ── Heatmap ───────────────────────────────────────────────────────────────────

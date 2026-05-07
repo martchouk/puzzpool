@@ -294,7 +294,7 @@ async function updateDashboard(): Promise<void> {
             const blockedKeys = BigInt(blockedVchunks) * BigInt(vchunkSize);
             if (blockedKeys > 0n) {
               const pct2Big = ((comp + blockedKeys) * 10n ** 18n) / totalP;
-              pctDisplay += ' / ' + formatPrecisePercentage(Number(pct2Big) / 10 ** 16);
+              pctDisplay += ' / ' + (formatPrecisePercentage(Number(pct2Big) / 10 ** 16) );
             }
           } catch { /* ignore if blocked count not parseable as BigInt */ }
         }
@@ -305,12 +305,12 @@ async function updateDashboard(): Promise<void> {
       const a = (s: string) => `<span style="color:var(--accent-amber)">${s}</span>`;
       const c = (s: string) => `<span style="color:var(--accent-cyan)">${s}</span>`;
       const g = (s: string) => `<span style="color:var(--accent-green)">${s}</span>`;
+      const w = (s: string) => `<span style="color:#fff">${s}</span>`;
 
       document.getElementById('puzzle-total-keys')!.innerHTML =
         `Keys total: ${a(formatBigInt(data.puzzle.total_keys))}`;
       if (vchunks.total !== 0 && vchunks.total !== '0') {
         const blockedCount = vchunks.blocked_vchunk_count ?? 0;
-        const w = (s: string) => `<span style="color:#fff">${s}</span>`;
         document.getElementById('puzzle-vchunks')!.innerHTML =
           `Virtual chunks total: ${a(formatBigInt(String(vchunks.total)))} · started: ${c(formatBigInt(String(vchunks.started_vchunks)))} · completed: ${g(formatBigInt(String(vchunks.completed_vchunks)))} · Blocked: ${w(formatBigInt(String(blockedCount)))}`;
       } else {
@@ -318,7 +318,20 @@ async function updateDashboard(): Promise<void> {
       }
 
       document.getElementById('puzzle-alloc')!.innerHTML = allocatorDiagnosticsHtml(data.puzzle);
-      document.getElementById('puzzle-eta')!.innerHTML   = `ETA: ${a(eta)}`;
+
+      let etaLine = `ETA: ${a(eta)}`;
+      try {
+        const bvCount = String(vchunks.blocked_vchunk_count ?? 0);
+        const bvSize  = vchunks.virtual_chunk_size_keys;
+        if (bvCount !== '0' && bvSize) {
+          const blockedKeys = BigInt(bvCount) * BigInt(bvSize);
+          if (blockedKeys > 0n) {
+            const effComp = (BigInt(data.total_keys_completed) + blockedKeys).toString();
+            etaLine += ` / ${w(formatETA(data.puzzle.total_keys, effComp, data.total_hashrate))}`;
+          }
+        }
+      } catch { /* ignore if blocked data not parseable */ }
+      document.getElementById('puzzle-eta')!.innerHTML = etaLine;
     } else {
       document.getElementById('puzzle-vchunks')!.textContent = '';
       document.getElementById('puzzle-alloc')!.textContent   = '';
