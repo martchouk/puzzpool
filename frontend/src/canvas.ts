@@ -83,8 +83,8 @@ export function draw1DBar(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
       g += 245 * cf; b += 126 * cf;
       // assigned  → cyan  #0cf (0, 204, 255)
       g += 194 * af; b += 245 * af;
-      // blocked   → magenta #d04898 (208, 72, 152) — warm, low blue, no cyan confusion
-      r += 208 * bf; g += 72 * bf; b += 152 * bf;
+      // blocked   → white
+      r += 255 * bf; g += 255 * bf; b += 255 * bf;
       // reclaimed → amber #b80 (187, 136, 0)
       r += 177 * rf; g += 126 * rf;
     }
