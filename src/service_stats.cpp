@@ -181,8 +181,11 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     out["completed_chunks"] = scalarCount("SELECT COUNT(*) FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND is_test = 0");
     out["reclaimed_chunks"] = scalarCount("SELECT COUNT(*) FROM chunks WHERE puzzle_id = ? AND status = 'reclaimed' AND is_test = 0");
 
-    std::vector<std::pair<cpp_int, cpp_int>> doneRanges;
+    // Finding 3: the allocator guarantees non-overlapping chunks, so
+    // total covered keys == simple sum of (end - start) per completed chunk.
+    // No sort+sweep needed; we fold the computation into the score query.
     std::map<std::string, std::pair<int64_t, cpp_int>> scoreMap;
+    cpp_int totalKeysCompleted = 0;
     SQLite::Statement dq(db_.raw(),
         "SELECT worker_name, start_hex, end_hex FROM chunks WHERE puzzle_id = ? AND (status = 'completed' OR status = 'FOUND') AND worker_name IS NOT NULL AND is_test = 0");
     dq.bind(1, puzzle.id);
@@ -190,26 +193,10 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         std::string worker = dq.getColumn(0).getString();
         cpp_int s = hexToInt(dq.getColumn(1).getString());
         cpp_int e = hexToInt(dq.getColumn(2).getString());
-        doneRanges.push_back({s, e});
         auto& slot = scoreMap[worker];
         slot.first  += 1;
         slot.second += (e - s);
-    }
-    std::sort(doneRanges.begin(), doneRanges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    cpp_int totalKeysCompleted = 0;
-    if (!doneRanges.empty()) {
-        cpp_int ms = doneRanges.front().first;
-        cpp_int me = doneRanges.front().second;
-        for (size_t i = 1; i < doneRanges.size(); ++i) {
-            if (doneRanges[i].first <= me) {
-                if (doneRanges[i].second > me) me = doneRanges[i].second;
-            } else {
-                totalKeysCompleted += me - ms;
-                ms = doneRanges[i].first;
-                me = doneRanges[i].second;
-            }
-        }
-        totalKeysCompleted += me - ms;
+        totalKeysCompleted += (e - s);
     }
     out["total_keys_completed"] = bigToDec(totalKeysCompleted);
 
@@ -253,9 +240,15 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     cpp_int pStart = hexToInt(puzzle.startHex);
     cpp_int pEnd   = hexToInt(puzzle.endHex);
     cpp_int pRange = pEnd - pStart;
+    // Finding 4: include vchunk_start_hex/end_hex in the main chunks query so we
+    // can compute started/completed vchunk coverage in the same pass and avoid a
+    // second full table scan of chunks.
     SQLite::Statement cv(db_.raw(),
-        "SELECT id, status, worker_name, start_hex, end_hex, alloc_generation FROM chunks WHERE puzzle_id = ? AND is_test = 0 ORDER BY id ASC");
+        "SELECT id, status, worker_name, start_hex, end_hex, alloc_generation,"
+        "       vchunk_start_hex, vchunk_end_hex"
+        " FROM chunks WHERE puzzle_id = ? AND is_test = 0 ORDER BY id ASC");
     cv.bind(1, puzzle.id);
+    cpp_int vcStarted = 0, vcCompleted = 0;
     while (cv.executeStep()) {
         cpp_int cs = hexToInt(cv.getColumn(3).getString()) - pStart;
         cpp_int ce = hexToInt(cv.getColumn(4).getString()) - pStart;
@@ -269,6 +262,16 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
             {"s",  static_cast<double>(s)},
             {"e",  static_cast<double>(e)}
         });
+        // Accumulate vchunk coverage while we have the row (Finding 4)
+        if (!cv.isColumnNull(6) && !cv.isColumnNull(7)) {
+            cpp_int vs = hexToInt(cv.getColumn(6).getString());
+            cpp_int ve = hexToInt(cv.getColumn(7).getString());
+            if (ve > vs) {
+                vcStarted += (ve - vs);
+                std::string st = cv.getColumn(1).getString();
+                if (st == "completed" || st == "FOUND") vcCompleted += (ve - vs);
+            }
+        }
     }
     json virtualTotalJ     = nullptr;
     json virtualStartedJ   = json(0);
@@ -276,26 +279,9 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     json blockedCountJ     = json("0");
     std::string strategy = puzzle.allocStrategy.empty() ? cfg_.allocStrategyLegacy : puzzle.allocStrategy;
     if (strategy == cfg_.allocStrategyVChunks) {
-        virtualTotalJ = bigToDec(puzzle.virtualChunkCount);
-        cpp_int started = 0, completed = 0;
-        SQLite::Statement vc(db_.raw(), R"SQL(
-            SELECT vchunk_start_hex, vchunk_end_hex, status
-            FROM chunks
-            WHERE puzzle_id = ? AND is_test = 0
-              AND vchunk_start_hex IS NOT NULL AND vchunk_end_hex IS NOT NULL
-        )SQL");
-        vc.bind(1, puzzle.id);
-        while (vc.executeStep()) {
-            cpp_int s = hexToInt(vc.getColumn(0).getString());
-            cpp_int e = hexToInt(vc.getColumn(1).getString());
-            if (e > s) {
-                started += (e - s);
-                std::string st2 = vc.getColumn(2).getString();
-                if (st2 == "completed" || st2 == "FOUND") completed += (e - s);
-            }
-        }
-        virtualStartedJ   = bigToDec(started);
-        virtualCompletedJ = bigToDec(completed);
+        virtualTotalJ     = bigToDec(puzzle.virtualChunkCount);
+        virtualStartedJ   = bigToDec(vcStarted);
+        virtualCompletedJ = bigToDec(vcCompleted);
 
         // Blocked vchunk count and vis entries — merge across sources first so
         // overlapping imports from different sources are counted as union coverage.

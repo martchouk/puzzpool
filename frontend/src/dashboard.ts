@@ -442,17 +442,27 @@ async function updateDashboard(): Promise<void> {
 
 // ── Canvas tooltip wiring ─────────────────────────────────────────────────────
 
+// Finding 7: debounce the O(N) chunksVis scan to at most once per animation
+// frame instead of firing on every raw mousemove event (~60/s during movement).
+let _ksMoveFrame: number | null = null;
 ksCanvas.addEventListener('mousemove', (e: MouseEvent) => {
-  const W  = ksCanvas.offsetWidth;
-  const px = e.clientX - ksCanvas.getBoundingClientRect().left;
-  const hits = chunksVis.filter(c => {
-    const x = c.s * W;
-    const w = Math.max(1, (c.e - c.s) * W);
-    return px >= x - 1 && px <= x + w + 1;
+  if (_ksMoveFrame !== null) return;
+  _ksMoveFrame = requestAnimationFrame(() => {
+    _ksMoveFrame = null;
+    const W  = ksCanvas.offsetWidth;
+    const px = e.clientX - ksCanvas.getBoundingClientRect().left;
+    const hits = chunksVis.filter(c => {
+      const x = c.s * W;
+      const w = Math.max(1, (c.e - c.s) * W);
+      return px >= x - 1 && px <= x + w + 1;
+    });
+    showTooltip(tooltip, e, hits);
   });
-  showTooltip(tooltip, e, hits);
 });
-ksCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+ksCanvas.addEventListener('mouseleave', () => {
+  if (_ksMoveFrame !== null) { cancelAnimationFrame(_ksMoveFrame); _ksMoveFrame = null; }
+  tooltip.style.display = 'none';
+});
 
 hmCanvas.addEventListener('mousemove', (e: MouseEvent) => {
   const rect = hmCanvas.getBoundingClientRect();

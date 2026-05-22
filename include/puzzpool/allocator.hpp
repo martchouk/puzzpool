@@ -51,8 +51,10 @@ private:
     int64_t             readWorkerHashrate(const std::string& worker);
     void                setAllocCursor(int64_t puzzleId, const cpp_int& cursor);
     void                advanceBootstrapStage(int64_t puzzleId, int stage);
+    void                loadOccupiedRanges(int64_t puzzleId);
     bool                rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
     bool                overlapsBlockedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
+    bool                overlapsOccupiedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive);
     cpp_int             normalizeRunStartForCandidate(const cpp_int& candidateIndex, const cpp_int& neededChunks, const cpp_int& totalChunks);
 
     std::optional<WorkAssignResult> assignBootstrap(const std::string& worker, const PuzzleRow& puzzle,
@@ -70,6 +72,7 @@ private:
     PoolDb&       db_;
     const Config& cfg_;
     std::map<int64_t, std::vector<std::pair<cpp_int, cpp_int>>> blockedRanges_;
+    std::map<int64_t, std::vector<std::pair<cpp_int, cpp_int>>> occupiedRanges_;
 };
 
 } // namespace puzzpool

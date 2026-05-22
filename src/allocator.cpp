@@ -222,6 +222,10 @@ Allocator::assignVirtualChunkJob(const std::string& worker,
     int stage = puzzle.bootstrapStage;
 
     SQLite::Transaction tx(db_.raw());
+    // Finding 1: load all currently-occupied vchunk ranges into memory once so
+    // rangeIsFree() can probe them with O(log N) binary search instead of one
+    // SQL query per probe call.
+    loadOccupiedRanges(puzzle.id);
 
     if (freshChunkCount < 3 && stage < 3) {
         if (auto r = assignBootstrap(worker, puzzle, totalChunks, neededChunks, stage)) {
@@ -369,10 +373,18 @@ int Allocator::insertOrMergeBlockedRange(int64_t puzzleId, const cpp_int& vStart
     // (Multiple rows bridged by the input must still be compacted even if outer bounds match.)
     if (toDelete.size() == 1 && mergedStart == existStart && mergedEnd == existEnd) return 0;
 
-    // Delete overlapping rows, then insert the expanded merged interval
-    for (int64_t id : toDelete) {
-        SQLite::Statement del(db_.raw(), "DELETE FROM blocked_vchunk_ranges WHERE id = ?");
-        del.bind(1, id);
+    // Finding 2: batch-delete all overlapping rows in one statement instead of
+    // issuing one DELETE per row.
+    {
+        std::string delSql = "DELETE FROM blocked_vchunk_ranges WHERE id IN (";
+        for (size_t i = 0; i < toDelete.size(); ++i) {
+            if (i > 0) delSql += ',';
+            delSql += '?';
+        }
+        delSql += ')';
+        SQLite::Statement del(db_.raw(), delSql);
+        for (size_t i = 0; i < toDelete.size(); ++i)
+            del.bind(static_cast<int>(i + 1), toDelete[i]);
         del.exec();
     }
     std::string mergedStartHex = intToHex(mergedStart, 64);
@@ -427,26 +439,58 @@ bool Allocator::overlapsBlockedInMemory(int64_t puzzleId, const cpp_int& start, 
     return pos != v.end() && pos->first < endExclusive;
 }
 
-bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
-    if (start < 0 || endExclusive <= start) return false;
-    std::string startHexPad = intToHex(start, 64);
-    std::string endHexPad   = intToHex(endExclusive, 64);
+void Allocator::loadOccupiedRanges(int64_t puzzleId) {
+    // Fetch all vchunk ranges that are already taken (assigned/reclaimed/completed/FOUND)
+    // in one SQL query so subsequent rangeIsFree() probes can use binary search in memory.
     SQLite::Statement q(db_.raw(), R"SQL(
-        SELECT 1
+        SELECT vchunk_start_hex, vchunk_end_hex
         FROM chunks
         WHERE puzzle_id = ?
           AND is_test = 0
           AND status IN ('assigned', 'reclaimed', 'completed', 'FOUND')
           AND vchunk_start_hex IS NOT NULL
           AND vchunk_end_hex IS NOT NULL
-          AND vchunk_start_hex < ?
-          AND vchunk_end_hex > ?
-        LIMIT 1
+        ORDER BY vchunk_start_hex ASC
     )SQL");
     q.bind(1, puzzleId);
-    q.bind(2, endHexPad);
-    q.bind(3, startHexPad);
-    if (q.executeStep()) return false;
+    std::vector<std::pair<cpp_int, cpp_int>> raw;
+    while (q.executeStep()) {
+        cpp_int s = hexToInt(q.getColumn(0).getString());
+        cpp_int e = hexToInt(q.getColumn(1).getString());
+        if (e > s) raw.emplace_back(s, e);
+    }
+    // Merge adjacent/overlapping intervals (input already sorted by start)
+    std::vector<std::pair<cpp_int, cpp_int>> merged;
+    for (auto& [s, e] : raw) {
+        if (merged.empty() || s > merged.back().second)
+            merged.emplace_back(s, e);
+        else
+            merged.back().second = maxBig(merged.back().second, e);
+    }
+    occupiedRanges_[puzzleId] = std::move(merged);
+}
+
+bool Allocator::overlapsOccupiedInMemory(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
+    auto it = occupiedRanges_.find(puzzleId);
+    if (it == occupiedRanges_.end()) return false;
+    const auto& v = it->second;
+    if (v.empty()) return false;
+    auto pos = std::lower_bound(v.begin(), v.end(),
+        std::make_pair(start, cpp_int(0)),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (pos != v.begin()) {
+        --pos;
+        if (pos->second > start) return true;
+        ++pos;
+    }
+    return pos != v.end() && pos->first < endExclusive;
+}
+
+bool Allocator::rangeIsFree(int64_t puzzleId, const cpp_int& start, const cpp_int& endExclusive) {
+    if (start < 0 || endExclusive <= start) return false;
+    // Use the in-memory snapshot loaded once at the start of assignVirtualChunkJob
+    // (O(log N) binary search instead of one SQL query per probe call).
+    if (overlapsOccupiedInMemory(puzzleId, start, endExclusive)) return false;
     return !overlapsBlockedInMemory(puzzleId, start, endExclusive);
 }
 
