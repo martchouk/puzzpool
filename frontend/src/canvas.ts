@@ -263,17 +263,27 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, size, size);
   ctx.globalCompositeOperation = 'lighter';
+  // Finding 5: group chunks by status in one O(N) pass so each status is drawn
+  // in a single loop instead of iterating all chunks 5 times with skip logic.
+  const byStatus = new Map<ChunkStatus, ChunkVis[]>();
+  for (const c of chunks) {
+    let arr = byStatus.get(c.st);
+    if (!arr) { arr = []; byStatus.set(c.st, arr); }
+    arr.push(c);
+  }
   const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND', 'blocked'];
+  const pointR = Math.max(1, Math.min(2.5, size / 500));
   for (const status of order) {
+    const group = byStatus.get(status);
+    if (!group?.length) continue;
     ctx.fillStyle = CHUNK_GLOW_COLORS[status];
-    for (const c of chunks) {
-      if (c.st !== status) continue;
+    for (const c of group) {
       const distance = Math.floor(c.s * totalCells);
       const [hx, hy] = getHilbertXY(HILBERT_N, distance);
       if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) continue;
       ctx.beginPath();
       ctx.arc(hx * cellSize + cellSize / 2, hy * cellSize + cellSize / 2,
-              Math.max(1, Math.min(2.5, size / 500)), 0, Math.PI * 2);
+              pointR, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -293,8 +303,7 @@ function getAllocatorSortedStarts(chunks: ChunkVis[]): ChunkVis[] {
   return getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
 }
 
-function getAllocatorNormalizedGaps(chunks: ChunkVis[]): number[] {
-  const sorted = getAllocatorSortedStarts(chunks);
+function computeNormalizedGapsFromSorted(sorted: ChunkVis[]): number[] {
   if (sorted.length < 2) return [];
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++) {
@@ -305,6 +314,10 @@ function getAllocatorNormalizedGaps(chunks: ChunkVis[]): number[] {
   const mean = gaps.reduce((sum, g) => sum + g, 0) / gaps.length;
   if (!(mean > 0)) return [];
   return gaps.map(g => g / mean).filter(v => Number.isFinite(v) && v >= 0);
+}
+
+function getAllocatorNormalizedGaps(chunks: ChunkVis[]): number[] {
+  return computeNormalizedGapsFromSorted(getAllocatorSortedStarts(chunks));
 }
 
 function computeNormalizedGapMetrics(chunks: ChunkVis[]) {
@@ -321,14 +334,14 @@ function computeNormalizedGapMetrics(chunks: ChunkVis[]) {
   return { n, mean, median: median ?? 0, p95: p95 ?? 0, max, cv };
 }
 
-export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
+export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedById?: ChunkVis[]): void {
   const W = canvas.offsetWidth, H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const sorted = getAllocatorChunks(chunks);
+  const sorted = _sortedById ?? getAllocatorChunks(chunks);
   if (!sorted.length) return;
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 1;
@@ -351,8 +364,8 @@ export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis
   }
 }
 
-export function updateAllocatorGapMetrics(el: HTMLElement, chunks: ChunkVis[]): void {
-  const sorted = getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
+export function updateAllocatorGapMetrics(el: HTMLElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
+  const sorted = _sortedByS ?? getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
   if (sorted.length < 2) {
     el.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">not enough data</span>';
     return;
@@ -388,14 +401,14 @@ export function updateAllocatorGapMetrics(el: HTMLElement, chunks: ChunkVis[]): 
     `max/mean <span style="color:var(--accent-cyan)">${maxOverMean != null ? formatGapNumber(maxOverMean) : '—'}</span>`;
 }
 
-export function drawAllocatorGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
+export function drawAllocatorGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
   const W = canvas.offsetWidth, H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const sorted = getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
+  const sorted = _sortedByS ?? getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
   if (sorted.length < 2) return;
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++) {
@@ -429,14 +442,14 @@ export function drawAllocatorGapHistogram(canvas: HTMLCanvasElement, chunks: Chu
   }
 }
 
-export function drawAllocatorNormalizedGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
+export function drawAllocatorNormalizedGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
   const W = canvas.offsetWidth, H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const values = getAllocatorNormalizedGaps(chunks);
+  const values = _sortedByS ? computeNormalizedGapsFromSorted(_sortedByS) : getAllocatorNormalizedGaps(chunks);
   if (!values.length) return;
   const CLIP = 6;
   const bins = Math.min(96, Math.max(36, Math.floor(W / 10)));
@@ -471,14 +484,14 @@ export function drawAllocatorNormalizedGapHistogram(canvas: HTMLCanvasElement, c
   ctx.fillText(`clip ${CLIP}×`, W - 70, 14);
 }
 
-export function drawAllocatorResidueMap(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
+export function drawAllocatorResidueMap(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedById?: ChunkVis[]): void {
   const W = canvas.offsetWidth, H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const sorted = getAllocatorChunks(chunks);
+  const sorted = _sortedById ?? getAllocatorChunks(chunks);
   if (!sorted.length) return;
   const MOD = 1024;
   const rows = Math.min(128, Math.max(32, Math.floor(H / 2)));
@@ -509,11 +522,15 @@ export function drawAllocatorDiagnostics(
   gapMetricsEl: HTMLElement,
   chunks: ChunkVis[],
 ): void {
-  drawAllocatorScatter(canvases.scatter, chunks);
-  drawAllocatorGapHistogram(canvases.gap, chunks);
-  updateAllocatorGapMetrics(gapMetricsEl, chunks);
-  drawAllocatorNormalizedGapHistogram(canvases.gapnorm, chunks);
-  drawAllocatorResidueMap(canvases.residue, chunks);
+  // Finding 6: compute the two derived arrays once and pass them to each
+  // sub-function to avoid O(3×N log N) redundant filter+sort on every redraw.
+  const sortedById = getAllocatorChunks(chunks);
+  const sortedByS  = sortedById.slice().sort((a, b) => a.s - b.s);
+  drawAllocatorScatter(canvases.scatter, chunks, sortedById);
+  drawAllocatorGapHistogram(canvases.gap, chunks, sortedByS);
+  updateAllocatorGapMetrics(gapMetricsEl, chunks, sortedByS);
+  drawAllocatorNormalizedGapHistogram(canvases.gapnorm, chunks, sortedByS);
+  drawAllocatorResidueMap(canvases.residue, chunks, sortedById);
 }
 
 export function exportNormalizedGapMetrics(chunks: ChunkVis[]) {
