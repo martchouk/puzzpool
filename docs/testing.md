@@ -45,6 +45,8 @@ npm run build --prefix frontend
 This runs `tsc --noEmit` (strict type check) followed by `vite build` (bundle to
 `public/index.html`). A clean exit means zero type errors and a valid build output.
 
+`public/index.html` is generated and untracked. Always edit files under `frontend/`.
+
 ---
 
 ## Smoke Test (local server)

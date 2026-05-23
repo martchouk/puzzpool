@@ -25,7 +25,7 @@ int main() {
             std::ifstream in("public/index.html");
             if (!in) {
                 r.code = 404;
-                r.body = "public/index.html not found";
+                r.body = "public/index.html not found; run: npm run build --prefix frontend";
                 return r;
             }
             std::ostringstream ss;

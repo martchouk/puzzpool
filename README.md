@@ -49,7 +49,7 @@ cp .env.example .env # configure (set ADMIN_TOKEN at minimum)
 |-------|-----------|
 | HTTP server | C++20, [Crow](https://crowcpp.org/) |
 | Database | SQLite 3 via [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) |
-| Frontend | TypeScript + Vite (built to `public/index.html`, single self-contained file) |
+| Frontend | TypeScript + Vite (built to generated `public/index.html`, single self-contained file) |
 | Reverse proxy | Nginx (TLS + admin IP restriction) |
 | Process manager | systemd |
 
@@ -203,6 +203,9 @@ ctest --test-dir build --output-on-failure
 # TypeScript type check + frontend build
 npm run build --prefix frontend
 ```
+
+`frontend/` is the only authored frontend source. `public/index.html` is generated output,
+served by the C++ server at runtime, and is intentionally not tracked in git.
 
 See [docs/testing.md](docs/testing.md) for test scenarios and manual verification steps.
 
