@@ -7,7 +7,7 @@ import {
 } from './format.ts';
 import {
   MAP_COLS, MAP_ROWS, HILBERT_N,
-  draw1DBar, drawHeatmap, drawHilbert,
+  drawHeatmap, drawHilbert,
   drawAllocatorDiagnostics,
   getHilbertD,
   showTooltip, exportNormalizedGapMetrics,
@@ -28,7 +28,6 @@ let stageSet = false;
 // ── Stable DOM references ─────────────────────────────────────────────────────
 
 const tooltip       = document.getElementById('ks-tooltip')!;
-const ksCanvas      = document.getElementById('keyspace-canvas') as HTMLCanvasElement;
 const hmCanvas      = document.getElementById('heatmap-canvas')  as HTMLCanvasElement;
 const hilCanvas     = document.getElementById('hilbert-canvas')  as HTMLCanvasElement;
 const allocCanvases = {
@@ -54,10 +53,57 @@ function applyLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
 }
 
 function redrawAll(): void {
-  draw1DBar(ksCanvas, chunksVis);
   heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
   drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
   drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
+}
+
+function initApiReferencePanels(): void {
+  document.querySelectorAll<HTMLElement>('.api-block').forEach((block, index) => {
+    const header = block.querySelector<HTMLElement>('.api-header');
+    const table = block.querySelector<HTMLElement>('.api-table');
+    if (!header || !table) return;
+
+    const pathEl = header.querySelector<HTMLElement>('.api-path');
+    const panelId = `api-panel-${index + 1}`;
+    const label = `${pathEl?.textContent?.trim() ?? 'endpoint'} details`;
+
+    table.id = panelId;
+    table.hidden = true;
+    block.classList.remove('is-expanded');
+    block.classList.add('is-collapsed');
+    header.classList.add('is-collapsible');
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'api-toggle';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-controls', panelId);
+    toggle.setAttribute('aria-label', `Expand ${label}`);
+    toggle.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 6.25 8 10l4-3.75" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/></svg>';
+
+    const togglePanel = (): void => {
+      const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', String(!isExpanded));
+      toggle.setAttribute('aria-label', `${isExpanded ? 'Expand' : 'Collapse'} ${label}`);
+      table.hidden = isExpanded;
+      block.classList.toggle('is-expanded', !isExpanded);
+      block.classList.toggle('is-collapsed', isExpanded);
+    };
+
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      togglePanel();
+    });
+
+    header.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement).closest('.api-toggle')) return;
+      togglePanel();
+    });
+
+    header.appendChild(toggle);
+  });
 }
 
 // ── Stage indicator ───────────────────────────────────────────────────────────
@@ -440,30 +486,6 @@ async function updateDashboard(): Promise<void> {
   }
 }
 
-// ── Canvas tooltip wiring ─────────────────────────────────────────────────────
-
-// Finding 7: debounce the O(N) chunksVis scan to at most once per animation
-// frame instead of firing on every raw mousemove event (~60/s during movement).
-let _ksMoveFrame: number | null = null;
-ksCanvas.addEventListener('mousemove', (e: MouseEvent) => {
-  if (_ksMoveFrame !== null) return;
-  _ksMoveFrame = requestAnimationFrame(() => {
-    _ksMoveFrame = null;
-    const W  = ksCanvas.offsetWidth;
-    const px = e.clientX - ksCanvas.getBoundingClientRect().left;
-    const hits = chunksVis.filter(c => {
-      const x = c.s * W;
-      const w = Math.max(1, (c.e - c.s) * W);
-      return px >= x - 1 && px <= x + w + 1;
-    });
-    showTooltip(tooltip, e, hits);
-  });
-});
-ksCanvas.addEventListener('mouseleave', () => {
-  if (_ksMoveFrame !== null) { cancelAnimationFrame(_ksMoveFrame); _ksMoveFrame = null; }
-  tooltip.style.display = 'none';
-});
-
 hmCanvas.addEventListener('mousemove', (e: MouseEvent) => {
   const rect = hmCanvas.getBoundingClientRect();
   const col = Math.floor(((e.clientX - rect.left) / rect.width)  * MAP_COLS);
@@ -499,6 +521,7 @@ new ResizeObserver(() => {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 requestAnimationFrame(() => {
+  initApiReferencePanels();
   initAllocatorGenerationFilter();
   initHmLayerFilter();
   initHilLayerFilter();

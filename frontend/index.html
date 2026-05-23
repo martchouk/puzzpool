@@ -366,6 +366,10 @@
             background: rgba(0,0,0,0.2);
         }
 
+        .api-header.is-collapsible {
+            cursor: pointer;
+        }
+
         .method {
             font-family: var(--font-mono);
             font-size: 0.65rem;
@@ -397,6 +401,45 @@
             font-size: 0.8rem;
             color: var(--text-secondary);
             margin-left: auto;
+        }
+
+        .api-toggle {
+            appearance: none;
+            margin-left: 0.25rem;
+            width: 2rem;
+            height: 2rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.03);
+            color: var(--text-secondary);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: transform var(--transition), border-color var(--transition), color var(--transition), background var(--transition);
+        }
+
+        .api-toggle:hover {
+            color: var(--text-primary);
+            border-color: rgba(0,255,255,0.28);
+            background: rgba(0,255,255,0.08);
+        }
+
+        .api-toggle svg {
+            width: 1rem;
+            height: 1rem;
+            transition: transform var(--transition);
+        }
+
+        .api-block.is-expanded .api-toggle {
+            color: var(--accent-cyan);
+            border-color: rgba(0,255,255,0.28);
+            background: rgba(0,255,255,0.10);
+        }
+
+        .api-block.is-expanded .api-toggle svg {
+            transform: rotate(180deg);
         }
 
         .api-table {
@@ -806,26 +849,19 @@
             <div id="puzzle-eta" class="stat-subtext"></div>
         </div>
 
-        <div class="keyspace-wrap">
-            <div class="keyspace-label">
-                Search Space Coverage (1D)
-                <div class="ks-legend">
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0f8"></div>Done</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0cf"></div>In Progress</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
-                </div>
-            </div>
-            <canvas id="keyspace-canvas"></canvas>
-        </div>
-
         <div class="heatmap-wrap">
             <div class="keyspace-label">Night Sky Heatmap
                 <div class="alloc-filter-group" id="hm-layer-filter">
                     <button class="alloc-filter-btn" data-layer="all">All</button>
                     <button class="alloc-filter-btn active" data-layer="native">Native</button>
                     <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                </div>
+                <div class="ks-legend">
+                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0f8"></div>Done</div>
+                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0cf"></div>In Progress</div>
+                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
+                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
+                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
                 </div>
             </div>
             <div class="canvas-2d-box">
