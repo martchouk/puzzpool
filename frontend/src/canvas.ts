@@ -160,11 +160,11 @@ export function buildHeatmapBuckets(chunks: ChunkVis[], totalCells: number): (Bu
 
 function bucketDominantStatus(bucket: Bucket | undefined): ChunkStatus | null {
   if (!bucket) return null;
-  if (bucket.blocked > 0) return 'blocked';
   if (bucket.FOUND > 0) return 'FOUND';
   if (bucket.assigned > 0) return 'assigned';
-  if (bucket.completed > 0) return 'completed';
   if (bucket.reclaimed > 0) return 'reclaimed';
+  if (bucket.blocked > 0) return 'blocked';
+  if (bucket.completed > 0) return 'completed';
   return null;
 }
 
@@ -194,25 +194,33 @@ export function drawHeatmap(
     const bucket = buckets[index];
     const status = bucketDominantStatus(bucket);
     if (!status || !bucket) continue;
+    const isEmphasizedStatus =
+      status === 'assigned' || status === 'reclaimed' || status === 'FOUND';
     const baseColor = CHUNK_GLOW_COLORS[status];
     const col = index % MAP_COLS;
     const row = Math.floor(index / MAP_COLS);
     const cx = col * cellW + cellW / 2;
     const cy = row * cellH + cellH / 2;
     const loadNorm = Math.log(bucket.total + 1) / Math.log(maxBucketLoad + 1);
-    const radiusBase = Math.max(1, Math.min(2.5, W / 500));
-    const radiusJitter = 0.85 + ((bucket.sizeJitter & 0xff) / 255) * 0.45;
-    const r = Math.min(2.5, radiusBase * (0.65 + loadNorm * 0.9) * radiusJitter);
-    const dx = ((((bucket.offsetJitter >>> 0) & 0xff) / 255) - 0.5) * cellW * 0.22;
-    const dy = ((((bucket.offsetJitter >>> 8) & 0xff) / 255) - 0.5) * cellH * 0.22;
+    const radiusBase = isEmphasizedStatus
+      ? Math.max(3.2, Math.min(4.2, W / 260))
+      : Math.max(0.55, Math.min(1.1, W / 900));
+    const radiusJitter = isEmphasizedStatus
+      ? 0.92 + ((bucket.sizeJitter & 0xff) / 255) * 0.18
+      : 0.78 + ((bucket.sizeJitter & 0xff) / 255) * 0.24;
+    const r = isEmphasizedStatus
+      ? Math.min(4.4, radiusBase * (0.88 + loadNorm * 0.3) * radiusJitter)
+      : Math.min(1.35, radiusBase * (0.48 + loadNorm * 0.42) * radiusJitter);
+    const dx = ((((bucket.offsetJitter >>> 0) & 0xff) / 255) - 0.5) * cellW * 0.2;
+    const dy = ((((bucket.offsetJitter >>> 8) & 0xff) / 255) - 0.5) * cellH * 0.2;
     ctx.fillStyle = baseColor;
     ctx.beginPath();
     ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2);
     ctx.fill();
-    if (bucket.total >= 3) {
+    if (bucket.total >= (isEmphasizedStatus ? 4 : 8)) {
       ctx.fillStyle = baseColor;
       ctx.beginPath();
-      ctx.arc(cx + dx, cy + dy, r * 0.45, 0, Math.PI * 2);
+      ctx.arc(cx + dx, cy + dy, Math.max(isEmphasizedStatus ? 0.9 : 0.35, r * (isEmphasizedStatus ? 0.38 : 0.3)), 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -272,7 +280,7 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
     arr.push(c);
   }
   const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND', 'blocked'];
-  const pointR = Math.max(1, Math.min(2.5, size / 500));
+  const pointR = Math.max(0.55, Math.min(1.2, size / 760));
   for (const status of order) {
     const group = byStatus.get(status);
     if (!group?.length) continue;
@@ -281,9 +289,10 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
       const distance = Math.floor(c.s * totalCells);
       const [hx, hy] = getHilbertXY(HILBERT_N, distance);
       if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) continue;
+      const px = hx * cellSize + cellSize / 2;
+      const py = hy * cellSize + cellSize / 2;
       ctx.beginPath();
-      ctx.arc(hx * cellSize + cellSize / 2, hy * cellSize + cellSize / 2,
-              pointR, 0, Math.PI * 2);
+      ctx.arc(px, py, pointR, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -352,7 +361,7 @@ export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
   const n = sorted.length;
-  const pointR = Math.max(1, Math.min(2.5, W / 500));
+  const pointR = Math.max(0.6, Math.min(1.35, W / 760));
   for (let i = 0; i < n; i++) {
     const c = sorted[i];
     const x = n > 1 ? (i / (n - 1)) * (W - 1) : W / 2;

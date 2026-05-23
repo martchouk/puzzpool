@@ -174,6 +174,64 @@
             margin-bottom: 0.4rem;
         }
 
+        .frontier-heading {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .puzzle-status-host {
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .puzzle-status-link {
+            display: inline-flex;
+            align-items: center;
+            text-decoration: none;
+        }
+
+        .puzzle-status-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 1.5rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            font-family: var(--font-mono);
+            font-size: 0.64rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            transition: var(--transition);
+        }
+
+        .puzzle-status-chip.is-solved {
+            color: var(--accent-green);
+            background: rgba(0,255,136,0.08);
+            border-color: rgba(0,255,136,0.28);
+            box-shadow: 0 0 16px rgba(0,255,136,0.12);
+        }
+
+        .puzzle-status-chip.is-unsolved {
+            color: var(--accent-red);
+            background: rgba(255,51,102,0.08);
+            border-color: rgba(255,51,102,0.24);
+            box-shadow: 0 0 16px rgba(255,51,102,0.1);
+        }
+
+        .puzzle-status-chip.is-unknown {
+            color: var(--text-secondary);
+            background: rgba(136,136,136,0.08);
+            border-color: rgba(136,136,136,0.22);
+        }
+
+        .puzzle-status-link:hover .puzzle-status-chip {
+            transform: translateY(-1px);
+            border-color: var(--border-hover);
+        }
+
         .frontier-value {
             font-family: var(--font-mono);
             font-size: 0.75rem;
@@ -187,6 +245,13 @@
             border-radius: var(--radius);
             padding: 0.75rem 1rem;
             position: relative;
+        }
+
+        .heatmap-wrap,
+        .hilbert-wrap,
+        .alloc-diagnostics-wrap {
+            content-visibility: auto;
+            contain-intrinsic-size: auto none auto 400px;
         }
 
         .keyspace-wrap { margin-bottom: 1rem; }
@@ -362,8 +427,13 @@
             align-items: center;
             gap: 0.75rem;
             padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--border-default);
             background: rgba(0,0,0,0.2);
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .api-header::-webkit-details-marker {
+            display: none;
         }
 
         .method {
@@ -399,9 +469,64 @@
             margin-left: auto;
         }
 
+        .api-header::after {
+            content: "";
+            width: 0.8rem;
+            height: 0.8rem;
+            margin-left: 0.25rem;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            color: var(--text-secondary);
+            transform: rotate(45deg);
+            transform-origin: 55% 55%;
+            transition: transform var(--transition), color var(--transition);
+            flex-shrink: 0;
+        }
+
+        .api-block[open] .api-header::after {
+            color: var(--accent-cyan);
+            transform: rotate(225deg);
+        }
+
+        .api-block[open] .api-header {
+            border-bottom: 1px solid var(--border-default);
+        }
+
+        .api-header:focus-visible {
+            outline: 2px solid rgba(0,255,255,0.45);
+            outline-offset: 3px;
+        }
+
+        .api-block > .api-header {
+            appearance: none;
+        }
+
+        .api-block[open] {
+            border-color: var(--border-hover);
+        }
+
+        .api-block:hover .api-header::after {
+            color: var(--text-primary);
+        }
+
+        .api-block > .api-header::-webkit-details-marker {
+            display: none;
+        }
+
         .api-table {
             width: 100%;
             border-collapse: collapse;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                transition-duration: 0.01ms !important;
+                animation-duration: 0.01ms !important;
+            }
+
+            .puzzle-status-link:hover .puzzle-status-chip {
+                transform: none;
+            }
         }
 
         .api-table tr + tr td {
@@ -798,7 +923,10 @@
         </div>
 
         <div class="frontier-card">
-            <div class="frontier-label" id="puzzle-name">Active Puzzle</div>
+            <div class="frontier-label frontier-heading">
+                <span id="puzzle-name">Active Puzzle</span>
+                <span id="puzzle-status-host" class="puzzle-status-host"></span>
+            </div>
             <div id="frontier" class="frontier-value">Loading...</div>
             <div id="puzzle-total-keys" class="stat-subtext"></div>
             <div id="puzzle-vchunks" class="stat-subtext"></div>
@@ -806,26 +934,22 @@
             <div id="puzzle-eta" class="stat-subtext"></div>
         </div>
 
-        <div class="keyspace-wrap">
-            <div class="keyspace-label">
-                Search Space Coverage (1D)
+        <div class="heatmap-wrap">
+            <div class="keyspace-label">Night Sky Heatmap
+                <div class="alloc-filter-group" id="hm-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
+                    <button class="alloc-filter-btn active" data-layer="completed" aria-pressed="true">Done</button>
+                    <button class="alloc-filter-btn" data-layer="assigned" aria-pressed="false">In Progress</button>
+                    <button class="alloc-filter-btn" data-layer="reclaimed" aria-pressed="false">Reclaimed</button>
+                    <button class="alloc-filter-btn" data-layer="FOUND" aria-pressed="false">Found</button>
+                    <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
+                </div>
                 <div class="ks-legend">
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#0f8"></div>Done</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#0cf"></div>In Progress</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
-                </div>
-            </div>
-            <canvas id="keyspace-canvas"></canvas>
-        </div>
-
-        <div class="heatmap-wrap">
-            <div class="keyspace-label">Night Sky Heatmap
-                <div class="alloc-filter-group" id="hm-layer-filter">
-                    <button class="alloc-filter-btn" data-layer="all">All</button>
-                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
-                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
                 </div>
             </div>
             <div class="canvas-2d-box">
@@ -872,14 +996,14 @@
         </div>
 
         <div class="section-title">Allocator Diagnostics</div>
-        <div class="heatmap-wrap" id="allocator-diagnostics-wrap">
+        <div class="heatmap-wrap alloc-diagnostics-wrap" id="allocator-diagnostics-wrap">
             <div class="alloc-filter-row">
                 <div class="alloc-filter-label">Generation</div>
                 <div class="alloc-filter-group" id="alloc-generation-filter">
-                    <button class="alloc-filter-btn" data-gen="all">All</button>
-                    <button class="alloc-filter-btn" data-gen="legacy">Legacy</button>
-                    <button class="alloc-filter-btn" data-gen="affine">Affine</button>
-                    <button class="alloc-filter-btn active" data-gen="feistel">Feistel</button>
+                    <button class="alloc-filter-btn" data-gen="all" aria-pressed="false">All</button>
+                    <button class="alloc-filter-btn" data-gen="legacy" aria-pressed="false">Legacy</button>
+                    <button class="alloc-filter-btn" data-gen="affine" aria-pressed="false">Affine</button>
+                    <button class="alloc-filter-btn active" data-gen="feistel" aria-pressed="true">Feistel</button>
                 </div>
             </div>
 
@@ -921,9 +1045,9 @@
         <div class="hilbert-wrap">
             <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)
                 <div class="alloc-filter-group" id="hil-layer-filter">
-                    <button class="alloc-filter-btn" data-layer="all">All</button>
-                    <button class="alloc-filter-btn active" data-layer="native">Native</button>
-                    <button class="alloc-filter-btn" data-layer="blocked">Blocked</button>
+                    <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native" aria-pressed="true">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
                 </div>
             </div>
             <div class="canvas-2d-box">
@@ -933,12 +1057,12 @@
 
         <div class="section-title">API Reference</div>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/work</span>
                 <span class="api-desc">Request a chunk of keyspace to scan</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -989,14 +1113,14 @@
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/submit</span>
                 <span class="api-desc">Report a completed, partial, or solved chunk</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -1076,14 +1200,14 @@ curl -sS -X POST "$POOL_SERVER/api/v1/submit" \
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/heartbeat</span>
                 <span class="api-desc">Keep a worker and its current job alive</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -1120,14 +1244,14 @@ curl -sS -X POST "$POOL_SERVER/api/v1/submit" \
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-get">GET</span>
                 <span class="api-path">/api/v1/stats</span>
                 <span class="api-desc">Dashboard and monitoring snapshot</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -1159,7 +1283,16 @@ GET /api/v1/stats?puzzle_id=1</pre>
     "alloc_cursor": 2220012,
     "virtual_chunk_size_keys": "33554432",
     "virtual_chunk_count": 35184372088832,
-    "bootstrap_stage": 3
+    "bootstrap_stage": 3,
+    "status": {
+      "state": "unsolved",
+      "label": "UNSOLVED",
+      "target_type": "address",
+      "target_value": "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "checked_at": "2026-05-23T10:00:00Z",
+      "link": "https://mempool.space/address/1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "note": null
+    }
   },
   "active_workers_count": 2,
   "inactive_workers_count": 1,
@@ -1203,14 +1336,14 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/admin/import-ranges</span>
                 <span class="api-desc">Block externally-searched key ranges</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -1251,14 +1384,14 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
 
-        <div class="api-block">
-            <div class="api-header">
+        <details class="api-block">
+            <summary class="api-header">
                 <span class="method method-post">POST</span>
                 <span class="api-path">/api/v1/admin/activate-puzzle</span>
                 <span class="api-desc">Switch active keyspace</span>
-            </div>
+            </summary>
             <table class="api-table">
                 <tbody>
                     <tr>
@@ -1300,7 +1433,7 @@ curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
                     </tr>
                 </tbody>
             </table>
-        </div>
+        </details>
     </div>
 
     <div class="modal-overlay" id="activate-modal" style="display:none">

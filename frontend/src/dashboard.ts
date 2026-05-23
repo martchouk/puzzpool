@@ -1,4 +1,4 @@
-import type { ChunkVis, PuzzleListEntry } from './types.ts';
+import type { ChunkVis, PuzzleListEntry, PuzzleStatusInfo } from './types.ts';
 import { fetchStats, activatePuzzle } from './api.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc,
@@ -7,7 +7,7 @@ import {
 } from './format.ts';
 import {
   MAP_COLS, MAP_ROWS, HILBERT_N,
-  draw1DBar, drawHeatmap, drawHilbert,
+  drawHeatmap, drawHilbert,
   drawAllocatorDiagnostics,
   getHilbertD,
   showTooltip, exportNormalizedGapMetrics,
@@ -17,7 +17,7 @@ import {
 
 let chunksVis: ChunkVis[] = [];
 let allocGenerationFilter = 'feistel';
-let hmLayerFilter = 'native';
+let hmLayerFilter = 'completed';
 let hilLayerFilter = 'native';
 let heatmapBuckets: ReturnType<typeof drawHeatmap> = [];
 let pendingActivateId: number | null = null;
@@ -28,7 +28,6 @@ let stageSet = false;
 // ── Stable DOM references ─────────────────────────────────────────────────────
 
 const tooltip       = document.getElementById('ks-tooltip')!;
-const ksCanvas      = document.getElementById('keyspace-canvas') as HTMLCanvasElement;
 const hmCanvas      = document.getElementById('heatmap-canvas')  as HTMLCanvasElement;
 const hilCanvas     = document.getElementById('hilbert-canvas')  as HTMLCanvasElement;
 const allocCanvases = {
@@ -53,11 +52,48 @@ function applyLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
   return chunks;
 }
 
+function applyHeatmapLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
+  if (filter === 'all') return chunks;
+  if (filter === 'completed') return chunks.filter(c => c.st === 'completed');
+  if (filter === 'assigned') return chunks.filter(c => c.st === 'assigned');
+  if (filter === 'reclaimed') return chunks.filter(c => c.st === 'reclaimed');
+  if (filter === 'FOUND') return chunks.filter(c => c.st === 'FOUND');
+  if (filter === 'blocked') return chunks.filter(c => c.st === 'blocked');
+  return chunks;
+}
+
 function redrawAll(): void {
-  draw1DBar(ksCanvas, chunksVis);
-  heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
+  heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
   drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
   drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
+}
+
+function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
+  const host = document.getElementById('puzzle-status-host')!;
+  host.replaceChildren();
+  if (!status) return;
+
+  const badge = document.createElement('span');
+  badge.className = `puzzle-status-chip is-${status.state}`;
+  badge.textContent = (status.label || status.state).toLowerCase();
+
+  const titleParts: string[] = [];
+  if (status.checked_at) titleParts.push(`Checked ${fmtUtc(status.checked_at)}`);
+  if (status.note) titleParts.push(status.note);
+  if (titleParts.length > 0) badge.title = titleParts.join(' · ');
+
+  if (status.link) {
+    const link = document.createElement('a');
+    link.className = 'puzzle-status-link';
+    link.href = status.link;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    link.appendChild(badge);
+    host.appendChild(link);
+    return;
+  }
+
+  host.appendChild(badge);
 }
 
 // ── Stage indicator ───────────────────────────────────────────────────────────
@@ -201,7 +237,9 @@ function initAllocatorGenerationFilter(): void {
 
   const syncButtons = (): void => {
     root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.gen === allocGenerationFilter);
+      const isActive = b.dataset.gen === allocGenerationFilter;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-pressed', String(isActive));
     });
   };
 
@@ -222,16 +260,18 @@ function initHmLayerFilter(): void {
   const root = document.getElementById('hm-layer-filter');
   if (!root) return;
   const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.layer === hmLayerFilter);
+    const isActive = b.dataset.layer === hmLayerFilter;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
   });
   sync();
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const next = btn.dataset.layer ?? 'native';
+      const next = btn.dataset.layer ?? 'completed';
       if (next === hmLayerFilter) return;
       hmLayerFilter = next;
       sync();
-      heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
+      heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
     });
   });
 }
@@ -240,7 +280,9 @@ function initHilLayerFilter(): void {
   const root = document.getElementById('hil-layer-filter');
   if (!root) return;
   const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.layer === hilLayerFilter);
+    const isActive = b.dataset.layer === hilLayerFilter;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
   });
   sync();
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
@@ -278,6 +320,7 @@ async function updateDashboard(): Promise<void> {
 
     if (data.puzzle?.total_keys) {
       document.getElementById('puzzle-name')!.textContent = data.puzzle.name;
+      renderPuzzleStatus(data.puzzle.status ?? null);
       document.getElementById('frontier')!.textContent =
         `0x${trimHexRange(data.puzzle.start_hex)} - 0x${trimHexRange(data.puzzle.end_hex)}`;
 
@@ -333,6 +376,7 @@ async function updateDashboard(): Promise<void> {
       } catch { /* ignore if blocked data not parseable */ }
       document.getElementById('puzzle-eta')!.innerHTML = etaLine;
     } else {
+      renderPuzzleStatus(null);
       document.getElementById('puzzle-vchunks')!.textContent = '';
       document.getElementById('puzzle-alloc')!.textContent   = '';
       document.getElementById('puzzle-eta')!.textContent     = '';
@@ -439,30 +483,6 @@ async function updateDashboard(): Promise<void> {
     console.error(e);
   }
 }
-
-// ── Canvas tooltip wiring ─────────────────────────────────────────────────────
-
-// Finding 7: debounce the O(N) chunksVis scan to at most once per animation
-// frame instead of firing on every raw mousemove event (~60/s during movement).
-let _ksMoveFrame: number | null = null;
-ksCanvas.addEventListener('mousemove', (e: MouseEvent) => {
-  if (_ksMoveFrame !== null) return;
-  _ksMoveFrame = requestAnimationFrame(() => {
-    _ksMoveFrame = null;
-    const W  = ksCanvas.offsetWidth;
-    const px = e.clientX - ksCanvas.getBoundingClientRect().left;
-    const hits = chunksVis.filter(c => {
-      const x = c.s * W;
-      const w = Math.max(1, (c.e - c.s) * W);
-      return px >= x - 1 && px <= x + w + 1;
-    });
-    showTooltip(tooltip, e, hits);
-  });
-});
-ksCanvas.addEventListener('mouseleave', () => {
-  if (_ksMoveFrame !== null) { cancelAnimationFrame(_ksMoveFrame); _ksMoveFrame = null; }
-  tooltip.style.display = 'none';
-});
 
 hmCanvas.addEventListener('mousemove', (e: MouseEvent) => {
   const rect = hmCanvas.getBoundingClientRect();

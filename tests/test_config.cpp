@@ -56,3 +56,33 @@ TEST_CASE("process environment KEYSPACE entries override .env entries", "[config
     unsetEnvVar("KEYSPACE_PROCESS_OVERRIDE");
     std::remove(".env");
 }
+
+TEST_CASE("loadConfigFromEnv parses block explorer settings and puzzle status targets", "[config]") {
+    unsetEnvVar("BLOCKEXPLORER_API");
+    unsetEnvVar("BLOCKEXPLORER_URL");
+    unsetEnvVar("BLOCKEXPLORER_POLL_SEC");
+    unsetEnvVar("PUZZLE_71_TARGET");
+    unsetEnvVar("PUZZLE_ALL_BTC_TARGET");
+    {
+        std::ofstream env(".env");
+        env << "BLOCKEXPLORER_API=https://mempool.space/api/address/\n";
+        env << "BLOCKEXPLORER_URL=https://mempool.space/address/\n";
+        env << "BLOCKEXPLORER_POLL_SEC=123\n";
+        env << "PUZZLE_71_TARGET=1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU\n";
+        env << "PUZZLE_ALL_BTC_TARGET=5\n";
+    }
+
+    Config cfg = loadConfigFromEnv();
+
+    CHECK(cfg.blockExplorerApi == "https://mempool.space/api/address/");
+    CHECK(cfg.blockExplorerUrl == "https://mempool.space/address/");
+    CHECK(cfg.blockExplorerPollSec == 123);
+    REQUIRE(cfg.puzzleStatusTargets.contains("PUZZLE 71"));
+    CHECK(cfg.puzzleStatusTargets.at("PUZZLE 71").type == PuzzleStatusTargetType::Address);
+    CHECK(cfg.puzzleStatusTargets.at("PUZZLE 71").value == "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU");
+    REQUIRE(cfg.puzzleStatusTargets.contains("ALL BTC"));
+    CHECK(cfg.puzzleStatusTargets.at("ALL BTC").type == PuzzleStatusTargetType::FindingsThreshold);
+    CHECK(cfg.puzzleStatusTargets.at("ALL BTC").value == "5");
+
+    std::remove(".env");
+}

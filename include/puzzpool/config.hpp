@@ -1,5 +1,6 @@
 #pragma once
 
+#include <puzzpool/puzzle_status.hpp>
 #include <puzzpool/types.hpp>
 
 #include <cstdint>
@@ -28,9 +29,13 @@ struct Config {
     std::string permutationMode = "feistel";
     std::string stage           = "PROD";
     std::string adminToken;
+    std::string blockExplorerApi = "https://mempool.space/api/address/";
+    std::string blockExplorerUrl = "https://mempool.space/address/";
+    int         blockExplorerPollSec = 600;
 
     cpp_int gpuBatchKeys = cpp_int("4278190080");
     std::map<std::string, std::pair<std::string, std::string>> keyspaces;
+    std::map<std::string, PuzzleStatusTargetConfig> puzzleStatusTargets;
 };
 
 Config loadConfigFromEnv();

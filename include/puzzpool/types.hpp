@@ -34,6 +34,12 @@ struct PuzzleRow {
     std::string virtualChunkSizeKeys;
     cpp_int virtualChunkCount = 0;
     int bootstrapStage = 0;
+    std::string statusTargetType;
+    std::string statusTargetValue;
+    std::string statusState;
+    std::string statusCheckedAt;
+    std::string statusLink;
+    std::string statusNote;
 };
 
 struct ChunkRow {

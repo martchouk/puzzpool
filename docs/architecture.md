@@ -43,7 +43,7 @@ and visualises it on a live dashboard.
 | Database | SQLite 3 via [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) | Synchronous; WAL mode for concurrent reads |
 | Permutations | Boost Multiprecision (`cpp_int`) | 256-bit arithmetic for Feistel/affine chunk ordering |
 | Frontend source | TypeScript (strict), Vite, vite-plugin-singlefile | `frontend/` directory |
-| Frontend output | `public/index.html` | Single self-contained file; built by `update.sh` |
+| Frontend output | `public/index.html` | Single self-contained file; built by `update.sh`; generated and untracked |
 | Reverse proxy | Nginx | TLS termination, admin-route IP restriction |
 | Process manager | systemd | Auto-restart on failure |
 
@@ -74,7 +74,7 @@ Headers live under `include/puzzpool/`. Dependency direction (no cycles):
 
 ## Frontend Modules
 
-The dashboard is compiled from `frontend/src/` by Vite into `public/index.html`:
+The dashboard is compiled from `frontend/src/` by Vite into generated `public/index.html`:
 
 | Module | Responsibility |
 |--------|---------------|
@@ -85,8 +85,9 @@ The dashboard is compiled from `frontend/src/` by Vite into `public/index.html`:
 | `dashboard.ts` | Entry point: state, DOM wiring, event handlers, 5-second poll loop |
 
 The build step (`npm run build --prefix frontend`) compiles TypeScript, bundles all modules,
-and inlines everything into `public/index.html`. The server process only serves this static
-file — Node.js is not needed at runtime.
+and inlines everything into `public/index.html`. `frontend/` is the single source of truth;
+the generated file is served by the C++ process but is not tracked in git. Node.js is not
+needed at runtime.
 
 ## Data Flow — Chunk Lifecycle
 
@@ -148,6 +149,6 @@ SQLite. `PoolService` is a thin HTTP adapter: parse → lock mutex → delegate 
 only by the `name` string they send with each request. Chunk ownership is enforced by
 `WHERE worker_name = ?` in all UPDATE statements.
 
-**Single-file frontend** — `public/index.html` has no runtime dependencies. Deployment
-only requires copying one file; the C++ server serves it with a single static-file route.
-TypeScript strict mode and the Vite build catch type errors before the file is regenerated.
+**Single-file frontend** — `public/index.html` has no runtime dependencies. The C++ server
+serves that generated file with a single static-file route. TypeScript strict mode and the
+Vite build catch type errors before the file is regenerated.
