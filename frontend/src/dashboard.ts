@@ -17,7 +17,7 @@ import {
 
 let chunksVis: ChunkVis[] = [];
 let allocGenerationFilter = 'feistel';
-let hmLayerFilter = 'native';
+let hmLayerFilter = 'completed';
 let hilLayerFilter = 'native';
 let heatmapBuckets: ReturnType<typeof drawHeatmap> = [];
 let pendingActivateId: number | null = null;
@@ -52,8 +52,18 @@ function applyLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
   return chunks;
 }
 
+function applyHeatmapLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
+  if (filter === 'all') return chunks;
+  if (filter === 'completed') return chunks.filter(c => c.st === 'completed');
+  if (filter === 'assigned') return chunks.filter(c => c.st === 'assigned');
+  if (filter === 'reclaimed') return chunks.filter(c => c.st === 'reclaimed');
+  if (filter === 'FOUND') return chunks.filter(c => c.st === 'FOUND');
+  if (filter === 'blocked') return chunks.filter(c => c.st === 'blocked');
+  return chunks;
+}
+
 function redrawAll(): void {
-  heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
+  heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
   drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
   drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
 }
@@ -273,11 +283,11 @@ function initHmLayerFilter(): void {
   sync();
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const next = btn.dataset.layer ?? 'native';
+      const next = btn.dataset.layer ?? 'completed';
       if (next === hmLayerFilter) return;
       hmLayerFilter = next;
       sync();
-      heatmapBuckets = drawHeatmap(hmCanvas, applyLayerFilter(chunksVis, hmLayerFilter));
+      heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
     });
   });
 }
