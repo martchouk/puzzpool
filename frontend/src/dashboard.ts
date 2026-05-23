@@ -68,54 +68,6 @@ function redrawAll(): void {
   drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
 }
 
-function initApiReferencePanels(): void {
-  document.querySelectorAll<HTMLElement>('.api-block').forEach((block, index) => {
-    const header = block.querySelector<HTMLElement>('.api-header');
-    const table = block.querySelector<HTMLElement>('.api-table');
-    if (!header || !table) return;
-
-    const pathEl = header.querySelector<HTMLElement>('.api-path');
-    const panelId = `api-panel-${index + 1}`;
-    const label = `${pathEl?.textContent?.trim() ?? 'endpoint'} details`;
-
-    table.id = panelId;
-    table.hidden = true;
-    block.classList.remove('is-expanded');
-    block.classList.add('is-collapsed');
-    header.classList.add('is-collapsible');
-
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'api-toggle';
-    toggle.setAttribute('aria-expanded', 'false');
-    toggle.setAttribute('aria-controls', panelId);
-    toggle.setAttribute('aria-label', `Expand ${label}`);
-    toggle.innerHTML =
-      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 6.25 8 10l4-3.75" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/></svg>';
-
-    const togglePanel = (): void => {
-      const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
-      toggle.setAttribute('aria-expanded', String(!isExpanded));
-      toggle.setAttribute('aria-label', `${isExpanded ? 'Expand' : 'Collapse'} ${label}`);
-      table.hidden = isExpanded;
-      block.classList.toggle('is-expanded', !isExpanded);
-      block.classList.toggle('is-collapsed', isExpanded);
-    };
-
-    toggle.addEventListener('click', (event) => {
-      event.stopPropagation();
-      togglePanel();
-    });
-
-    header.addEventListener('click', (event) => {
-      if ((event.target as HTMLElement).closest('.api-toggle')) return;
-      togglePanel();
-    });
-
-    header.appendChild(toggle);
-  });
-}
-
 function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
   const host = document.getElementById('puzzle-status-host')!;
   host.replaceChildren();
@@ -285,7 +237,9 @@ function initAllocatorGenerationFilter(): void {
 
   const syncButtons = (): void => {
     root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.gen === allocGenerationFilter);
+      const isActive = b.dataset.gen === allocGenerationFilter;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-pressed', String(isActive));
     });
   };
 
@@ -306,7 +260,9 @@ function initHmLayerFilter(): void {
   const root = document.getElementById('hm-layer-filter');
   if (!root) return;
   const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.layer === hmLayerFilter);
+    const isActive = b.dataset.layer === hmLayerFilter;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
   });
   sync();
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
@@ -324,7 +280,9 @@ function initHilLayerFilter(): void {
   const root = document.getElementById('hil-layer-filter');
   if (!root) return;
   const sync = (): void => root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.layer === hilLayerFilter);
+    const isActive = b.dataset.layer === hilLayerFilter;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
   });
   sync();
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
@@ -561,7 +519,6 @@ new ResizeObserver(() => {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 requestAnimationFrame(() => {
-  initApiReferencePanels();
   initAllocatorGenerationFilter();
   initHmLayerFilter();
   initHilLayerFilter();
