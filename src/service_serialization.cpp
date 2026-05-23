@@ -1,5 +1,6 @@
 #include <puzzpool/service.hpp>
 #include <puzzpool/hex_bigint.hpp>
+#include <puzzpool/puzzle_status.hpp>
 
 #include <chrono>
 #include <ctime>
@@ -28,6 +29,21 @@ json PoolService::puzzleJson(const PuzzleRow& p) {
     j["virtual_chunk_size_keys"] = p.virtualChunkSizeKeys.empty() ? json(nullptr) : json(p.virtualChunkSizeKeys);
     j["virtual_chunk_count"]     = p.virtualChunkCount > 0 ? json(bigToDec(p.virtualChunkCount)) : json(nullptr);
     j["bootstrap_stage"]         = p.bootstrapStage;
+    if (!p.statusTargetType.empty() || !p.statusState.empty()) {
+        json status;
+        status["state"] = p.statusState.empty() ? "unknown" : p.statusState;
+        status["label"] = p.statusState.empty()
+            ? "UNKNOWN"
+            : canonicalPuzzleName(p.statusState);
+        status["target_type"] = p.statusTargetType.empty() ? json(nullptr) : json(p.statusTargetType);
+        status["target_value"] = p.statusTargetValue.empty() ? json(nullptr) : json(p.statusTargetValue);
+        status["checked_at"] = p.statusCheckedAt.empty() ? json(nullptr) : json(p.statusCheckedAt);
+        status["link"] = p.statusLink.empty() ? json(nullptr) : json(p.statusLink);
+        status["note"] = p.statusNote.empty() ? json(nullptr) : json(p.statusNote);
+        j["status"] = std::move(status);
+    } else {
+        j["status"] = nullptr;
+    }
     return j;
 }
 

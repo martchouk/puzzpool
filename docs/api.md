@@ -173,7 +173,16 @@ Dashboard data — polled every 5 seconds by the dashboard.
     "alloc_cursor": "10452",
     "virtual_chunk_size_keys": "30000000",
     "virtual_chunk_count": "78706",
-    "bootstrap_stage": 3
+    "bootstrap_stage": 3,
+    "status": {
+      "state": "unsolved",
+      "label": "UNSOLVED",
+      "target_type": "address",
+      "target_value": "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "checked_at": "2026-05-23T10:00:00Z",
+      "link": "https://mempool.space/address/1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "note": null
+    }
   },
   "stage": "PROD",
   "target_minutes": 10,
@@ -277,6 +286,19 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | `virtual_chunk_size_keys` | string\|null | Size of each virtual chunk in keys (decimal integer string); `virtual_random_chunks_v1` only |
 | `virtual_chunk_count` | string\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
 | `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
+| `status` | object\|null | Cached puzzle solved-state metadata for the dashboard badge |
+
+**`puzzle.status` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `state` | string | `"unknown"`, `"unsolved"`, or `"solved"` |
+| `label` | string | Uppercase display label for the dashboard badge |
+| `target_type` | string\|null | `"address"` or `"findings_threshold"` |
+| `target_value` | string\|null | Explorer address or findings threshold configured for the puzzle |
+| `checked_at` | string\|null | UTC ISO-8601 timestamp of the last backend refresh |
+| `link` | string\|null | Explorer URL for address-backed puzzles |
+| `note` | string\|null | Backend note for unknown/failure states or threshold progress |
 
 `chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
 used by the canvas visualisations. `chunks_vis[].g` is the `alloc_generation` value

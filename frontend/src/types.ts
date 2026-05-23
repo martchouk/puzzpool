@@ -91,6 +91,17 @@ export interface PuzzleInfo {
   virtual_chunk_count: string | null;      // BigInt decimal string
   bootstrap_stage: number;
   total_keys: string;                       // BigInt decimal string
+  status: PuzzleStatusInfo | null;
+}
+
+export interface PuzzleStatusInfo {
+  state: 'unknown' | 'unsolved' | 'solved';
+  label: string;
+  target_type: 'address' | 'findings_threshold' | null;
+  target_value: string | null;
+  checked_at: string | null;
+  link: string | null;
+  note: string | null;
 }
 
 // active field from listPuzzles() returns 0/1 integer, not boolean

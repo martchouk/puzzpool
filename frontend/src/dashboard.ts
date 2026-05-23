@@ -1,4 +1,4 @@
-import type { ChunkVis, PuzzleListEntry } from './types.ts';
+import type { ChunkVis, PuzzleListEntry, PuzzleStatusInfo } from './types.ts';
 import { fetchStats, activatePuzzle } from './api.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc,
@@ -114,6 +114,34 @@ function initApiReferencePanels(): void {
 
     header.appendChild(toggle);
   });
+}
+
+function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
+  const host = document.getElementById('puzzle-status-host')!;
+  host.replaceChildren();
+  if (!status) return;
+
+  const badge = document.createElement('span');
+  badge.className = `puzzle-status-chip is-${status.state}`;
+  badge.textContent = (status.label || status.state).toUpperCase();
+
+  const titleParts: string[] = [];
+  if (status.checked_at) titleParts.push(`Checked ${fmtUtc(status.checked_at)}`);
+  if (status.note) titleParts.push(status.note);
+  if (titleParts.length > 0) badge.title = titleParts.join(' · ');
+
+  if (status.link) {
+    const link = document.createElement('a');
+    link.className = 'puzzle-status-link';
+    link.href = status.link;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    link.appendChild(badge);
+    host.appendChild(link);
+    return;
+  }
+
+  host.appendChild(badge);
 }
 
 // ── Stage indicator ───────────────────────────────────────────────────────────
@@ -334,6 +362,7 @@ async function updateDashboard(): Promise<void> {
 
     if (data.puzzle?.total_keys) {
       document.getElementById('puzzle-name')!.textContent = data.puzzle.name;
+      renderPuzzleStatus(data.puzzle.status ?? null);
       document.getElementById('frontier')!.textContent =
         `0x${trimHexRange(data.puzzle.start_hex)} - 0x${trimHexRange(data.puzzle.end_hex)}`;
 
@@ -389,6 +418,7 @@ async function updateDashboard(): Promise<void> {
       } catch { /* ignore if blocked data not parseable */ }
       document.getElementById('puzzle-eta')!.innerHTML = etaLine;
     } else {
+      renderPuzzleStatus(null);
       document.getElementById('puzzle-vchunks')!.textContent = '';
       document.getElementById('puzzle-alloc')!.textContent   = '';
       document.getElementById('puzzle-eta')!.textContent     = '';

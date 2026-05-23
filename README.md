@@ -110,8 +110,12 @@ cp .env.example .env
 | `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
 | `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
 | `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
+| `BLOCKEXPLORER_API` | `https://mempool.space/api/address/` | Backend API base used to refresh address-backed puzzle solved state |
+| `BLOCKEXPLORER_URL` | `https://mempool.space/address/` | Public explorer URL used for the puzzle badge link |
+| `BLOCKEXPLORER_POLL_SEC` | `600` | Seconds between backend puzzle-status refreshes |
 | `PERMUTATION_MODE` | `feistel` | Virtual chunk permutation algorithm: `feistel` (cycle-walking Feistel cipher) or `affine` (linear congruential). Recorded per-chunk as `alloc_generation`. |
 | `KEYSPACE_<NAME>` | *(unset)* | Seed a keyspace on startup: `KEYSPACE_ALL_BTC=<start_hex>:<end_hex>`. Underscores in the variable name become spaces in the puzzle name. Multiple variables are supported. |
+| `PUZZLE_<NAME>_TARGET` | *(unset)* | Optional solved-state target. For address-backed puzzles use a Bitcoin address, for `ALL BTC` use the distinct found-key threshold. Example: `PUZZLE_71_TARGET=1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU`, `PUZZLE_ALL_BTC_TARGET=5`. |
 
 ---
 

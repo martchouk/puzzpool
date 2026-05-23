@@ -9,6 +9,24 @@ namespace puzzpool {
 
 using json = nlohmann::json;
 
+namespace {
+
+PuzzleRow seedTemplate(const std::string& name,
+                       const std::string& startHex,
+                       const std::string& endHex,
+                       int active,
+                       const std::string& strategy) {
+    PuzzleRow puzzle;
+    puzzle.name = name;
+    puzzle.startHex = startHex;
+    puzzle.endHex = endHex;
+    puzzle.active = active;
+    puzzle.allocStrategy = strategy;
+    return puzzle;
+}
+
+} // namespace
+
 void PoolService::seedConfiguredKeyspaces() {
     for (const auto& [name, rangePair] : cfg_.keyspaces) {
         const std::string& startRaw = rangePair.first;
@@ -33,7 +51,7 @@ void PoolService::seedConfiguredKeyspaces() {
 
         const std::string strategy = cfg_.defaultAllocStrategy;
         const std::string seed = allocator_.defaultAllocSeedForPuzzle(
-            PuzzleRow{0, name, startNorm, endNorm, 0, "", "", strategy, "", 0, "", 0, 0},
+            seedTemplate(name, startNorm, endNorm, 0, strategy),
             strategy
         );
 
@@ -80,7 +98,7 @@ void PoolService::seedConfiguredKeyspaces() {
         const std::string endHex   = normalizeHex("07fffffffffffffffff");
         const std::string strategy = cfg_.defaultAllocStrategy;
         const std::string seed = allocator_.defaultAllocSeedForPuzzle(
-            PuzzleRow{0, name, startHex, endHex, 1, "", "", strategy, "", 0, "", 0, 0},
+            seedTemplate(name, startHex, endHex, 1, strategy),
             strategy
         );
 

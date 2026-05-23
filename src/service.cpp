@@ -9,6 +9,9 @@ PoolService::PoolService(const Config& cfg)
     seedConfiguredKeyspaces();
     ensureSingleActivePuzzle();
     ensureAllocators();
+    syncConfiguredPuzzleTargets();
+    std::unique_lock lock(mu_);
+    refreshPuzzleStatusesLocked();
 }
 
 int PoolService::reclaimTimedOutChunks() {

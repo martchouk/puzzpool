@@ -36,7 +36,13 @@ void PoolDb::migrate() {
         alloc_cursor_hex TEXT,
         virtual_chunk_size_keys TEXT,
         virtual_chunk_count_hex TEXT,
-        bootstrap_stage INTEGER NOT NULL DEFAULT 0
+        bootstrap_stage INTEGER NOT NULL DEFAULT 0,
+        status_target_type TEXT,
+        status_target_value TEXT,
+        status_state TEXT,
+        status_checked_at TEXT,
+        status_link TEXT,
+        status_note TEXT
       );
 
       CREATE TABLE IF NOT EXISTS workers (
@@ -103,6 +109,12 @@ void PoolDb::migrate() {
     addColumnIfMissing("puzzles", "virtual_chunk_size_keys TEXT");
     addColumnIfMissing("puzzles", "virtual_chunk_count_hex TEXT");
     addColumnIfMissing("puzzles", "bootstrap_stage INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing("puzzles", "status_target_type TEXT");
+    addColumnIfMissing("puzzles", "status_target_value TEXT");
+    addColumnIfMissing("puzzles", "status_state TEXT");
+    addColumnIfMissing("puzzles", "status_checked_at TEXT");
+    addColumnIfMissing("puzzles", "status_link TEXT");
+    addColumnIfMissing("puzzles", "status_note TEXT");
 
     addColumnIfMissing("workers", "version TEXT");
     addColumnIfMissing("workers", "min_chunk_keys TEXT");
@@ -235,6 +247,12 @@ PuzzleRow PoolDb::readPuzzle(SQLite::Statement& q) {
     std::string countHex = getStr("virtual_chunk_count_hex");
     p.virtualChunkCount = countHex.empty() ? cpp_int(0) : hexToInt(countHex);
     p.bootstrapStage      = getI("bootstrap_stage");
+    p.statusTargetType    = getStr("status_target_type");
+    p.statusTargetValue   = getStr("status_target_value");
+    p.statusState         = getStr("status_state");
+    p.statusCheckedAt     = getStr("status_checked_at");
+    p.statusLink          = getStr("status_link");
+    p.statusNote          = getStr("status_note");
     return p;
 }
 

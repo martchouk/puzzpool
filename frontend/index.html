@@ -174,6 +174,64 @@
             margin-bottom: 0.4rem;
         }
 
+        .frontier-heading {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .puzzle-status-host {
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .puzzle-status-link {
+            display: inline-flex;
+            align-items: center;
+            text-decoration: none;
+        }
+
+        .puzzle-status-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 1.5rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            font-family: var(--font-mono);
+            font-size: 0.64rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            transition: var(--transition);
+        }
+
+        .puzzle-status-chip.is-solved {
+            color: var(--accent-green);
+            background: rgba(0,255,136,0.08);
+            border-color: rgba(0,255,136,0.28);
+            box-shadow: 0 0 16px rgba(0,255,136,0.12);
+        }
+
+        .puzzle-status-chip.is-unsolved {
+            color: var(--accent-amber);
+            background: rgba(255,176,0,0.08);
+            border-color: rgba(255,176,0,0.26);
+            box-shadow: 0 0 16px rgba(255,176,0,0.1);
+        }
+
+        .puzzle-status-chip.is-unknown {
+            color: var(--text-secondary);
+            background: rgba(136,136,136,0.08);
+            border-color: rgba(136,136,136,0.22);
+        }
+
+        .puzzle-status-link:hover .puzzle-status-chip {
+            transform: translateY(-1px);
+            border-color: var(--border-hover);
+        }
+
         .frontier-value {
             font-family: var(--font-mono);
             font-size: 0.75rem;
@@ -841,7 +899,10 @@
         </div>
 
         <div class="frontier-card">
-            <div class="frontier-label" id="puzzle-name">Active Puzzle</div>
+            <div class="frontier-label frontier-heading">
+                <span id="puzzle-name">Active Puzzle</span>
+                <span id="puzzle-status-host" class="puzzle-status-host"></span>
+            </div>
             <div id="frontier" class="frontier-value">Loading...</div>
             <div id="puzzle-total-keys" class="stat-subtext"></div>
             <div id="puzzle-vchunks" class="stat-subtext"></div>
@@ -1198,7 +1259,16 @@ GET /api/v1/stats?puzzle_id=1</pre>
     "alloc_cursor": 2220012,
     "virtual_chunk_size_keys": "33554432",
     "virtual_chunk_count": 35184372088832,
-    "bootstrap_stage": 3
+    "bootstrap_stage": 3,
+    "status": {
+      "state": "unsolved",
+      "label": "UNSOLVED",
+      "target_type": "address",
+      "target_value": "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "checked_at": "2026-05-23T10:00:00Z",
+      "link": "https://mempool.space/address/1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
+      "note": null
+    }
   },
   "active_workers_count": 2,
   "inactive_workers_count": 1,

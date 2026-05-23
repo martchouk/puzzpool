@@ -35,6 +35,7 @@ public:
     crow::response handleImportRanges(const crow::request& req);
 
     int reclaimTimedOutChunks();
+    void refreshPuzzleStatuses();
 
     const Config& cfg() const { return cfg_; }
 
@@ -42,6 +43,8 @@ private:
     void seedConfiguredKeyspaces();
     void ensureSingleActivePuzzle();
     void ensureAllocators();
+    void syncConfiguredPuzzleTargets();
+    void refreshPuzzleStatusesLocked();
 
     nlohmann::json buildStats(const PuzzleRow& puzzle);
     nlohmann::json puzzleJson(const PuzzleRow& p);

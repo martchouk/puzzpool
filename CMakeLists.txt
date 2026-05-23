@@ -36,6 +36,7 @@ option(PUZZPOOL_BUILD_TESTS "Build the Catch2 test suite" ON)
 add_library(puzzpool_core STATIC
     src/env.cpp
     src/config.cpp
+    src/puzzle_status.cpp
     src/hex_bigint.cpp
     src/hash_utils.cpp
     src/permutation.cpp
@@ -48,6 +49,7 @@ add_library(puzzpool_core STATIC
     src/service_admin.cpp
     src/service_stats.cpp
     src/service_bootstrap.cpp
+    src/service_puzzle_status.cpp
     src/work_service.cpp
     src/submission_service.cpp
 )

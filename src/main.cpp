@@ -4,6 +4,7 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -109,6 +110,15 @@ int main() {
             }
         });
         reclaimer.detach();
+
+        std::thread statusRefresher([&service, &cfg] {
+            const auto interval = std::chrono::seconds(std::max(30, cfg.blockExplorerPollSec));
+            for (;;) {
+                std::this_thread::sleep_for(interval);
+                try { service.refreshPuzzleStatuses(); } catch (...) {}
+            }
+        });
+        statusRefresher.detach();
 
         std::cout << "[puzzpool-cpp] server running on http://127.0.0.1:" << cfg.port << "\n";
         std::cout << "[puzzpool-cpp] database: " << cfg.dbPath << "\n";
