@@ -308,10 +308,6 @@ function getAllocatorChunks(chunks: ChunkVis[]): ChunkVis[] {
     .sort((a, b) => a.id - b.id);
 }
 
-function getAllocatorSortedStarts(chunks: ChunkVis[]): ChunkVis[] {
-  return getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
-}
-
 function computeNormalizedGapsFromSorted(sorted: ChunkVis[]): number[] {
   if (sorted.length < 2) return [];
   const gaps: number[] = [];
@@ -325,12 +321,7 @@ function computeNormalizedGapsFromSorted(sorted: ChunkVis[]): number[] {
   return gaps.map(g => g / mean).filter(v => Number.isFinite(v) && v >= 0);
 }
 
-function getAllocatorNormalizedGaps(chunks: ChunkVis[]): number[] {
-  return computeNormalizedGapsFromSorted(getAllocatorSortedStarts(chunks));
-}
-
-function computeNormalizedGapMetrics(chunks: ChunkVis[]) {
-  const values = getAllocatorNormalizedGaps(chunks).slice().sort((a, b) => a - b);
+function computeNormalizedGapMetricsFromValues(values: number[]) {
   if (!values.length) return null;
   const n = values.length;
   const mean = values.reduce((s, v) => s + v, 0) / n;
@@ -341,6 +332,11 @@ function computeNormalizedGapMetrics(chunks: ChunkVis[]) {
   const sd = Math.sqrt(variance);
   const cv = mean > 0 ? sd / mean : null;
   return { n, mean, median: median ?? 0, p95: p95 ?? 0, max, cv };
+}
+
+function computeNormalizedGapMetricsFromSorted(sorted: ChunkVis[]) {
+  const values = computeNormalizedGapsFromSorted(sorted).slice().sort((a, b) => a - b);
+  return computeNormalizedGapMetricsFromValues(values);
 }
 
 export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedById?: ChunkVis[]): void {
@@ -458,7 +454,11 @@ export function drawAllocatorNormalizedGapHistogram(canvas: HTMLCanvasElement, c
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const values = _sortedByS ? computeNormalizedGapsFromSorted(_sortedByS) : getAllocatorNormalizedGaps(chunks);
+  const sortedByS = _sortedByS ?? chunks
+    .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
+    .slice()
+    .sort((a, b) => a.s - b.s);
+  const values = computeNormalizedGapsFromSorted(sortedByS);
   if (!values.length) return;
   const CLIP = 6;
   const bins = Math.min(96, Math.max(36, Math.floor(W / 10)));
@@ -530,20 +530,20 @@ export function drawAllocatorDiagnostics(
   },
   gapMetricsEl: HTMLElement,
   chunks: ChunkVis[],
-): void {
+): ReturnType<typeof computeNormalizedGapMetricsFromSorted> {
   // Finding 6: compute the two derived arrays once and pass them to each
   // sub-function to avoid O(3×N log N) redundant filter+sort on every redraw.
   const sortedById = getAllocatorChunks(chunks);
-  const sortedByS  = sortedById.slice().sort((a, b) => a.s - b.s);
+  const sortedByS  = chunks
+    .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
+    .slice()
+    .sort((a, b) => a.s - b.s);
   drawAllocatorScatter(canvases.scatter, chunks, sortedById);
   drawAllocatorGapHistogram(canvases.gap, chunks, sortedByS);
   updateAllocatorGapMetrics(gapMetricsEl, chunks, sortedByS);
   drawAllocatorNormalizedGapHistogram(canvases.gapnorm, chunks, sortedByS);
   drawAllocatorResidueMap(canvases.residue, chunks, sortedById);
-}
-
-export function exportNormalizedGapMetrics(chunks: ChunkVis[]) {
-  return computeNormalizedGapMetrics(chunks);
+  return computeNormalizedGapMetricsFromSorted(sortedByS);
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────

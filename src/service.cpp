@@ -4,14 +4,13 @@
 
 namespace puzzpool {
 
-PoolService::PoolService(const Config& cfg)
-    : cfg_(cfg), db_(cfg), allocator_(db_), ws_(db_, allocator_), ss_(db_) {
+PoolService::PoolService(const Config& cfg, AddressStatusFetcher fetcher, bool refreshStatusesOnInit)
+    : cfg_(cfg), db_(cfg), allocator_(db_), ws_(db_, allocator_), ss_(db_),
+      fetchAddressStatus_(fetcher ? std::move(fetcher) : AddressStatusFetcher(fetchAddressStatusJson)) {
     seedConfiguredKeyspaces();
     ensureSingleActivePuzzle();
     ensureAllocators();
-    syncConfiguredPuzzleTargets();
-    std::unique_lock lock(mu_);
-    refreshPuzzleStatusesLocked();
+    if (refreshStatusesOnInit) refreshPuzzleStatuses();
 }
 
 int PoolService::reclaimTimedOutChunks() {

@@ -10,7 +10,9 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 
@@ -21,7 +23,10 @@ namespace puzzpool {
 // and serialises responses. It owns no domain logic directly.
 class PoolService {
 public:
-    explicit PoolService(const Config& cfg);
+    using AddressStatusFetcher =
+        std::function<std::optional<nlohmann::json>(const std::string&, const std::string&)>;
+
+    explicit PoolService(const Config& cfg, AddressStatusFetcher fetcher = {}, bool refreshStatusesOnInit = true);
 
     crow::response handleStats(const crow::request& req);
     crow::response handleWork(const crow::request& req);
@@ -44,7 +49,7 @@ private:
     void ensureSingleActivePuzzle();
     void ensureAllocators();
     void syncConfiguredPuzzleTargets();
-    void refreshPuzzleStatusesLocked();
+    static std::optional<nlohmann::json> fetchAddressStatusJson(const std::string& apiBase, const std::string& address);
 
     nlohmann::json buildStats(const PuzzleRow& puzzle);
     nlohmann::json puzzleJson(const PuzzleRow& p);
@@ -60,6 +65,7 @@ private:
     Allocator          allocator_;
     WorkService        ws_;
     SubmissionService  ss_;
+    AddressStatusFetcher fetchAddressStatus_;
     std::shared_mutex  mu_;
 };
 

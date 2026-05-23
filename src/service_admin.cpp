@@ -27,8 +27,9 @@ crow::response PoolService::handleActivatePuzzle(const crow::request& req) {
         tx.commit();
 
         allocator_.ensureAllocatorForPuzzle(id);
-        syncConfiguredPuzzleTargets();
-        refreshPuzzleStatusesLocked();
+        lock.unlock();
+        refreshPuzzleStatuses();
+        std::shared_lock relock(mu_);
         auto p = db_.puzzleById(id);
         return jsonResponse({{"ok", true}, {"puzzle", puzzleJson(*p)}});
     } catch (const std::exception& e) {
@@ -127,8 +128,9 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             else
                 allocator_.seedSectors(puzzleId, startNorm, endNorm);
         }
-        syncConfiguredPuzzleTargets();
-        refreshPuzzleStatusesLocked();
+        lock.unlock();
+        refreshPuzzleStatuses();
+        std::shared_lock relock(mu_);
         auto p = db_.activePuzzle();
         return jsonResponse({{"ok", true}, {"puzzle", puzzleJson(*p)}});
     } catch (const std::exception& e) {

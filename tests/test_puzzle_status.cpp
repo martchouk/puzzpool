@@ -7,8 +7,12 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <future>
+#include <thread>
 
 using namespace puzzpool;
 using namespace puzzpool::test;
@@ -101,4 +105,54 @@ TEST_CASE("handleStats serializes cached puzzle status", "[puzzle-status][stats]
     CHECK(body["puzzle"]["status"]["link"] == "https://mempool.space/address/1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU");
 
     std::remove("test-puzzle-status.db");
+}
+
+TEST_CASE("handleStats remains responsive while address status fetch is in flight", "[puzzle-status][stats][concurrency]") {
+    Config cfg = memConfig();
+    cfg.dbPath = "test-puzzle-status-concurrency.db";
+    cfg.puzzleStatusTargets["PUZZLE 71"] = {
+        PuzzleStatusTargetType::Address,
+        "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU"
+    };
+
+    std::atomic<bool> fetchStarted = false;
+    std::promise<void> releaseFetch;
+    auto releaseFuture = releaseFetch.get_future().share();
+
+    PoolService svc{
+        cfg,
+        [&](const std::string&, const std::string&) -> std::optional<json> {
+            fetchStarted.store(true);
+            releaseFuture.wait();
+            return json{
+                {"chain_stats", {{"funded_txo_sum", 1000}, {"spent_txo_count", 0}, {"spent_txo_sum", 0}}},
+                {"mempool_stats", {{"funded_txo_sum", 0}, {"spent_txo_count", 0}, {"spent_txo_sum", 0}}}
+            };
+        },
+        false
+    };
+
+    auto refreshFuture = std::async(std::launch::async, [&] {
+        svc.refreshPuzzleStatuses();
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (!fetchStarted.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(fetchStarted.load());
+
+    crow::request req;
+    auto statsFuture = std::async(std::launch::async, [&] {
+        return svc.handleStats(req);
+    });
+
+    REQUIRE(statsFuture.wait_for(std::chrono::milliseconds(150)) == std::future_status::ready);
+    const auto resp = statsFuture.get();
+    CHECK(resp.code == 200);
+
+    releaseFetch.set_value();
+    refreshFuture.wait();
+
+    std::remove("test-puzzle-status-concurrency.db");
 }

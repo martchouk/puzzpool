@@ -10,7 +10,7 @@ import {
   drawHeatmap, drawHilbert,
   drawAllocatorDiagnostics,
   getHilbertD,
-  showTooltip, exportNormalizedGapMetrics,
+  showTooltip,
 } from './canvas.ts';
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -20,6 +20,9 @@ let allocGenerationFilter = 'feistel';
 let hmLayerFilter = 'completed';
 let hilLayerFilter = 'native';
 let heatmapBuckets: ReturnType<typeof drawHeatmap> = [];
+let hilbertVisibleChunks: ChunkVis[] = [];
+let hilbertTooltipFrame = 0;
+let lastHilbertTooltipEvent: MouseEvent | null = null;
 let pendingActivateId: number | null = null;
 let lastPuzzles: (PuzzleListEntry & { active: boolean | number })[] = [];
 let selectedId: number | null = null;
@@ -63,9 +66,11 @@ function applyHeatmapLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[]
 }
 
 function redrawAll(): void {
+  const filteredChunks = getFilteredChunks();
   heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
-  drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
-  drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
+  drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, filteredChunks);
+  hilbertVisibleChunks = applyLayerFilter(chunksVis, hilLayerFilter);
+  drawHilbert(hilCanvas, hilbertVisibleChunks);
 }
 
 function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
@@ -383,10 +388,13 @@ async function updateDashboard(): Promise<void> {
     }
 
     chunksVis = data.chunks_vis ?? [];
+    const filteredChunks = getFilteredChunks();
     updateAllocatorGenerationFilterCounts();
-    redrawAll();
+    heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
+    const ngm = drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, filteredChunks);
+    hilbertVisibleChunks = applyLayerFilter(chunksVis, hilLayerFilter);
+    drawHilbert(hilCanvas, hilbertVisibleChunks);
 
-    const ngm = exportNormalizedGapMetrics(getFilteredChunks());
     if (ngm) {
       console.log(
         `[Alloc norm-gap ${allocGenerationFilter}] ` +
@@ -498,17 +506,27 @@ hmCanvas.addEventListener('mousemove', (e: MouseEvent) => {
 hmCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
 hilCanvas.addEventListener('mousemove', (e: MouseEvent) => {
-  const rect = hilCanvas.getBoundingClientRect();
-  const hx = Math.floor(((e.clientX - rect.left) / rect.width)  * HILBERT_N);
-  const hy = Math.floor(((e.clientY - rect.top)  / rect.height) * HILBERT_N);
-  if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) return;
-  const index      = getHilbertD(HILBERT_N, hx, hy);
-  const totalCells = HILBERT_N * HILBERT_N;
-  const cell_s     = index / totalCells;
-  const cell_e     = (index + 1) / totalCells;
-  showTooltip(tooltip, e, applyLayerFilter(chunksVis, hilLayerFilter).filter(c => c.s <= cell_e && c.e >= cell_s));
+  lastHilbertTooltipEvent = e;
+  if (hilbertTooltipFrame) return;
+  hilbertTooltipFrame = requestAnimationFrame(() => {
+    hilbertTooltipFrame = 0;
+    const evt = lastHilbertTooltipEvent;
+    if (!evt) return;
+    const rect = hilCanvas.getBoundingClientRect();
+    const hx = Math.floor(((evt.clientX - rect.left) / rect.width)  * HILBERT_N);
+    const hy = Math.floor(((evt.clientY - rect.top)  / rect.height) * HILBERT_N);
+    if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) return;
+    const index      = getHilbertD(HILBERT_N, hx, hy);
+    const totalCells = HILBERT_N * HILBERT_N;
+    const cell_s     = index / totalCells;
+    const cell_e     = (index + 1) / totalCells;
+    showTooltip(tooltip, evt, hilbertVisibleChunks.filter(c => c.s <= cell_e && c.e >= cell_s));
+  });
 });
-hilCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+hilCanvas.addEventListener('mouseleave', () => {
+  lastHilbertTooltipEvent = null;
+  tooltip.style.display = 'none';
+});
 
 // ── Resize observer ───────────────────────────────────────────────────────────
 
