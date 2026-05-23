@@ -75,7 +75,7 @@ function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
 
   const badge = document.createElement('span');
   badge.className = `puzzle-status-chip is-${status.state}`;
-  badge.textContent = (status.label || status.state).toUpperCase();
+  badge.textContent = (status.label || status.state).toLowerCase();
 
   const titleParts: string[] = [];
   if (status.checked_at) titleParts.push(`Checked ${fmtUtc(status.checked_at)}`);

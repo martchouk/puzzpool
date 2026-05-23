@@ -160,11 +160,11 @@ export function buildHeatmapBuckets(chunks: ChunkVis[], totalCells: number): (Bu
 
 function bucketDominantStatus(bucket: Bucket | undefined): ChunkStatus | null {
   if (!bucket) return null;
-  if (bucket.blocked > 0) return 'blocked';
   if (bucket.FOUND > 0) return 'FOUND';
   if (bucket.assigned > 0) return 'assigned';
-  if (bucket.completed > 0) return 'completed';
   if (bucket.reclaimed > 0) return 'reclaimed';
+  if (bucket.blocked > 0) return 'blocked';
+  if (bucket.completed > 0) return 'completed';
   return null;
 }
 
