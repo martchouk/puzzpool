@@ -51,4 +51,25 @@ describe('frontend accessibility regressions', () => {
   it('prioritizes found and in-progress statuses over blocked/completed in mixed heatmap buckets', () => {
     expect(canvasTs).toMatch(/if \(bucket\.FOUND > 0\) return 'FOUND';[\s\S]*if \(bucket\.assigned > 0\) return 'assigned';[\s\S]*if \(bucket\.reclaimed > 0\) return 'reclaimed';[\s\S]*if \(bucket\.blocked > 0\) return 'blocked';/);
   });
+
+  it('updates the backend connection badge on stats success and failure with wifi icons', () => {
+    expect(html).toMatch(/id="backend-status"/);
+    expect(html).toMatch(/id="backend-status-icon"/);
+    expect(html).toMatch(/id="backend-status-label"/);
+    expect(html).toMatch(/status-badge is-offline/);
+    expect(html).toMatch(/\.status-badge\s*\{[\s\S]*background:\s*transparent;[\s\S]*border:\s*none;/);
+    expect(html).toMatch(/\.status-icon\s*\{[\s\S]*width:\s*1rem;[\s\S]*height:\s*1rem;/);
+    expect(html).toMatch(/@keyframes wifiWavePulse/);
+    expect(html).toMatch(/status-badge\.is-online[\s\S]*status-icon-wave[\s\S]*animation:/);
+    expect(html).toMatch(/wave-3\s*\{[\s\S]*animation-delay:\s*0s;/);
+    expect(html).toMatch(/wave-2\s*\{[\s\S]*animation-delay:\s*0\.12s;/);
+    expect(html).toMatch(/wave-1\s*\{[\s\S]*animation-delay:\s*0\.24s;/);
+    expect(dashboardTs).toMatch(/setBackendStatus\('online'\);/);
+    expect(dashboardTs).toMatch(/setBackendStatus\('offline'\);/);
+  });
+
+  it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {
+    expect(canvasTs).toMatch(/const statusPasses:\s*ChunkStatus\[\]\[\]\s*=\s*\[\s*\['completed', 'blocked'\],\s*\['reclaimed', 'assigned', 'FOUND'\],\s*\];/);
+    expect(canvasTs).toMatch(/for \(const statuses of statusPasses\)[\s\S]*for \(let index = 0; index < totalCells; index\+\+\)/);
+  });
 });
