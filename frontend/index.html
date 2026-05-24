@@ -325,6 +325,10 @@
             justify-content: flex-end;
         }
 
+        .panel-header-actions > .panel-refresh-btn {
+            order: 99;
+        }
+
         .ks-legend {
             display: flex;
             gap: 1rem;
@@ -917,12 +921,16 @@
             height: 220px;
         }
 
-                .alloc-filter-row {
+        .alloc-filter-row {
             display: flex;
             align-items: center;
             gap: 0.75rem;
             margin-bottom: 1rem;
             flex-wrap: wrap;
+        }
+
+        .alloc-filter-row > .panel-refresh-btn {
+            margin-left: auto;
         }
 
         .alloc-filter-label {
@@ -973,7 +981,7 @@
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes wifiWavePulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
 
         @media (max-width: 900px) {
             .api-table-label {
@@ -1060,15 +1068,6 @@
             <div class="keyspace-label">
                 <span>Night Sky Heatmap</span>
                 <div class="panel-header-actions">
-                <button id="heatmap-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Night Sky Heatmap" data-panel-title="Refresh Night Sky Heatmap">
-                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 2v6h6"></path>
-                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
-                        <path d="M21 22v-6h-6"></path>
-                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
-                        <circle cx="12" cy="12" r="1"></circle>
-                    </svg>
-                </button>
                 <div class="alloc-filter-group" id="hm-layer-filter">
                     <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
                     <button class="alloc-filter-btn active" data-layer="completed" aria-pressed="true">Done</button>
@@ -1084,6 +1083,15 @@
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
                 </div>
+                <button id="heatmap-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Night Sky Heatmap" data-panel-title="Refresh Night Sky Heatmap">
+                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 2v6h6"></path>
+                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                        <path d="M21 22v-6h-6"></path>
+                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                </button>
                 </div>
             </div>
             <div class="canvas-2d-box">
@@ -1129,20 +1137,7 @@
             </table>
         </div>
 
-        <div class="section-title">
-            <span class="section-title-label">Allocator Diagnostics</span>
-            <span class="section-title-actions">
-                <button id="allocator-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Allocator Diagnostics" data-panel-title="Refresh Allocator Diagnostics">
-                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 2v6h6"></path>
-                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
-                        <path d="M21 22v-6h-6"></path>
-                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
-                        <circle cx="12" cy="12" r="1"></circle>
-                    </svg>
-                </button>
-            </span>
-        </div>
+        <div class="section-title">Allocator Diagnostics</div>
         <div class="heatmap-wrap alloc-diagnostics-wrap" id="allocator-diagnostics-wrap">
             <div class="alloc-filter-row">
                 <div class="alloc-filter-label">Generation</div>
@@ -1152,6 +1147,15 @@
                     <button class="alloc-filter-btn" data-gen="affine" aria-pressed="false">Affine</button>
                     <button class="alloc-filter-btn active" data-gen="feistel" aria-pressed="true">Feistel</button>
                 </div>
+                <button id="allocator-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Allocator Diagnostics" data-panel-title="Refresh Allocator Diagnostics">
+                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 2v6h6"></path>
+                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                        <path d="M21 22v-6h-6"></path>
+                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                </button>
             </div>
 
             <div class="stat-subtext" id="alloc-generation-summary" style="margin-bottom:1rem;">
@@ -1193,6 +1197,11 @@
             <div class="keyspace-label">
                 <span>Hilbert Curve Mapping (Full Scale)</span>
                 <div class="panel-header-actions">
+                <div class="alloc-filter-group" id="hil-layer-filter">
+                    <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
+                    <button class="alloc-filter-btn active" data-layer="native" aria-pressed="true">Native</button>
+                    <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
+                </div>
                 <button id="hilbert-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Hilbert Curve Mapping" data-panel-title="Refresh Hilbert Curve Mapping">
                     <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M3 2v6h6"></path>
@@ -1202,11 +1211,6 @@
                         <circle cx="12" cy="12" r="1"></circle>
                     </svg>
                 </button>
-                <div class="alloc-filter-group" id="hil-layer-filter">
-                    <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
-                    <button class="alloc-filter-btn active" data-layer="native" aria-pressed="true">Native</button>
-                    <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
-                </div>
                 </div>
             </div>
             <div class="canvas-2d-box">
