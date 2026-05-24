@@ -27,6 +27,7 @@ crow::response PoolService::handleActivatePuzzle(const crow::request& req) {
         tx.commit();
 
         allocator_.ensureAllocatorForPuzzle(id);
+        invalidateVisualizationLocked(id);
         lock.unlock();
         refreshPuzzleStatuses();
         std::shared_lock relock(mu_);
@@ -128,6 +129,7 @@ crow::response PoolService::handleSetPuzzle(const crow::request& req) {
             else
                 allocator_.seedSectors(puzzleId, startNorm, endNorm);
         }
+        invalidateVisualizationLocked(puzzleId);
         lock.unlock();
         refreshPuzzleStatuses();
         std::shared_lock relock(mu_);
@@ -340,6 +342,7 @@ crow::response PoolService::handleImportRanges(const crow::request& req) {
         }
         tx.commit();
         allocator_.loadBlockedRanges(puzzleId);
+        invalidateVisualizationLocked(puzzleId);
 
         return jsonResponse({
             {"ok",              true},

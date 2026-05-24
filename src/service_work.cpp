@@ -25,8 +25,10 @@ crow::response PoolService::handleWork(const crow::request& req) {
         if (body.contains("chunk_quantum_keys") && !body["chunk_quantum_keys"].is_null())
             chunkQuantumKeys = body["chunk_quantum_keys"].get<std::string>();
 
+        auto puzzle = db_.activePuzzle();
         auto result = ws_.assignWork(name, hashrate, version, minChunkKeys, chunkQuantumKeys);
         if (!result.ok) return errorResponse(result.errorCode, result.error);
+        if (puzzle) invalidateVisualizationLocked(puzzle->id);
         return jsonResponse({
             {"job_id",    result.jobId},
             {"start_key", result.startHex},

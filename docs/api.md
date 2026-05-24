@@ -147,7 +147,7 @@ Call every 60–120 seconds while scanning a large chunk.
 
 ### GET /api/v1/stats
 
-Dashboard data — polled every 5 seconds by the dashboard.
+Dashboard summary — polled every 5 seconds by the dashboard.
 
 **Query parameters**
 
@@ -201,6 +201,7 @@ Dashboard data — polled every 5 seconds by the dashboard.
     "virtual_chunk_size_keys": "1000000",
     "blocked_vchunk_count": "512"
   },
+  "vis_revision": 42,
   "workers": [
     {
       "name": "rig1", "hashrate": 8000000, "last_seen": "2024-01-15 12:34:56",
@@ -219,9 +220,6 @@ Dashboard data — polled every 5 seconds by the dashboard.
   ],
   "finders": [
     { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
-  ],
-  "chunks_vis": [
-    { "id": 1, "st": "completed", "w": "rig1", "s": 0.0, "e": 0.004 }
   ]
 }
 ```
@@ -263,6 +261,7 @@ Dashboard data — polled every 5 seconds by the dashboard.
 | `completed_chunks` | number | Chunks with `status='completed'` or `'FOUND'` (excluding test chunks) |
 | `reclaimed_chunks` | number | Chunks with `status='reclaimed'` |
 | `total_keys_completed` | string | Total keys covered by completed/FOUND chunks (decimal string) |
+| `vis_revision` | number | Monotonic visualization cache revision for the viewed puzzle. The frontend uses this to mark heavy panels as stale without reloading them automatically. |
 | `alloc_generations` | object | Per-generation chunk counts: `{ "legacy": N, "affine": N, "feistel": N }` — tracks how many chunks were issued under each permutation algorithm |
 
 **`virtual_chunks` field**
@@ -293,17 +292,117 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | Field | Type | Description |
 |-------|------|-------------|
 | `state` | string | `"unknown"`, `"unsolved"`, or `"solved"` |
-| `label` | string | Uppercase display label for the dashboard badge |
+| `label` | string | Display label for the dashboard badge |
 | `target_type` | string\|null | `"address"` or `"findings_threshold"` |
 | `target_value` | string\|null | Explorer address or findings threshold configured for the puzzle |
 | `checked_at` | string\|null | UTC ISO-8601 timestamp of the last backend refresh |
 | `link` | string\|null | Explorer URL for address-backed puzzles |
 | `note` | string\|null | Backend note for unknown/failure states or threshold progress |
 
-`chunks_vis[].s` and `.e` are fractional positions within the puzzle range (0.0–1.0),
-used by the canvas visualisations. `chunks_vis[].g` is the `alloc_generation` value
-(`"feistel"`, `"affine"`, `"legacy"`, `"test"`, or `null` for old rows) — used by the
-Allocator Diagnostics view to filter chunks by generation.
+`/api/v1/stats` no longer includes raw chunk visualization rows. Those are now served as
+separate pre-aggregated payloads by the visualization endpoints below.
+
+---
+
+## Visualization API
+
+These endpoints return aggregated panel data for the dashboard visualizations. They are loaded
+on initial page load and puzzle switches, then refreshed manually from the UI. All endpoints
+accept the same optional `puzzle_id` query parameter as `/api/v1/stats`.
+
+### GET /api/v1/visualization/heatmap
+
+Night Sky Heatmap payload. Each `cells[]` entry is:
+
+`[cell_index, completed_count, assigned_count, reclaimed_count, found_count, blocked_count]`
+
+`cell_index` maps into a fixed `512 × 128` grid.
+
+**Response 200**
+```json
+{
+  "puzzle_id": 2,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "cells": [
+    [1042, 83, 0, 1, 0, 0],
+    [1043, 11, 0, 0, 0, 1]
+  ]
+}
+```
+
+### GET /api/v1/visualization/hilbert
+
+Hilbert Curve Mapping payload. Each `cells[]` entry uses the same tuple layout as the heatmap:
+
+`[cell_index, completed_count, assigned_count, reclaimed_count, found_count, blocked_count]`
+
+`cell_index` maps into a fixed `256 × 256` Hilbert cell grid.
+
+**Response 200**
+```json
+{
+  "puzzle_id": 2,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "cells": [
+    [17, 4, 0, 0, 0, 0],
+    [18, 0, 0, 0, 1, 0]
+  ]
+}
+```
+
+### GET /api/v1/visualization/allocator
+
+Allocator Diagnostics payload. `generations` contains one aggregate object per generation filter:
+`all`, `legacy`, `affine`, and `feistel`.
+
+Each `scatter[]` entry is:
+
+`[x_order_norm, start_norm, status_code]`
+
+Status code mapping:
+
+- `0` = `completed`
+- `1` = `assigned`
+- `2` = `reclaimed`
+- `3` = `FOUND`
+- `4` = `blocked`
+
+**Response 200**
+```json
+{
+  "puzzle_id": 2,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "generations": {
+    "all": {
+      "total_count": 2048,
+      "scatter": [
+        [0.0, 0.0008010864, 0],
+        [0.5, 0.5000000000, 3]
+      ],
+      "gap_histogram": {
+        "bins": [12, 9, 4, 1],
+        "max_gap": 0.03125
+      },
+      "norm_gap_histogram": {
+        "bins": [0, 3, 8, 19],
+        "clip": 6.0
+      },
+      "metrics": {
+        "n": 2047,
+        "mean": 0.0004885,
+        "median": 0.0002441,
+        "p95": 0.0019531,
+        "max": 0.03125,
+        "cv": 1.87,
+        "max_over_mean": 63.97
+      }
+    },
+    "legacy": { "...": "same shape" },
+    "affine": { "...": "same shape" },
+    "feistel": { "...": "same shape" }
+  }
+}
+```
 
 ---
 

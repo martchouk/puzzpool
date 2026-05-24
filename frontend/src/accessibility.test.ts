@@ -49,7 +49,7 @@ describe('frontend accessibility regressions', () => {
   });
 
   it('prioritizes found and in-progress statuses over blocked/completed in mixed heatmap buckets', () => {
-    expect(canvasTs).toMatch(/if \(bucket\.FOUND > 0\) return 'FOUND';[\s\S]*if \(bucket\.assigned > 0\) return 'assigned';[\s\S]*if \(bucket\.reclaimed > 0\) return 'reclaimed';[\s\S]*if \(bucket\.blocked > 0\) return 'blocked';/);
+    expect(canvasTs).toMatch(/const STATUS_ORDER_ALL: ChunkStatus\[\] = \['FOUND', 'assigned', 'reclaimed', 'blocked', 'completed'\];/);
   });
 
   it('updates the backend connection badge on stats success and failure with wifi icons', () => {
@@ -70,6 +70,6 @@ describe('frontend accessibility regressions', () => {
 
   it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {
     expect(canvasTs).toMatch(/const statusPasses:\s*ChunkStatus\[\]\[\]\s*=\s*\[\s*\['completed', 'blocked'\],\s*\['reclaimed', 'assigned', 'FOUND'\],\s*\];/);
-    expect(canvasTs).toMatch(/for \(const statuses of statusPasses\)[\s\S]*for \(let index = 0; index < totalCells; index\+\+\)/);
+    expect(canvasTs).toMatch(/for \(const statuses of statusPasses\)[\s\S]*for \(const cell of cells\)/);
   });
 });

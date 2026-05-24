@@ -8,25 +8,27 @@ import { fileURLToPath } from 'url';
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(thisDir, '..');
 const dashboardTs = fs.readFileSync(path.join(repoRoot, 'src', 'dashboard.ts'), 'utf8');
-const canvasTs = fs.readFileSync(path.join(repoRoot, 'src', 'canvas.ts'), 'utf8');
+const apiTs = fs.readFileSync(path.join(repoRoot, 'src', 'api.ts'), 'utf8');
+const typesTs = fs.readFileSync(path.join(repoRoot, 'src', 'types.ts'), 'utf8');
 
-describe('frontend performance regressions', () => {
-  it('throttles Hilbert tooltip hit-testing with requestAnimationFrame', () => {
-    expect(dashboardTs).toMatch(/let hilbertTooltipFrame = 0;/);
-    expect(dashboardTs).toMatch(/if \(hilbertTooltipFrame\) return;/);
-    expect(dashboardTs).toMatch(/hilbertTooltipFrame = requestAnimationFrame\(/);
+describe('frontend visualization architecture regressions', () => {
+  it('fetches visualization data through dedicated endpoints instead of stats payload chunks', () => {
+    expect(apiTs).toMatch(/fetchHeatmapVisualization/);
+    expect(apiTs).toMatch(/fetchHilbertVisualization/);
+    expect(apiTs).toMatch(/fetchAllocatorVisualization/);
+    expect(typesTs).not.toMatch(/chunks_vis:/);
   });
 
-  it('shares allocator diagnostics work instead of recomputing normalized gap metrics separately', () => {
-    expect(dashboardTs).toMatch(/const filteredChunks = getFilteredChunks\(\);/);
-    expect(dashboardTs).toMatch(/const ngm = drawAllocatorDiagnostics\(allocCanvases, gapMetricsEl, filteredChunks\);/);
-    expect(dashboardTs).not.toMatch(/exportNormalizedGapMetrics\(getFilteredChunks\(\)\)/);
-    expect(canvasTs).toMatch(/export function drawAllocatorDiagnostics\([\s\S]*\)\s*:\s*ReturnType<typeof computeNormalizedGapMetricsFromSorted>/);
-    expect(canvasTs).toMatch(/return computeNormalizedGapMetricsFromSorted\(sortedByS\);/);
+  it('loads visualization automatically only for initial puzzle context and puzzle switches', () => {
+    expect(dashboardTs).toMatch(/if \(currentPuzzleId === null\)/);
+    expect(dashboardTs).toMatch(/else if \(loadedVisualizationPuzzleId !== currentPuzzleId\)/);
+    expect(dashboardTs).toMatch(/await loadAllVisualizationsForCurrentPuzzle\(\);/);
+    expect(dashboardTs).not.toMatch(/setInterval\(\(\) => \{ void loadAllVisualizationsForCurrentPuzzle\(\); \}/);
   });
 
-  it('avoids sorting allocator chunks by id before immediately sorting by start', () => {
-    expect(canvasTs).not.toMatch(/function getAllocatorSortedStarts\(/);
-    expect(canvasTs).toMatch(/const sortedByS\s*=\s*chunks[\s\S]*?\.sort\(\(a, b\) => a\.s - b\.s\)/);
+  it('supports per-panel manual refresh handlers for heavy visualizations', () => {
+    expect(dashboardTs).toMatch(/heatmapRefreshBtn\.addEventListener\('click', \(\) => \{ void loadHeatmapVisualizationPanel\(\); \}\);/);
+    expect(dashboardTs).toMatch(/allocatorRefreshBtn\.addEventListener\('click', \(\) => \{ void loadAllocatorVisualizationPanel\(\); \}\);/);
+    expect(dashboardTs).toMatch(/hilbertRefreshBtn\.addEventListener\('click', \(\) => \{ void loadHilbertVisualizationPanel\(\); \}\);/);
   });
 });

@@ -20,19 +20,11 @@
 // | Timestamps                  | string | null  | ISO 8601 UTC string              |
 // | hashrate                    | number        | keys/second — safe as float      |
 
-// ── Chunk visualisation entry (chunks_vis array) ──────────────────────────────
-
 export type ChunkStatus = 'completed' | 'FOUND' | 'assigned' | 'reclaimed' | 'blocked';
 export type AllocGeneration = 'legacy' | 'affine' | 'feistel' | 'test' | null;
 
-export interface ChunkVis {
-  id: number;
-  st: ChunkStatus;
-  w: string | null;     // worker name
-  g: AllocGeneration;   // alloc_generation
-  s: number;            // normalised start position [0, 1]
-  e: number;            // normalised end position   [0, 1]
-}
+export type VisualizationCell = [number, number, number, number, number, number];
+export type AllocatorScatterPoint = [number, number, number];
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
@@ -129,6 +121,48 @@ export interface AllocGenerations {
   feistel: number;
 }
 
+export interface HeatmapVisualizationResponse {
+  puzzle_id: number;
+  loaded_at: string;
+  cells: VisualizationCell[];
+}
+
+export interface HilbertVisualizationResponse {
+  puzzle_id: number;
+  loaded_at: string;
+  cells: VisualizationCell[];
+}
+
+export interface AllocatorMetrics {
+  n: number;
+  mean: number;
+  median: number;
+  p95: number;
+  max: number;
+  cv: number | null;
+  max_over_mean: number | null;
+}
+
+export interface AllocatorGenerationVisualization {
+  total_count: number;
+  scatter: AllocatorScatterPoint[];
+  gap_histogram: {
+    bins: number[];
+    max_gap: number;
+  };
+  norm_gap_histogram: {
+    bins: number[];
+    clip: number;
+  };
+  metrics: AllocatorMetrics | null;
+}
+
+export interface AllocatorVisualizationResponse {
+  puzzle_id: number;
+  loaded_at: string;
+  generations: Record<'all' | 'legacy' | 'affine' | 'feistel', AllocatorGenerationVisualization>;
+}
+
 // ── Top-level stats response (/api/v1/stats) ──────────────────────────────────
 
 export interface StatsResponse {
@@ -144,11 +178,11 @@ export interface StatsResponse {
   completed_chunks: number;
   reclaimed_chunks: number;
   total_keys_completed: string;   // BigInt decimal string
+  vis_revision: number;
   virtual_chunks: VirtualChunks;
   shards: VirtualChunks;          // legacy alias for virtual_chunks
   workers: WorkerInfo[];
   scores: ScoreEntry[];
   finders: FinderEntry[];
-  chunks_vis: ChunkVis[];
   alloc_generations: AllocGenerations;
 }

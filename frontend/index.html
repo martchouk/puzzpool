@@ -316,11 +316,19 @@
             align-items: center;
         }
 
+        .panel-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-left: auto;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
         .ks-legend {
             display: flex;
             gap: 1rem;
             align-items: center;
-            margin-left: auto;
         }
 
         .ks-legend-item {
@@ -392,11 +400,69 @@
             gap: 0.5rem;
         }
 
+        .section-title-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .section-title-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-left: auto;
+        }
+
         .section-title::after {
             content: "";
             flex: 1;
             height: 1px;
             background: var(--border-default);
+        }
+
+        .panel-refresh-btn {
+            appearance: none;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--text-secondary);
+            width: 1.9rem;
+            height: 1.9rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .panel-refresh-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.04);
+            border-color: var(--border-hover);
+        }
+
+        .panel-refresh-btn:disabled {
+            cursor: wait;
+            opacity: 0.65;
+        }
+
+        .panel-refresh-btn.is-stale {
+            color: var(--accent-amber);
+            box-shadow: 0 0 10px rgba(255,176,0,0.08);
+        }
+
+        .panel-refresh-btn.is-loading .panel-refresh-icon {
+            animation: spin 0.9s linear infinite;
+        }
+
+        .panel-refresh-icon {
+            width: 1rem;
+            height: 1rem;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
         }
 
         .table-wrap {
@@ -907,6 +973,7 @@
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes wifiWavePulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
         @media (max-width: 900px) {
             .api-table-label {
@@ -990,7 +1057,18 @@
         </div>
 
         <div class="heatmap-wrap">
-            <div class="keyspace-label">Night Sky Heatmap
+            <div class="keyspace-label">
+                <span>Night Sky Heatmap</span>
+                <div class="panel-header-actions">
+                <button id="heatmap-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Night Sky Heatmap" data-panel-title="Refresh Night Sky Heatmap">
+                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 2v6h6"></path>
+                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                        <path d="M21 22v-6h-6"></path>
+                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                </button>
                 <div class="alloc-filter-group" id="hm-layer-filter">
                     <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
                     <button class="alloc-filter-btn active" data-layer="completed" aria-pressed="true">Done</button>
@@ -1005,6 +1083,7 @@
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
                     <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
+                </div>
                 </div>
             </div>
             <div class="canvas-2d-box">
@@ -1050,7 +1129,20 @@
             </table>
         </div>
 
-        <div class="section-title">Allocator Diagnostics</div>
+        <div class="section-title">
+            <span class="section-title-label">Allocator Diagnostics</span>
+            <span class="section-title-actions">
+                <button id="allocator-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Allocator Diagnostics" data-panel-title="Refresh Allocator Diagnostics">
+                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 2v6h6"></path>
+                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                        <path d="M21 22v-6h-6"></path>
+                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                </button>
+            </span>
+        </div>
         <div class="heatmap-wrap alloc-diagnostics-wrap" id="allocator-diagnostics-wrap">
             <div class="alloc-filter-row">
                 <div class="alloc-filter-label">Generation</div>
@@ -1098,11 +1190,23 @@
         </div>
 
         <div class="hilbert-wrap">
-            <div class="keyspace-label">Hilbert Curve Mapping (Full Scale)
+            <div class="keyspace-label">
+                <span>Hilbert Curve Mapping (Full Scale)</span>
+                <div class="panel-header-actions">
+                <button id="hilbert-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Hilbert Curve Mapping" data-panel-title="Refresh Hilbert Curve Mapping">
+                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 2v6h6"></path>
+                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                        <path d="M21 22v-6h-6"></path>
+                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                </button>
                 <div class="alloc-filter-group" id="hil-layer-filter">
                     <button class="alloc-filter-btn" data-layer="all" aria-pressed="false">All</button>
                     <button class="alloc-filter-btn active" data-layer="native" aria-pressed="true">Native</button>
                     <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
+                </div>
                 </div>
             </div>
             <div class="canvas-2d-box">
@@ -1335,13 +1439,13 @@ GET /api/v1/stats?puzzle_id=1</pre>
     "total_keys": "1180591620717411303423",
     "test_chunk": null,
     "alloc_strategy": "virtual_random_chunks_v1",
-    "alloc_cursor": 2220012,
+    "alloc_cursor": "2220012",
     "virtual_chunk_size_keys": "33554432",
-    "virtual_chunk_count": 35184372088832,
+    "virtual_chunk_count": "35184372088832",
     "bootstrap_stage": 3,
     "status": {
       "state": "unsolved",
-      "label": "UNSOLVED",
+      "label": "unsolved",
       "target_type": "address",
       "target_value": "1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU",
       "checked_at": "2026-05-23T10:00:00Z",
@@ -1355,10 +1459,13 @@ GET /api/v1/stats?puzzle_id=1</pre>
   "completed_chunks": 2490237,
   "reclaimed_chunks": 0,
   "total_keys_completed": "83751426068480",
+  "vis_revision": 42,
   "virtual_chunks": {
-    "total": 35184372088832,
-    "started": 2495003,
-    "completed": 2490237
+    "total": "35184372088832",
+    "started_vchunks": "2495003",
+    "completed_vchunks": "2490237",
+    "virtual_chunk_size_keys": "33554432",
+    "blocked_vchunk_count": "1024"
   },
   "shards": { <span class="comment">// backward-compatible alias</span> },
   "workers": [
@@ -1377,8 +1484,7 @@ GET /api/v1/stats?puzzle_id=1</pre>
     }
   ],
   "scores": [],
-  "finders": [],
-  "chunks_vis": []
+  "finders": []
 }</pre>
                         </td>
                     </tr>
@@ -1387,6 +1493,148 @@ GET /api/v1/stats?puzzle_id=1</pre>
                         <td class="api-table-content">
 <pre class="example">curl -sS "$POOL_SERVER/api/v1/stats"
 curl -sS "$POOL_SERVER/api/v1/stats?puzzle_id=1"</pre>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </details>
+
+        <details class="api-block">
+            <summary class="api-header">
+                <span class="method method-get">GET</span>
+                <span class="api-path">/api/v1/visualization/heatmap</span>
+                <span class="api-desc">Aggregated Night Sky Heatmap payload</span>
+            </summary>
+            <table class="api-table">
+                <tbody>
+                    <tr>
+                        <td class="api-table-label">Request</td>
+                        <td class="api-table-content">
+<pre class="request">GET /api/v1/visualization/heatmap
+GET /api/v1/visualization/heatmap?puzzle_id=1</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Response</td>
+                        <td class="api-table-content">
+<pre>{
+  "puzzle_id": 1,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "cells": [
+    [1042, 83, 0, 1, 0, 0],
+    [1043, 11, 0, 0, 0, 1]
+  ]
+}</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Example Usage</td>
+                        <td class="api-table-content">
+<pre class="example">curl -sS "$POOL_SERVER/api/v1/visualization/heatmap"
+curl -sS "$POOL_SERVER/api/v1/visualization/heatmap?puzzle_id=1"</pre>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </details>
+
+        <details class="api-block">
+            <summary class="api-header">
+                <span class="method method-get">GET</span>
+                <span class="api-path">/api/v1/visualization/hilbert</span>
+                <span class="api-desc">Aggregated Hilbert Curve payload</span>
+            </summary>
+            <table class="api-table">
+                <tbody>
+                    <tr>
+                        <td class="api-table-label">Request</td>
+                        <td class="api-table-content">
+<pre class="request">GET /api/v1/visualization/hilbert
+GET /api/v1/visualization/hilbert?puzzle_id=1</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Response</td>
+                        <td class="api-table-content">
+<pre>{
+  "puzzle_id": 1,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "cells": [
+    [17, 4, 0, 0, 0, 0],
+    [18, 0, 0, 0, 1, 0]
+  ]
+}</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Example Usage</td>
+                        <td class="api-table-content">
+<pre class="example">curl -sS "$POOL_SERVER/api/v1/visualization/hilbert"
+curl -sS "$POOL_SERVER/api/v1/visualization/hilbert?puzzle_id=1"</pre>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </details>
+
+        <details class="api-block">
+            <summary class="api-header">
+                <span class="method method-get">GET</span>
+                <span class="api-path">/api/v1/visualization/allocator</span>
+                <span class="api-desc">Aggregated Allocator Diagnostics payload</span>
+            </summary>
+            <table class="api-table">
+                <tbody>
+                    <tr>
+                        <td class="api-table-label">Request</td>
+                        <td class="api-table-content">
+<pre class="request">GET /api/v1/visualization/allocator
+GET /api/v1/visualization/allocator?puzzle_id=1</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Response</td>
+                        <td class="api-table-content">
+<pre>{
+  "puzzle_id": 1,
+  "loaded_at": "2026-05-24T08:11:29Z",
+  "generations": {
+    "all": {
+      "total_count": 2048,
+      "scatter": [
+        [0.0, 0.0008010864, 0],
+        [0.5, 0.5000000000, 3]
+      ],
+      "gap_histogram": {
+        "bins": [12, 9, 4, 1],
+        "max_gap": 0.03125
+      },
+      "norm_gap_histogram": {
+        "bins": [0, 3, 8, 19],
+        "clip": 6.0
+      },
+      "metrics": {
+        "n": 2047,
+        "mean": 0.0004885,
+        "median": 0.0002441,
+        "p95": 0.0019531,
+        "max": 0.03125,
+        "cv": 1.87,
+        "max_over_mean": 63.97
+      }
+    },
+    "legacy": { "...": "same shape" },
+    "affine": { "...": "same shape" },
+    "feistel": { "...": "same shape" }
+  }
+}</pre>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="api-table-label">Example Usage</td>
+                        <td class="api-table-content">
+<pre class="example">curl -sS "$POOL_SERVER/api/v1/visualization/allocator"
+curl -sS "$POOL_SERVER/api/v1/visualization/allocator?puzzle_id=1"</pre>
                         </td>
                     </tr>
                 </tbody>
