@@ -162,6 +162,46 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d your.domain.com
 ```
 
+### Low-memory builds
+
+On servers where other services are running alongside puzzpool, the C++ build can
+exhaust RAM if multiple translation units compile in parallel (each Crow/Boost-heavy
+file peaks at 300–500 MB).
+
+`build.sh` is already tuned for this: it defaults to **1 parallel job**, skips the
+test suite, and enables `-fno-var-tracking-assignments` (the biggest single RAM saver
+in GCC/Clang at `-O2`). The knobs are all env vars — no script editing needed:
+
+```bash
+# Minimal-RAM build (defaults; already set in build.sh)
+BUILD_JOBS=1 ./build.sh
+
+# If you have libsqlite3-dev installed, skip compiling SQLiteCpp from source
+PUZZPOOL_USE_SYSTEM_SQLITECPP=ON BUILD_JOBS=1 ./build.sh
+
+# Faster build on a machine with plenty of RAM (e.g. a dedicated CI worker)
+BUILD_JOBS=4 PUZZPOOL_BUILD_TESTS=ON ./build.sh
+```
+
+| Variable | Default in `build.sh` | Description |
+|----------|-----------------------|-------------|
+| `BUILD_JOBS` | `1` | Parallel C++ compile jobs. Keep at `1` on shared/low-RAM hosts. |
+| `PUZZPOOL_BUILD_TESTS` | `OFF` | Build Catch2 test suite. Enable in CI; skip on prod. |
+| `PUZZPOOL_USE_SYSTEM_SQLITECPP` | `OFF` | Use system `libsqlite3-dev` instead of compiling from source. |
+
+If you still run out of memory with `BUILD_JOBS=1`, adding a small swap file is the
+most reliable fallback:
+
+```bash
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+# Make permanent: add "/swapfile none swap sw 0 0" to /etc/fstab
+```
+
+---
+
 ### Routine update (after `git pull`)
 
 ```bash

@@ -28,7 +28,12 @@ option(PUZZPOOL_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(PUZZPOOL_USE_SYSTEM_CROW "Use installed Crow package instead of bundled third_party/crow" OFF)
 option(PUZZPOOL_USE_SYSTEM_SQLITECPP "Use installed SQLiteCpp package instead of bundled third_party/SQLiteCpp" OFF)
 option(PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS "Suppress warnings from bundled/system third-party code" ON)
-option(PUZZPOOL_BUILD_TESTS "Build the Catch2 test suite" ON)
+# Default OFF so production builds (build.sh) don't compile Catch2 + 9 test binaries.
+# CI enables this explicitly with -DPUZZPOOL_BUILD_TESTS=ON.
+option(PUZZPOOL_BUILD_TESTS "Build the Catch2 test suite" OFF)
+# Adds compiler flags that reduce peak RAM during compilation with negligible
+# impact on the resulting binary. Recommended for memory-constrained build hosts.
+option(PUZZPOOL_LOW_MEMORY_BUILD "Add compiler flags to reduce peak build RAM" OFF)
 
 # ── puzzpool_core static library (everything except main.cpp) ─────────────────
 # Tests link against this target; the server executable links it + main.cpp.
@@ -102,6 +107,22 @@ endforeach()
 # the executable target so puzzpool_core still warns on our own code.
 if(NOT MSVC)
     target_compile_options(puzzpool PRIVATE -Wno-null-dereference)
+endif()
+
+# ── Low-memory build flags ────────────────────────────────────────────────────
+# These flags reduce peak compiler RAM at -O2 with negligible binary impact.
+# Enabled automatically by build.sh; also set via -DPUZZPOOL_LOW_MEMORY_BUILD=ON.
+if(PUZZPOOL_LOW_MEMORY_BUILD AND NOT MSVC)
+    foreach(_tgt puzzpool_core puzzpool)
+        target_compile_options(${_tgt} PRIVATE
+            # Skips per-assignment variable-location tracking that -O2 normally
+            # does for debug info. The biggest single RAM saver in GCC/Clang.
+            -fno-var-tracking-assignments
+        )
+    endforeach()
+    message(STATUS "Low-memory build flags:          ON (-fno-var-tracking-assignments)")
+else()
+    message(STATUS "Low-memory build flags:          OFF")
 endif()
 
 find_package(Threads REQUIRED)
@@ -270,4 +291,5 @@ message(STATUS "Use system Crow:                 ${PUZZPOOL_USE_SYSTEM_CROW}")
 message(STATUS "Use system SQLiteCpp:            ${PUZZPOOL_USE_SYSTEM_SQLITECPP}")
 message(STATUS "Suppress third-party warnings:   ${PUZZPOOL_SUPPRESS_THIRD_PARTY_WARNINGS}")
 message(STATUS "Build tests:                     ${PUZZPOOL_BUILD_TESTS}")
+message(STATUS "Low-memory build:                ${PUZZPOOL_LOW_MEMORY_BUILD}")
 message(STATUS "========================================")
