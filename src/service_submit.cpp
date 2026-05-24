@@ -35,12 +35,20 @@ crow::response PoolService::handleSubmit(const crow::request& req) {
         if (status != "done" && status != "FOUND")
             return errorResponse(400, "status must be \"done\" or \"FOUND\"");
 
+        int64_t puzzleId = 0;
+        {
+            SQLite::Statement pq(db_.raw(), "SELECT puzzle_id FROM chunks WHERE id = ?");
+            pq.bind(1, jobId);
+            if (pq.executeStep()) puzzleId = pq.getColumn(0).getInt64();
+        }
+
         SubmissionService::SubmitResult result = (status == "FOUND")
             ? ss_.submitFound(name, jobId, body)
             : ss_.submitDone(name, jobId, body);
 
         if (result.hasError)
             return errorJsonResponse(result.errorCode, {{"accepted", false}, {"error", result.error}});
+        if (puzzleId > 0) invalidateVisualizationLocked(puzzleId);
         return jsonResponse({{"accepted", result.accepted}});
     } catch (const std::exception& e) {
         return errorResponse(500, e.what());

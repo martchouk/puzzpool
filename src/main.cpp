@@ -40,6 +40,21 @@ int main() {
             return service.handleStats(req);
         });
 
+        CROW_ROUTE(app, "/api/v1/visualization/heatmap").methods(crow::HTTPMethod::GET)
+        ([&service](const crow::request& req) {
+            return service.handleHeatmapVisualization(req);
+        });
+
+        CROW_ROUTE(app, "/api/v1/visualization/hilbert").methods(crow::HTTPMethod::GET)
+        ([&service](const crow::request& req) {
+            return service.handleHilbertVisualization(req);
+        });
+
+        CROW_ROUTE(app, "/api/v1/visualization/allocator").methods(crow::HTTPMethod::GET)
+        ([&service](const crow::request& req) {
+            return service.handleAllocatorVisualization(req);
+        });
+
         CROW_ROUTE(app, "/api/v1/work").methods(crow::HTTPMethod::POST)
         ([&service](const crow::request& req) {
             return service.handleWork(req);

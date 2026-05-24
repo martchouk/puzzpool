@@ -6,12 +6,17 @@
 
 namespace puzzpool {
 
-PoolDb::PoolDb(const Config& cfg)
-    : cfg_(cfg), db_(cfg.dbPath, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE) {
+PoolDb::PoolDb(const Config& cfg, int openFlags, bool initializeSchema)
+    : cfg_(cfg), db_(cfg.dbPath, openFlags) {
+    if ((openFlags & SQLite::OPEN_READONLY) != 0) {
+        exec("PRAGMA query_only=ON");
+        return;
+    }
+
     exec("PRAGMA journal_mode=WAL");
     exec("PRAGMA synchronous=NORMAL");
     exec("PRAGMA foreign_keys=OFF");
-    migrate();
+    if (initializeSchema) migrate();
 }
 
 SQLite::Database& PoolDb::raw() { return db_; }
@@ -75,6 +80,10 @@ void PoolDb::migrate() {
 
       CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_status ON chunks (puzzle_id, status);
       CREATE INDEX IF NOT EXISTS idx_chunks_vchunk_hex_span ON chunks (puzzle_id, vchunk_start_hex, vchunk_end_hex, status);
+      CREATE INDEX IF NOT EXISTS idx_chunks_status_heartbeat ON chunks (status, heartbeat_at) WHERE is_test = 0;
+      CREATE INDEX IF NOT EXISTS idx_chunks_worker_status ON chunks (worker_name, status);
+      CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_id_ordered ON chunks (puzzle_id, id) WHERE is_test = 0;
+      CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_generation ON chunks (puzzle_id, alloc_generation) WHERE is_test = 0;
 
       CREATE TABLE IF NOT EXISTS sectors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,11 +147,14 @@ void PoolDb::migrate() {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_vchunk_unique
             ON blocked_vchunk_ranges (puzzle_id, start_vchunk, end_vchunk, source);
-        CREATE INDEX IF NOT EXISTS idx_blocked_vchunk_lookup
-            ON blocked_vchunk_ranges (puzzle_id, start_vchunk ASC);
     )SQL");
     exec("UPDATE chunks SET heartbeat_at = assigned_at WHERE heartbeat_at IS NULL AND assigned_at IS NOT NULL");
     exec("UPDATE puzzles SET alloc_strategy = 'legacy_random_shards_v1' WHERE alloc_strategy IS NULL");
+    exec("CREATE INDEX IF NOT EXISTS idx_chunks_status_heartbeat ON chunks (status, heartbeat_at) WHERE is_test = 0");
+    exec("CREATE INDEX IF NOT EXISTS idx_chunks_worker_status ON chunks (worker_name, status)");
+    exec("CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_id_ordered ON chunks (puzzle_id, id) WHERE is_test = 0");
+    exec("CREATE INDEX IF NOT EXISTS idx_chunks_puzzle_generation ON chunks (puzzle_id, alloc_generation) WHERE is_test = 0");
+    exec("DROP INDEX IF EXISTS idx_blocked_vchunk_lookup");
     exec(R"SQL(
         UPDATE chunks SET is_test = 1
         WHERE is_test = 0

@@ -1,5 +1,17 @@
-import type { ChunkVis, PuzzleListEntry, PuzzleStatusInfo } from './types.ts';
-import { fetchStats, activatePuzzle } from './api.ts';
+import type {
+  AllocatorVisualizationResponse,
+  HeatmapVisualizationResponse,
+  HilbertVisualizationResponse,
+  PuzzleListEntry,
+  PuzzleStatusInfo,
+} from './types.ts';
+import {
+  activatePuzzle,
+  fetchAllocatorVisualization,
+  fetchHeatmapVisualization,
+  fetchHilbertVisualization,
+  fetchStats,
+} from './api.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc,
   formatPrecisePercentage, trimHexRange, formatETA,
@@ -7,36 +19,44 @@ import {
 } from './format.ts';
 import {
   MAP_COLS, MAP_ROWS, HILBERT_N,
-  drawHeatmap, drawHilbert,
   drawAllocatorDiagnostics,
+  drawHeatmap,
+  drawHilbert,
+  type CellLookup,
   getHilbertD,
-  showTooltip,
+  showTooltipLines,
+  tooltipLinesForCell,
 } from './canvas.ts';
 
-// ── Module-level state ────────────────────────────────────────────────────────
+type BackendStatus = 'online' | 'offline';
 
-let chunksVis: ChunkVis[] = [];
 let allocGenerationFilter = 'feistel';
 let hmLayerFilter = 'completed';
 let hilLayerFilter = 'native';
-let heatmapBuckets: ReturnType<typeof drawHeatmap> = [];
-let hilbertVisibleChunks: ChunkVis[] = [];
-let hilbertTooltipFrame = 0;
-let lastHilbertTooltipEvent: MouseEvent | null = null;
+let heatmapLookup: CellLookup = new Map();
+let hilbertLookup: CellLookup = new Map();
+let heatmapVis: HeatmapVisualizationResponse | null = null;
+let hilbertVis: HilbertVisualizationResponse | null = null;
+let allocatorVis: AllocatorVisualizationResponse | null = null;
 let pendingActivateId: number | null = null;
 let lastPuzzles: (PuzzleListEntry & { active: boolean | number })[] = [];
 let selectedId: number | null = null;
 let stageSet = false;
-type BackendStatus = 'online' | 'offline';
+let loadedVisualizationPuzzleId: number | null = null;
+let currentVisRevision = 0;
+let heatmapLoadedRevision = 0;
+let allocatorLoadedRevision = 0;
+let hilbertLoadedRevision = 0;
+let heatmapLoading = false;
+let allocatorLoading = false;
+let hilbertLoading = false;
 
-// ── Stable DOM references ─────────────────────────────────────────────────────
-
-const tooltip       = document.getElementById('ks-tooltip')!;
-const hmCanvas      = document.getElementById('heatmap-canvas')  as HTMLCanvasElement;
-const hilCanvas     = document.getElementById('hilbert-canvas')  as HTMLCanvasElement;
+const tooltip = document.getElementById('ks-tooltip')!;
+const hmCanvas = document.getElementById('heatmap-canvas') as HTMLCanvasElement;
+const hilCanvas = document.getElementById('hilbert-canvas') as HTMLCanvasElement;
 const allocCanvases = {
   scatter: document.getElementById('alloc-scatter-canvas') as HTMLCanvasElement,
-  gap:     document.getElementById('alloc-gap-canvas')     as HTMLCanvasElement,
+  gap: document.getElementById('alloc-gap-canvas') as HTMLCanvasElement,
   gapnorm: document.getElementById('alloc-gapnorm-canvas') as HTMLCanvasElement,
   residue: document.getElementById('alloc-residue-canvas') as HTMLCanvasElement,
 };
@@ -44,8 +64,9 @@ const gapMetricsEl = document.getElementById('alloc-gap-metrics')!;
 const backendStatusEl = document.getElementById('backend-status')!;
 const backendStatusIconEl = document.getElementById('backend-status-icon')!;
 const backendStatusLabelEl = document.getElementById('backend-status-label')!;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const heatmapRefreshBtn = document.getElementById('heatmap-refresh-btn') as HTMLButtonElement;
+const allocatorRefreshBtn = document.getElementById('allocator-refresh-btn') as HTMLButtonElement;
+const hilbertRefreshBtn = document.getElementById('hilbert-refresh-btn') as HTMLButtonElement;
 
 function svgEl(tag: string): SVGElement {
   return document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -78,11 +99,7 @@ function buildBackendStatusIcon(state: BackendStatus): SVGSVGElement {
   svg.appendChild(makePath('M5 12.859a10 10 0 0 1 14 0', 'status-icon-wave wave-2'));
   svg.appendChild(makePath('M8.5 16.429a5 5 0 0 1 7 0', 'status-icon-wave wave-3'));
   svg.appendChild(makeCircle('12', '20', '1.25', 'status-icon-core'));
-
-  if (state === 'offline') {
-    svg.appendChild(makePath('M2 2l20 20', 'status-icon-slash'));
-  }
-
+  if (state === 'offline') svg.appendChild(makePath('M2 2l20 20', 'status-icon-slash'));
   return svg;
 }
 
@@ -93,34 +110,62 @@ function setBackendStatus(state: BackendStatus): void {
   backendStatusIconEl.replaceChildren(buildBackendStatusIcon(state));
 }
 
-function getFilteredChunks(): ChunkVis[] {
-  const nonBlocked = chunksVis.filter(c => c.st !== 'blocked');
-  if (allocGenerationFilter === 'all') return nonBlocked;
-  return nonBlocked.filter(c => (c.g ?? 'legacy') === allocGenerationFilter);
+function renderHeatmapPanel(): void {
+  heatmapLookup = drawHeatmap(hmCanvas, heatmapVis?.cells ?? [], hmLayerFilter);
 }
 
-function applyLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
-  if (filter === 'native')  return chunks.filter(c => c.st !== 'blocked');
-  if (filter === 'blocked') return chunks.filter(c => c.st === 'blocked');
-  return chunks;
+function renderHilbertPanel(): void {
+  hilbertLookup = drawHilbert(hilCanvas, hilbertVis?.cells ?? [], hilLayerFilter);
 }
 
-function applyHeatmapLayerFilter(chunks: ChunkVis[], filter: string): ChunkVis[] {
-  if (filter === 'all') return chunks;
-  if (filter === 'completed') return chunks.filter(c => c.st === 'completed');
-  if (filter === 'assigned') return chunks.filter(c => c.st === 'assigned');
-  if (filter === 'reclaimed') return chunks.filter(c => c.st === 'reclaimed');
-  if (filter === 'FOUND') return chunks.filter(c => c.st === 'FOUND');
-  if (filter === 'blocked') return chunks.filter(c => c.st === 'blocked');
-  return chunks;
+function currentAllocatorGeneration() {
+  return allocatorVis?.generations[allocGenerationFilter as 'all' | 'legacy' | 'affine' | 'feistel'] ?? null;
+}
+
+function renderAllocatorPanel(): void {
+  drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, currentAllocatorGeneration());
 }
 
 function redrawAll(): void {
-  const filteredChunks = getFilteredChunks();
-  heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
-  drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, filteredChunks);
-  hilbertVisibleChunks = applyLayerFilter(chunksVis, hilLayerFilter);
-  drawHilbert(hilCanvas, hilbertVisibleChunks);
+  renderHeatmapPanel();
+  renderAllocatorPanel();
+  renderHilbertPanel();
+}
+
+function setRefreshButtonState(
+  button: HTMLButtonElement,
+  loading: boolean,
+  loadedAt: string | null,
+  stale: boolean,
+): void {
+  button.disabled = loading;
+  button.classList.toggle('is-loading', loading);
+  button.classList.toggle('is-stale', stale);
+  const parts: string[] = [button.dataset.panelTitle ?? 'Refresh'];
+  if (loadedAt) parts.push(`Loaded ${fmtUtc(loadedAt)}`);
+  if (stale) parts.push('Visualization is stale');
+  button.title = parts.join(' · ');
+}
+
+function syncRefreshButtons(): void {
+  setRefreshButtonState(
+    heatmapRefreshBtn,
+    heatmapLoading,
+    heatmapVis?.loaded_at ?? null,
+    !!heatmapVis && heatmapLoadedRevision < currentVisRevision,
+  );
+  setRefreshButtonState(
+    allocatorRefreshBtn,
+    allocatorLoading,
+    allocatorVis?.loaded_at ?? null,
+    !!allocatorVis && allocatorLoadedRevision < currentVisRevision,
+  );
+  setRefreshButtonState(
+    hilbertRefreshBtn,
+    hilbertLoading,
+    hilbertVis?.loaded_at ?? null,
+    !!hilbertVis && hilbertLoadedRevision < currentVisRevision,
+  );
 }
 
 function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
@@ -151,8 +196,6 @@ function renderPuzzleStatus(status: PuzzleStatusInfo | null): void {
   host.appendChild(badge);
 }
 
-// ── Stage indicator ───────────────────────────────────────────────────────────
-
 function applyStage(stage: string): void {
   if (stageSet) return;
   stageSet = true;
@@ -162,8 +205,6 @@ function applyStage(stage: string): void {
   const label = document.getElementById('stage-label');
   if (label) label.style.display = 'inline';
 }
-
-// ── Activate-puzzle modal ─────────────────────────────────────────────────────
 
 function openActivateModal(id: number, name: string): void {
   pendingActivateId = id;
@@ -180,8 +221,8 @@ document.getElementById('modal-cancel')!.addEventListener('click', () => {
 });
 
 document.getElementById('modal-confirm')!.addEventListener('click', async () => {
-  const token  = (document.getElementById('modal-token-input') as HTMLInputElement).value.trim();
-  const errEl  = document.getElementById('modal-error')!;
+  const token = (document.getElementById('modal-token-input') as HTMLInputElement).value.trim();
+  const errEl = document.getElementById('modal-error')!;
   errEl.style.display = 'none';
   if (pendingActivateId === null) return;
 
@@ -200,27 +241,23 @@ document.getElementById('modal-confirm')!.addEventListener('click', async () => 
   }
 });
 
-// ── Keyspace tabs ─────────────────────────────────────────────────────────────
-
 function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | number })[]): void {
   const normalized = (puzzles ?? []).map(p => ({
     ...p,
     active: p.active === true || p.active === 1,
   }));
 
-  const poolActive   = normalized.find(p => p.active) ?? normalized[0];
+  const poolActive = normalized.find(p => p.active) ?? normalized[0];
   const poolActiveId = poolActive ? poolActive.id : null;
-  lastPuzzles        = normalized;
+  lastPuzzles = normalized;
 
   if (selectedId === null) selectedId = poolActiveId;
-  if (selectedId !== null && !normalized.find(p => p.id === selectedId)) {
-    selectedId = poolActiveId;
-  }
+  if (selectedId !== null && !normalized.find(p => p.id === selectedId)) selectedId = poolActiveId;
 
-  const nav      = document.getElementById('ks-nav')!;
+  const nav = document.getElementById('ks-nav')!;
   const tabStrip = document.getElementById('ks-tab-strip')!;
   const togStrip = document.getElementById('ks-toggle-strip')!;
-  const header   = document.querySelector('.header')!;
+  const header = document.querySelector('.header')!;
 
   if (normalized.length <= 1) {
     nav.style.display = 'none';
@@ -238,11 +275,11 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
   (togStrip as HTMLElement).style.gridTemplateColumns = gridCols;
 
   tabStrip.innerHTML = normalized.map(p =>
-    `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${esc(p.name)}</div>`
+    `<div class="ks-tab${p.id === selectedId ? ' active' : ''}" data-id="${p.id}">${esc(p.name)}</div>`,
   ).join('');
 
-  const selIdx  = normalized.findIndex(p => p.id === selectedId);
-  const isOn    = selectedId === poolActiveId;
+  const selIdx = normalized.findIndex(p => p.id === selectedId);
+  const isOn = selectedId === poolActiveId;
   const selName = normalized[selIdx]?.name ?? '';
 
   togStrip.innerHTML = `<div class="ks-toggle-cell${isOn ? '' : ' ks-toggle-inactive'}"
@@ -266,30 +303,25 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
   });
 }
 
-// ── Allocator generation filter ───────────────────────────────────────────────
-
-function updateAllocatorGenerationFilterCounts(): void {
+function updateAllocatorGenerationFilterCounts(gens?: { legacy: number; affine: number; feistel: number }): void {
   const root = document.getElementById('alloc-generation-filter');
   if (!root) return;
-  const counts: Record<string, number> = { all: 0, legacy: 0, affine: 0, feistel: 0 };
-  for (const c of chunksVis) {
-    if (c.st === 'blocked') continue;
-    counts['all']++;
-    const g = c.g ?? 'legacy';
-    if (g in counts) counts[g]++;
-  }
+  const counts = {
+    all: (gens?.legacy ?? 0) + (gens?.affine ?? 0) + (gens?.feistel ?? 0),
+    legacy: gens?.legacy ?? 0,
+    affine: gens?.affine ?? 0,
+    feistel: gens?.feistel ?? 0,
+  };
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
-    const gen  = btn.dataset.gen ?? 'all';
-    const base = gen === 'all' ? 'All' : gen === 'legacy' ? 'Legacy' :
-                 gen === 'affine' ? 'Affine' : gen === 'feistel' ? 'Feistel' : gen;
-    btn.textContent = `${base} (${counts[gen] ?? 0})`;
+    const gen = btn.dataset.gen ?? 'all';
+    const base = gen === 'all' ? 'All' : gen === 'legacy' ? 'Legacy' : gen === 'affine' ? 'Affine' : 'Feistel';
+    btn.textContent = `${base} (${counts[gen as keyof typeof counts] ?? 0})`;
   });
 }
 
 function initAllocatorGenerationFilter(): void {
   const root = document.getElementById('alloc-generation-filter');
   if (!root) return;
-
   const syncButtons = (): void => {
     root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(b => {
       const isActive = b.dataset.gen === allocGenerationFilter;
@@ -297,16 +329,14 @@ function initAllocatorGenerationFilter(): void {
       b.setAttribute('aria-pressed', String(isActive));
     });
   };
-
   syncButtons();
-
   root.querySelectorAll<HTMLElement>('.alloc-filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const next = btn.dataset.gen ?? 'all';
       if (next === allocGenerationFilter) return;
       allocGenerationFilter = next;
       syncButtons();
-      drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, getFilteredChunks());
+      renderAllocatorPanel();
     });
   });
 }
@@ -326,7 +356,7 @@ function initHmLayerFilter(): void {
       if (next === hmLayerFilter) return;
       hmLayerFilter = next;
       sync();
-      heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
+      renderHeatmapPanel();
     });
   });
 }
@@ -346,24 +376,73 @@ function initHilLayerFilter(): void {
       if (next === hilLayerFilter) return;
       hilLayerFilter = next;
       sync();
-      drawHilbert(hilCanvas, applyLayerFilter(chunksVis, hilLayerFilter));
+      renderHilbertPanel();
     });
   });
 }
 
-// ── Main dashboard update ─────────────────────────────────────────────────────
+async function loadHeatmapVisualizationPanel(): Promise<void> {
+  if (selectedId === null) return;
+  heatmapLoading = true;
+  syncRefreshButtons();
+  try {
+    heatmapVis = await fetchHeatmapVisualization(selectedId);
+    heatmapLoadedRevision = currentVisRevision;
+    renderHeatmapPanel();
+  } finally {
+    heatmapLoading = false;
+    syncRefreshButtons();
+  }
+}
+
+async function loadAllocatorVisualizationPanel(): Promise<void> {
+  if (selectedId === null) return;
+  allocatorLoading = true;
+  syncRefreshButtons();
+  try {
+    allocatorVis = await fetchAllocatorVisualization(selectedId);
+    allocatorLoadedRevision = currentVisRevision;
+    renderAllocatorPanel();
+  } finally {
+    allocatorLoading = false;
+    syncRefreshButtons();
+  }
+}
+
+async function loadHilbertVisualizationPanel(): Promise<void> {
+  if (selectedId === null) return;
+  hilbertLoading = true;
+  syncRefreshButtons();
+  try {
+    hilbertVis = await fetchHilbertVisualization(selectedId);
+    hilbertLoadedRevision = currentVisRevision;
+    renderHilbertPanel();
+  } finally {
+    hilbertLoading = false;
+    syncRefreshButtons();
+  }
+}
+
+async function loadAllVisualizationsForCurrentPuzzle(): Promise<void> {
+  await Promise.all([
+    loadHeatmapVisualizationPanel(),
+    loadAllocatorVisualizationPanel(),
+    loadHilbertVisualizationPanel(),
+  ]);
+}
 
 async function updateDashboard(): Promise<void> {
   try {
     const data = await fetchStats(selectedId);
     setBackendStatus('online');
+    currentVisRevision = data.vis_revision ?? 0;
 
     applyStage(data.stage);
     renderKeyspaceTabs(data.puzzles ?? []);
 
-    document.getElementById('total-hashrate')!.textContent  = formatHashrate(data.total_hashrate);
-    document.getElementById('pool-id')!.textContent         = data.puzzle ? 'Pool ID: ' + data.puzzle.id : '—';
-    document.getElementById('active-workers')!.textContent  = formatIntegerDots(data.active_workers_count);
+    document.getElementById('total-hashrate')!.textContent = formatHashrate(data.total_hashrate);
+    document.getElementById('pool-id')!.textContent = data.puzzle ? 'Pool ID: ' + data.puzzle.id : '—';
+    document.getElementById('active-workers')!.textContent = formatIntegerDots(data.active_workers_count);
     document.getElementById('inactive-workers')!.textContent = data.puzzle
       ? 'Inactive: ' + formatIntegerDots(data.inactive_workers_count)
       : '—';
@@ -372,7 +451,7 @@ async function updateDashboard(): Promise<void> {
       ? 'Reclaimed: ' + formatIntegerDots(data.reclaimed_chunks)
       : '—';
     document.getElementById('completed-keys')!.textContent = formatBigInt(data.total_keys_completed);
-    document.getElementById('found-keys')!.textContent     = formatIntegerDots(data.finders.length);
+    document.getElementById('found-keys')!.textContent = formatIntegerDots(data.finders.length);
 
     if (data.puzzle?.total_keys) {
       document.getElementById('puzzle-name')!.textContent = data.puzzle.name;
@@ -381,7 +460,7 @@ async function updateDashboard(): Promise<void> {
         `0x${trimHexRange(data.puzzle.start_hex)} - 0x${trimHexRange(data.puzzle.end_hex)}`;
 
       const totalP = BigInt(data.puzzle.total_keys);
-      const comp   = BigInt(data.total_keys_completed);
+      const comp = BigInt(data.total_keys_completed);
       const vchunks = data.virtual_chunks ?? data.shards ?? { total: 0, started_vchunks: 0, completed_vchunks: 0, virtual_chunk_size_keys: null, blocked_vchunk_count: 0 };
       if (totalP > 0n && comp >= 0n) {
         const pctBig = (comp * 10n ** 18n) / totalP;
@@ -393,9 +472,9 @@ async function updateDashboard(): Promise<void> {
             const blockedKeys = BigInt(blockedVchunks) * BigInt(vchunkSize);
             if (blockedKeys > 0n) {
               const pct2Big = ((comp + blockedKeys) * 10n ** 18n) / totalP;
-              pctDisplay += ' / ' + (formatPrecisePercentage(Number(pct2Big) / 10 ** 16) );
+              pctDisplay += ' / ' + formatPrecisePercentage(Number(pct2Big) / 10 ** 16);
             }
-          } catch { /* ignore if blocked count not parseable as BigInt */ }
+          } catch { /* ignore */ }
         }
         document.getElementById('completed-keys-pct')!.textContent = pctDisplay;
       }
@@ -421,7 +500,7 @@ async function updateDashboard(): Promise<void> {
       let etaLine = `ETA: ${a(eta)}`;
       try {
         const bvCount = String(vchunks.blocked_vchunk_count ?? 0);
-        const bvSize  = vchunks.virtual_chunk_size_keys;
+        const bvSize = vchunks.virtual_chunk_size_keys;
         if (bvCount !== '0' && bvSize) {
           const blockedKeys = BigInt(bvCount) * BigInt(bvSize);
           if (blockedKeys > 0n) {
@@ -429,45 +508,26 @@ async function updateDashboard(): Promise<void> {
             etaLine += ` / ${w(formatETA(data.puzzle.total_keys, effComp, data.total_hashrate))}`;
           }
         }
-      } catch { /* ignore if blocked data not parseable */ }
+      } catch { /* ignore */ }
       document.getElementById('puzzle-eta')!.innerHTML = etaLine;
     } else {
       renderPuzzleStatus(null);
       document.getElementById('puzzle-vchunks')!.textContent = '';
-      document.getElementById('puzzle-alloc')!.textContent   = '';
-      document.getElementById('puzzle-eta')!.textContent     = '';
-    }
-
-    chunksVis = data.chunks_vis ?? [];
-    const filteredChunks = getFilteredChunks();
-    updateAllocatorGenerationFilterCounts();
-    heatmapBuckets = drawHeatmap(hmCanvas, applyHeatmapLayerFilter(chunksVis, hmLayerFilter));
-    const ngm = drawAllocatorDiagnostics(allocCanvases, gapMetricsEl, filteredChunks);
-    hilbertVisibleChunks = applyLayerFilter(chunksVis, hilLayerFilter);
-    drawHilbert(hilCanvas, hilbertVisibleChunks);
-
-    if (ngm) {
-      console.log(
-        `[Alloc norm-gap ${allocGenerationFilter}] ` +
-        `n ${formatIntegerDots(ngm.n)} · ` +
-        `mean ${ngm.mean.toFixed(3)} · median ${ngm.median.toFixed(3)} · ` +
-        `p95 ${ngm.p95.toFixed(3)} · max ${ngm.max.toFixed(3)} · ` +
-        `cv ${ngm.cv != null ? ngm.cv.toFixed(4) : '—'}`,
-      );
+      document.getElementById('puzzle-alloc')!.textContent = '';
+      document.getElementById('puzzle-eta')!.textContent = '';
     }
 
     const gens = data.alloc_generations ?? { legacy: 0, affine: 0, feistel: 0 };
+    updateAllocatorGenerationFilterCounts(gens);
     document.getElementById('alloc-generation-summary')!.innerHTML =
       `Generation counts: ` +
       `legacy <span style="color:var(--accent-amber)">${formatIntegerDots(gens.legacy)}</span> · ` +
       `affine <span style="color:var(--accent-cyan)">${formatIntegerDots(gens.affine)}</span> · ` +
       `feistel <span style="color:var(--accent-green)">${formatIntegerDots(gens.feistel)}</span>`;
 
-    // Workers section title
     document.getElementById('workers-section-title')!.textContent =
       `Visible Workers · Active: ${data.active_workers_count} · Inactive: ${data.inactive_workers_count}`;
 
-    // Workers table
     const tbody = document.getElementById('worker-list')!;
     if (!data.workers?.length) {
       tbody.innerHTML = emptyRow(9, 'No visible workers');
@@ -511,7 +571,6 @@ async function updateDashboard(): Promise<void> {
       }).join('');
     }
 
-    // Scores table
     const stbody = document.getElementById('score-list')!;
     if (!data.scores?.length) {
       stbody.innerHTML = emptyRow(4, 'No completed work yet');
@@ -524,7 +583,6 @@ async function updateDashboard(): Promise<void> {
       </tr>`).join('');
     }
 
-    // Finders table
     const ftbody = document.getElementById('finder-list')!;
     if (!data.finders?.length) {
       ftbody.innerHTML = emptyRow(6, 'No keys found yet');
@@ -533,10 +591,32 @@ async function updateDashboard(): Promise<void> {
         <td class="td-finder">${esc(f.worker_name)}</td>
         <td class="td-addr">${esc(f.found_address ?? 'Unknown')}</td>
         <td class="td-key">${f.vchunk_start != null ? formatBigInt(f.vchunk_start) : '—'}</td>
-        <td class="td-key">${f.vchunk_end  != null ? formatBigInt(String(BigInt(f.vchunk_end) - 1n)) : '—'}</td>
+        <td class="td-key">${f.vchunk_end != null ? formatBigInt(String(BigInt(f.vchunk_end) - 1n)) : '—'}</td>
         <td class="td-key">${f.chunk_global != null ? '#' + formatIntegerDots(f.chunk_global) : '—'}</td>
         <td class="td-time">${fmtUtc(f.created_at)}</td>
       </tr>`).join('');
+    }
+
+    const currentPuzzleId = data.puzzle?.id ?? null;
+    if (currentPuzzleId === null) {
+      loadedVisualizationPuzzleId = null;
+      heatmapVis = null;
+      hilbertVis = null;
+      allocatorVis = null;
+      redrawAll();
+      syncRefreshButtons();
+    } else if (loadedVisualizationPuzzleId !== currentPuzzleId) {
+      loadedVisualizationPuzzleId = currentPuzzleId;
+      heatmapVis = null;
+      hilbertVis = null;
+      allocatorVis = null;
+      heatmapLoadedRevision = 0;
+      allocatorLoadedRevision = 0;
+      hilbertLoadedRevision = 0;
+      syncRefreshButtons();
+      await loadAllVisualizationsForCurrentPuzzle();
+    } else {
+      syncRefreshButtons();
     }
   } catch (e) {
     setBackendStatus('offline');
@@ -546,53 +626,43 @@ async function updateDashboard(): Promise<void> {
 
 hmCanvas.addEventListener('mousemove', (e: MouseEvent) => {
   const rect = hmCanvas.getBoundingClientRect();
-  const col = Math.floor(((e.clientX - rect.left) / rect.width)  * MAP_COLS);
-  const row = Math.floor(((e.clientY - rect.top)  / rect.height) * MAP_ROWS);
+  const col = Math.floor(((e.clientX - rect.left) / rect.width) * MAP_COLS);
+  const row = Math.floor(((e.clientY - rect.top) / rect.height) * MAP_ROWS);
   if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) {
     tooltip.style.display = 'none';
     return;
   }
-  const bucket = heatmapBuckets[row * MAP_COLS + col];
-  showTooltip(tooltip, e, bucket?.hits ?? []);
+  showTooltipLines(tooltip, e, tooltipLinesForCell(heatmapLookup.get(row * MAP_COLS + col)));
 });
 hmCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
 hilCanvas.addEventListener('mousemove', (e: MouseEvent) => {
-  lastHilbertTooltipEvent = e;
-  if (hilbertTooltipFrame) return;
-  hilbertTooltipFrame = requestAnimationFrame(() => {
-    hilbertTooltipFrame = 0;
-    const evt = lastHilbertTooltipEvent;
-    if (!evt) return;
-    const rect = hilCanvas.getBoundingClientRect();
-    const hx = Math.floor(((evt.clientX - rect.left) / rect.width)  * HILBERT_N);
-    const hy = Math.floor(((evt.clientY - rect.top)  / rect.height) * HILBERT_N);
-    if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) return;
-    const index      = getHilbertD(HILBERT_N, hx, hy);
-    const totalCells = HILBERT_N * HILBERT_N;
-    const cell_s     = index / totalCells;
-    const cell_e     = (index + 1) / totalCells;
-    showTooltip(tooltip, evt, hilbertVisibleChunks.filter(c => c.s <= cell_e && c.e >= cell_s));
-  });
+  const rect = hilCanvas.getBoundingClientRect();
+  const hx = Math.floor(((e.clientX - rect.left) / rect.width) * HILBERT_N);
+  const hy = Math.floor(((e.clientY - rect.top) / rect.height) * HILBERT_N);
+  if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) {
+    tooltip.style.display = 'none';
+    return;
+  }
+  const index = getHilbertD(HILBERT_N, hx, hy);
+  showTooltipLines(tooltip, e, tooltipLinesForCell(hilbertLookup.get(index)));
 });
-hilCanvas.addEventListener('mouseleave', () => {
-  lastHilbertTooltipEvent = null;
-  tooltip.style.display = 'none';
-});
-
-// ── Resize observer ───────────────────────────────────────────────────────────
+hilCanvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
 new ResizeObserver(() => {
   requestAnimationFrame(redrawAll);
 }).observe(document.querySelector('.container')!);
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+heatmapRefreshBtn.addEventListener('click', () => { void loadHeatmapVisualizationPanel(); });
+allocatorRefreshBtn.addEventListener('click', () => { void loadAllocatorVisualizationPanel(); });
+hilbertRefreshBtn.addEventListener('click', () => { void loadHilbertVisualizationPanel(); });
 
 requestAnimationFrame(() => {
   setBackendStatus('offline');
   initAllocatorGenerationFilter();
   initHmLayerFilter();
   initHilLayerFilter();
+  syncRefreshButtons();
   void updateDashboard();
   setInterval(() => { void updateDashboard(); }, 5000);
 });

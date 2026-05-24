@@ -1,117 +1,61 @@
-import type { ChunkVis, ChunkStatus } from './types.ts';
-import { formatIntegerDots, formatGapNumber, percentileSorted, quantileSorted, esc } from './format.ts';
-
-// ── Chunk colour maps ─────────────────────────────────────────────────────────
+import type {
+  AllocatorGenerationVisualization,
+  AllocatorScatterPoint,
+  ChunkStatus,
+  VisualizationCell,
+} from './types.ts';
+import { formatIntegerDots, formatGapNumber } from './format.ts';
 
 export const CHUNK_COLORS: Record<ChunkStatus, string> = {
-  'completed': '#0f8',
-  'FOUND':     '#f36',
-  'assigned':  '#0cf',
-  'reclaimed': '#b80',
-  'blocked':   '#fff',
+  completed: '#0f8',
+  FOUND: '#f36',
+  assigned: '#0cf',
+  reclaimed: '#b80',
+  blocked: '#fff',
 };
 
 export const CHUNK_GLOW_COLORS: Record<ChunkStatus, string> = {
-  'completed': 'rgba(0, 255, 136, 0.4)',
-  'FOUND':     'rgba(255, 51, 102, 1.0)',
-  'assigned':  'rgba(0, 204, 255, 0.5)',
-  'reclaimed': 'rgba(255, 187, 0, 0.3)',
-  'blocked':   'rgba(255, 255, 255, 0.55)',
+  completed: 'rgba(0, 255, 136, 0.4)',
+  FOUND: 'rgba(255, 51, 102, 1.0)',
+  assigned: 'rgba(0, 204, 255, 0.5)',
+  reclaimed: 'rgba(255, 187, 0, 0.3)',
+  blocked: 'rgba(255, 255, 255, 0.55)',
 };
-
-// ── Constants ─────────────────────────────────────────────────────────────────
 
 export const MAP_COLS = 512;
 export const MAP_ROWS = 128;
 export const HILBERT_N = 256;
 
-// ── 1D bar ────────────────────────────────────────────────────────────────────
+const STATUS_ORDER_ALL: ChunkStatus[] = ['FOUND', 'assigned', 'reclaimed', 'blocked', 'completed'];
+const STATUS_ORDER_NATIVE: ChunkStatus[] = ['FOUND', 'assigned', 'reclaimed', 'completed'];
+const STATUS_NAMES: Record<ChunkStatus, string> = {
+  completed: 'Done',
+  assigned: 'In Progress',
+  reclaimed: 'Reclaimed',
+  FOUND: 'Found',
+  blocked: 'Blocked',
+};
 
-export function draw1DBar(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
-  if (W === 0 || H === 0) return;
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, W, H);
-  if (chunks.length === 0) return;
+export type CellLookup = Map<number, VisualizationCell>;
 
-  // Difference arrays (prefix-sum trick): O(chunks + W) regardless of chunk span.
-  // Each array has W+1 slots so arr[e+1] is always in bounds.
-  const dCompleted = new Int32Array(W + 1);
-  const dAssigned  = new Int32Array(W + 1);
-  const dReclaimed = new Int32Array(W + 1);
-  const dFound     = new Int32Array(W + 1);
-  const dBlocked   = new Int32Array(W + 1);
-
-  for (const c of chunks) {
-    const s = Math.max(0, Math.floor(c.s * W));
-    const e = Math.min(W - 1, Math.floor(c.e * W));
-    const arr = c.st === 'completed' ? dCompleted
-              : c.st === 'assigned'  ? dAssigned
-              : c.st === 'reclaimed' ? dReclaimed
-              : c.st === 'FOUND'     ? dFound
-              :                        dBlocked;
-    arr[s]++;
-    arr[e + 1]--;
-  }
-
-  // Scan prefix sums, compute colour per column, write direct to ImageData.
-  const imgData = ctx.createImageData(W, H);
-  const px = imgData.data;
-  let completed = 0, assigned = 0, reclaimed = 0, found = 0, blocked = 0;
-
-  for (let x = 0; x < W; x++) {
-    completed += dCompleted[x];
-    assigned  += dAssigned[x];
-    reclaimed += dReclaimed[x];
-    found     += dFound[x];
-    blocked   += dBlocked[x];
-
-    const total = completed + assigned + reclaimed + found + blocked;
-    if (total === 0) continue;
-
-    let r = 10, g = 10, b = 10;
-    if (found > 0) {
-      r = 255; g = 51; b = 102;                          // FOUND → red
-    } else {
-      const cf = completed / total;
-      const af = assigned  / total;
-      const bf = blocked   / total;
-      const rf = reclaimed / total;
-      // completed → green #0f8 (0, 255, 136)
-      g += 245 * cf; b += 126 * cf;
-      // assigned  → cyan  #0cf (0, 204, 255)
-      g += 194 * af; b += 245 * af;
-      // blocked   → white
-      r += 255 * bf; g += 255 * bf; b += 255 * bf;
-      // reclaimed → amber #b80 (187, 136, 0)
-      r += 177 * rf; g += 126 * rf;
-    }
-
-    const ri = Math.min(255, r) | 0;
-    const gi = Math.min(255, g) | 0;
-    const bi = Math.min(255, b) | 0;
-    for (let y = 0; y < H; y++) {
-      const i = (y * W + x) << 2;
-      px[i] = ri; px[i + 1] = gi; px[i + 2] = bi; px[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(imgData, 0, 0);
+function countAt(cell: VisualizationCell, status: ChunkStatus): number {
+  const offset = status === 'completed' ? 1
+    : status === 'assigned' ? 2
+    : status === 'reclaimed' ? 3
+    : status === 'FOUND' ? 4
+    : 5;
+  return cell[offset] ?? 0;
 }
 
-// ── Heatmap ───────────────────────────────────────────────────────────────────
+function totalAt(cell: VisualizationCell): number {
+  return cell[1] + cell[2] + cell[3] + cell[4] + cell[5];
+}
 
-interface Bucket {
-  hits: ChunkVis[];
-  total: number;
-  completed: number;
-  assigned: number;
-  reclaimed: number;
-  FOUND: number;
-  blocked: number;
-  sizeJitter: number;
-  offsetJitter: number;
+function dominantStatus(cell: VisualizationCell, statuses: ChunkStatus[]): ChunkStatus | null {
+  for (const status of statuses) {
+    if (countAt(cell, status) > 0) return status;
+  }
+  return null;
 }
 
 function hash32Mix(a: number, b = 0, c = 0, d = 0): number {
@@ -127,67 +71,34 @@ function hash32Mix(a: number, b = 0, c = 0, d = 0): number {
   return x >>> 0;
 }
 
-function chunkHashPoint(c: ChunkVis, totalCells: number) {
-  const id = Number.isFinite(c.id) ? c.id : 0;
-  const sScaled = Number.isFinite(c.s) ? Math.floor(c.s * 0x7fffffff) : 0;
-  const eScaled = Number.isFinite(c.e) ? Math.floor(c.e * 0x7fffffff) : 0;
-  const h1 = hash32Mix(id, sScaled, eScaled, 0x1234abcd);
-  const h2 = hash32Mix(id, eScaled, sScaled, 0x9e3779b9);
-  const h3 = hash32Mix(sScaled, id, eScaled, 0x6d2b79f5);
-  return { index: h1 % totalCells, sizeJitter: h2, offsetJitter: h3 };
-}
-
-export function buildHeatmapBuckets(chunks: ChunkVis[], totalCells: number): (Bucket | undefined)[] {
-  const buckets: (Bucket | undefined)[] = new Array(totalCells);
-  for (const c of chunks) {
-    const hp = chunkHashPoint(c, totalCells);
-    let bucket = buckets[hp.index];
-    if (!bucket) {
-      bucket = { hits: [], total: 0, completed: 0, assigned: 0, reclaimed: 0, FOUND: 0, blocked: 0,
-                 sizeJitter: hp.sizeJitter, offsetJitter: hp.offsetJitter };
-      buckets[hp.index] = bucket;
-    }
-    bucket.hits.push(c);
-    bucket.total++;
-    if (c.st === 'completed') bucket.completed++;
-    else if (c.st === 'assigned') bucket.assigned++;
-    else if (c.st === 'reclaimed') bucket.reclaimed++;
-    else if (c.st === 'FOUND') bucket.FOUND++;
-    else if (c.st === 'blocked') bucket.blocked++;
-  }
-  return buckets;
-}
-
-function bucketDominantStatus(bucket: Bucket | undefined): ChunkStatus | null {
-  if (!bucket) return null;
-  if (bucket.FOUND > 0) return 'FOUND';
-  if (bucket.assigned > 0) return 'assigned';
-  if (bucket.reclaimed > 0) return 'reclaimed';
-  if (bucket.blocked > 0) return 'blocked';
-  if (bucket.completed > 0) return 'completed';
-  return null;
+function buildCellLookup(cells: VisualizationCell[]): CellLookup {
+  const lookup: CellLookup = new Map();
+  for (const cell of cells) lookup.set(cell[0], cell);
+  return lookup;
 }
 
 export function drawHeatmap(
   canvas: HTMLCanvasElement,
-  chunks: ChunkVis[],
-): (Bucket | undefined)[] {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
-  if (W === 0 || H === 0) return [];
-  canvas.width = W; canvas.height = H;
+  cells: VisualizationCell[],
+  filter: string,
+): CellLookup {
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  const lookup = buildCellLookup(cells);
+  if (W === 0 || H === 0) return lookup;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
-  const totalCells = MAP_COLS * MAP_ROWS;
-  const cellW = W / MAP_COLS, cellH = H / MAP_ROWS;
+  const cellW = W / MAP_COLS;
+  const cellH = H / MAP_ROWS;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
 
-  const buckets = buildHeatmapBuckets(chunks, totalCells);
-
-  let maxBucketLoad = 0;
-  for (const bucket of buckets) {
-    if (bucket && bucket.total > maxBucketLoad) maxBucketLoad = bucket.total;
+  let maxLoad = 1;
+  for (const cell of cells) {
+    const load = totalAt(cell);
+    if (load > maxLoad) maxLoad = load;
   }
-  if (maxBucketLoad < 1) maxBucketLoad = 1;
 
   ctx.globalCompositeOperation = 'lighter';
   const statusPasses: ChunkStatus[][] = [
@@ -195,55 +106,66 @@ export function drawHeatmap(
     ['reclaimed', 'assigned', 'FOUND'],
   ];
   for (const statuses of statusPasses) {
-    for (let index = 0; index < totalCells; index++) {
-      const bucket = buckets[index];
-      const status = bucketDominantStatus(bucket);
-      if (!status || !bucket || !statuses.includes(status)) continue;
-      const isEmphasizedStatus =
-        status === 'assigned' || status === 'reclaimed' || status === 'FOUND';
-      const baseColor = CHUNK_GLOW_COLORS[status];
+    for (const cell of cells) {
+      const index = cell[0];
+      let status: ChunkStatus | null = null;
+      if (filter === 'all') {
+        const candidate = dominantStatus(cell, statuses);
+        if (candidate && statuses.includes(candidate)) status = candidate;
+      } else {
+        const layerStatus = filter as ChunkStatus;
+        if (statuses.includes(layerStatus) && countAt(cell, layerStatus) > 0) status = layerStatus;
+      }
+      if (!status) continue;
+
       const col = index % MAP_COLS;
       const row = Math.floor(index / MAP_COLS);
       const cx = col * cellW + cellW / 2;
       const cy = row * cellH + cellH / 2;
-      const loadNorm = Math.log(bucket.total + 1) / Math.log(maxBucketLoad + 1);
-      const radiusBase = isEmphasizedStatus
+      const loadNorm = Math.log(totalAt(cell) + 1) / Math.log(maxLoad + 1);
+      const isEmphasized = status === 'assigned' || status === 'reclaimed' || status === 'FOUND';
+      const radiusBase = isEmphasized
         ? Math.max(3.2, Math.min(4.2, W / 260))
         : Math.max(0.55, Math.min(1.1, W / 900));
-      const radiusJitter = isEmphasizedStatus
-        ? 0.92 + ((bucket.sizeJitter & 0xff) / 255) * 0.18
-        : 0.78 + ((bucket.sizeJitter & 0xff) / 255) * 0.24;
-      const r = isEmphasizedStatus
+      const jitter = hash32Mix(index, totalAt(cell), countAt(cell, status), isEmphasized ? 1 : 0);
+      const radiusJitter = isEmphasized
+        ? 0.92 + ((jitter & 0xff) / 255) * 0.18
+        : 0.78 + ((jitter & 0xff) / 255) * 0.24;
+      const r = isEmphasized
         ? Math.min(4.4, radiusBase * (0.88 + loadNorm * 0.3) * radiusJitter)
         : Math.min(1.35, radiusBase * (0.48 + loadNorm * 0.42) * radiusJitter);
-      const dx = ((((bucket.offsetJitter >>> 0) & 0xff) / 255) - 0.5) * cellW * 0.2;
-      const dy = ((((bucket.offsetJitter >>> 8) & 0xff) / 255) - 0.5) * cellH * 0.2;
-      ctx.fillStyle = baseColor;
+      const dx = ((((jitter >>> 8) & 0xff) / 255) - 0.5) * cellW * 0.2;
+      const dy = ((((jitter >>> 16) & 0xff) / 255) - 0.5) * cellH * 0.2;
+      ctx.fillStyle = CHUNK_GLOW_COLORS[status];
       ctx.beginPath();
       ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2);
       ctx.fill();
-      if (bucket.total >= (isEmphasizedStatus ? 4 : 8)) {
-        ctx.fillStyle = baseColor;
+      if (totalAt(cell) >= (isEmphasized ? 4 : 8)) {
         ctx.beginPath();
-        ctx.arc(cx + dx, cy + dy, Math.max(isEmphasizedStatus ? 0.9 : 0.35, r * (isEmphasizedStatus ? 0.38 : 0.3)), 0, Math.PI * 2);
+        ctx.arc(cx + dx, cy + dy, Math.max(isEmphasized ? 0.9 : 0.35, r * (isEmphasized ? 0.38 : 0.3)), 0, Math.PI * 2);
         ctx.fill();
       }
     }
   }
   ctx.globalCompositeOperation = 'source-over';
-  return buckets;
+  return lookup;
 }
 
-// ── Hilbert curve ─────────────────────────────────────────────────────────────
-
 export function getHilbertXY(n: number, d: number): [number, number] {
-  let x = 0, y = 0, t = Math.floor(d);
+  let x = 0;
+  let y = 0;
+  let t = Math.floor(d);
   for (let s = 1; s < n; s *= 2) {
     const rx = 1 & (t >> 1);
     const ry = 1 & (t ^ rx);
     if (ry === 0) {
-      if (rx === 1) { x = s - 1 - x; y = s - 1 - y; }
-      const temp = x; x = y; y = temp;
+      if (rx === 1) {
+        x = s - 1 - x;
+        y = s - 1 - y;
+      }
+      const temp = x;
+      x = y;
+      y = temp;
     }
     x += s * rx;
     y += s * ry;
@@ -254,47 +176,54 @@ export function getHilbertXY(n: number, d: number): [number, number] {
 
 export function getHilbertD(n: number, x: number, y: number): number {
   let d = 0;
-  let xm = x, ym = y;
+  let xm = x;
+  let ym = y;
   for (let s = Math.floor(n / 2); s > 0; s = Math.floor(s / 2)) {
     const rx = (xm & s) > 0 ? 1 : 0;
     const ry = (ym & s) > 0 ? 1 : 0;
     d += s * s * ((3 * rx) ^ ry);
     if (ry === 0) {
-      if (rx === 1) { xm = s - 1 - xm; ym = s - 1 - ym; }
-      const temp = xm; xm = ym; ym = temp;
+      if (rx === 1) {
+        xm = s - 1 - xm;
+        ym = s - 1 - ym;
+      }
+      const temp = xm;
+      xm = ym;
+      ym = temp;
     }
   }
   return d;
 }
 
-export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void {
+export function drawHilbert(
+  canvas: HTMLCanvasElement,
+  cells: VisualizationCell[],
+  filter: string,
+): CellLookup {
+  const lookup = buildCellLookup(cells);
   const size = canvas.offsetWidth;
-  if (size === 0) return;
-  canvas.width = size; canvas.height = size;
+  if (size === 0) return lookup;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext('2d')!;
-  const totalCells = HILBERT_N * HILBERT_N;
   const cellSize = size / HILBERT_N;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, size, size);
   ctx.globalCompositeOperation = 'lighter';
-  // Finding 5: group chunks by status in one O(N) pass so each status is drawn
-  // in a single loop instead of iterating all chunks 5 times with skip logic.
-  const byStatus = new Map<ChunkStatus, ChunkVis[]>();
-  for (const c of chunks) {
-    let arr = byStatus.get(c.st);
-    if (!arr) { arr = []; byStatus.set(c.st, arr); }
-    arr.push(c);
-  }
-  const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND', 'blocked'];
   const pointR = Math.max(0.55, Math.min(1.2, size / 760));
+  const order: ChunkStatus[] = ['reclaimed', 'assigned', 'completed', 'FOUND', 'blocked'];
   for (const status of order) {
-    const group = byStatus.get(status);
-    if (!group?.length) continue;
+    if (filter === 'blocked' && status !== 'blocked') continue;
+    if (filter === 'native' && status === 'blocked') continue;
     ctx.fillStyle = CHUNK_GLOW_COLORS[status];
-    for (const c of group) {
-      const distance = Math.floor(c.s * totalCells);
-      const [hx, hy] = getHilbertXY(HILBERT_N, distance);
-      if (hx < 0 || hx >= HILBERT_N || hy < 0 || hy >= HILBERT_N) continue;
+    for (const cell of cells) {
+      const chosen = filter === 'blocked'
+        ? (countAt(cell, 'blocked') > 0 ? 'blocked' : null)
+        : filter === 'native'
+          ? dominantStatus(cell, STATUS_ORDER_NATIVE)
+          : dominantStatus(cell, STATUS_ORDER_ALL);
+      if (chosen !== status) continue;
+      const [hx, hy] = getHilbertXY(HILBERT_N, cell[0]);
       const px = hx * cellSize + cellSize / 2;
       const py = hy * cellSize + cellSize / 2;
       ctx.beginPath();
@@ -303,57 +232,55 @@ export function drawHilbert(canvas: HTMLCanvasElement, chunks: ChunkVis[]): void
     }
   }
   ctx.globalCompositeOperation = 'source-over';
+  return lookup;
 }
 
-// ── Allocator diagnostics ─────────────────────────────────────────────────────
-
-function getAllocatorChunks(chunks: ChunkVis[]): ChunkVis[] {
-  return chunks
-    .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
-    .slice()
-    .sort((a, b) => a.id - b.id);
-}
-
-function computeNormalizedGapsFromSorted(sorted: ChunkVis[]): number[] {
-  if (sorted.length < 2) return [];
-  const gaps: number[] = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const gap = sorted[i].s - sorted[i - 1].s;
-    if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
-  }
-  if (!gaps.length) return [];
-  const mean = gaps.reduce((sum, g) => sum + g, 0) / gaps.length;
-  if (!(mean > 0)) return [];
-  return gaps.map(g => g / mean).filter(v => Number.isFinite(v) && v >= 0);
-}
-
-function computeNormalizedGapMetricsFromValues(values: number[]) {
-  if (!values.length) return null;
-  const n = values.length;
-  const mean = values.reduce((s, v) => s + v, 0) / n;
-  const median = quantileSorted(values, 0.5);
-  const p95 = quantileSorted(values, 0.95);
-  const max = values[n - 1];
-  const variance = values.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
-  const sd = Math.sqrt(variance);
-  const cv = mean > 0 ? sd / mean : null;
-  return { n, mean, median: median ?? 0, p95: p95 ?? 0, max, cv };
-}
-
-function computeNormalizedGapMetricsFromSorted(sorted: ChunkVis[]) {
-  const values = computeNormalizedGapsFromSorted(sorted).slice().sort((a, b) => a - b);
-  return computeNormalizedGapMetricsFromValues(values);
-}
-
-export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedById?: ChunkVis[]): void {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+function drawHistogram(canvas: HTMLCanvasElement, bins: number[], color: string, markerXRatio?: number): void {
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
-  canvas.width = W; canvas.height = H;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const sorted = _sortedById ?? getAllocatorChunks(chunks);
-  if (!sorted.length) return;
+  if (!bins.length) return;
+  const maxCount = Math.max(...bins, 1);
+  const barW = W / bins.length;
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = Math.floor((H * i) / 4) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+  if (markerXRatio != null) {
+    const xRef = markerXRatio * W;
+    ctx.strokeStyle = 'rgba(255,176,0,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(xRef + 0.5, 0);
+    ctx.lineTo(xRef + 0.5, H);
+    ctx.stroke();
+  }
+  ctx.fillStyle = color;
+  for (let i = 0; i < bins.length; i++) {
+    const h = (bins[i] / maxCount) * (H - 8);
+    ctx.fillRect(i * barW, H - h, Math.max(1, barW - 1), h);
+  }
+}
+
+function drawAllocatorScatter(canvas: HTMLCanvasElement, sample: AllocatorScatterPoint[]): void {
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  if (W === 0 || H === 0) return;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+  if (!sample.length) return;
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 1;
   for (let i = 1; i < 4; i++) {
@@ -362,167 +289,51 @@ export function drawAllocatorScatter(canvas: HTMLCanvasElement, chunks: ChunkVis
     const x = Math.floor((W * i) / 4) + 0.5;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
-  const n = sorted.length;
   const pointR = Math.max(0.6, Math.min(1.35, W / 760));
-  for (let i = 0; i < n; i++) {
-    const c = sorted[i];
-    const x = n > 1 ? (i / (n - 1)) * (W - 1) : W / 2;
-    const y = (1 - c.s) * (H - 1);
-    ctx.fillStyle = CHUNK_GLOW_COLORS[c.st] ?? 'rgba(255,255,255,0.4)';
+  for (const [xNorm, s, statusCode] of sample) {
+    const x = xNorm * (W - 1);
+    const y = (1 - s) * (H - 1);
+    const status = statusCode === 0 ? 'completed'
+      : statusCode === 1 ? 'assigned'
+      : statusCode === 2 ? 'reclaimed'
+      : statusCode === 3 ? 'FOUND'
+      : 'blocked';
+    ctx.fillStyle = CHUNK_GLOW_COLORS[status];
     ctx.beginPath();
     ctx.arc(x, y, pointR, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
-export function updateAllocatorGapMetrics(el: HTMLElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
-  const sorted = _sortedByS ?? getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
-  if (sorted.length < 2) {
-    el.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">not enough data</span>';
-    return;
-  }
-  const gaps: number[] = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const gap = sorted[i].s - sorted[i - 1].s;
-    if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
-  }
-  if (!gaps.length) {
-    el.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">no valid gaps</span>';
-    return;
-  }
-  gaps.sort((a, b) => a - b);
-  const n = gaps.length;
-  const mean = gaps.reduce((acc, v) => acc + v, 0) / n;
-  const median = percentileSorted(gaps, 0.5);
-  const p95 = percentileSorted(gaps, 0.95);
-  const max = gaps[n - 1];
-  let variance = 0;
-  for (const g of gaps) { const d = g - mean; variance += d * d; }
-  variance /= n;
-  const cv = mean > 0 ? Math.sqrt(variance) / mean : null;
-  const maxOverMean = mean > 0 ? max / mean : null;
-  el.innerHTML =
-    `Gap metrics: ` +
-    `n <span style="color:var(--accent-cyan)">${formatIntegerDots(n)}</span> · ` +
-    `mean <span style="color:var(--accent-amber)">${formatGapNumber(mean)}</span> · ` +
-    `median <span style="color:var(--accent-amber)">${formatGapNumber(median ?? 0)}</span> · ` +
-    `p95 <span style="color:var(--accent-green)">${formatGapNumber(p95 ?? 0)}</span> · ` +
-    `max <span style="color:var(--accent-green)">${formatGapNumber(max)}</span> · ` +
-    `cv <span style="color:var(--accent-cyan)">${cv != null ? formatGapNumber(cv) : '—'}</span> · ` +
-    `max/mean <span style="color:var(--accent-cyan)">${maxOverMean != null ? formatGapNumber(maxOverMean) : '—'}</span>`;
-}
-
-export function drawAllocatorGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+function drawAllocatorResidueMap(canvas: HTMLCanvasElement, sample: AllocatorScatterPoint[], totalCount: number): void {
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
-  canvas.width = W; canvas.height = H;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#0a0a0a';
   ctx.fillRect(0, 0, W, H);
-  const sorted = _sortedByS ?? getAllocatorChunks(chunks).slice().sort((a, b) => a.s - b.s);
-  if (sorted.length < 2) return;
-  const gaps: number[] = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const gap = sorted[i].s - sorted[i - 1].s;
-    if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
-  }
-  if (!gaps.length) return;
-  const bins = Math.min(128, Math.max(32, Math.floor(W / 8)));
-  const hist = new Array<number>(bins).fill(0);
-  let maxGap = 0;
-  for (const g of gaps) if (g > maxGap) maxGap = g;
-  if (!(maxGap > 0)) maxGap = 1;
-  for (const g of gaps) {
-    let idx = Math.floor((g / maxGap) * (bins - 1));
-    if (idx < 0) idx = 0;
-    if (idx >= bins) idx = bins - 1;
-    hist[idx]++;
-  }
-  const maxCount = Math.max(...hist, 1);
-  const barW = W / bins;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = Math.floor((H * i) / 4) + 0.5;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
-  ctx.fillStyle = 'rgba(0,255,255,0.55)';
-  for (let i = 0; i < bins; i++) {
-    const h = (hist[i] / maxCount) * (H - 8);
-    ctx.fillRect(i * barW, H - h, Math.max(1, barW - 1), h);
-  }
-}
-
-export function drawAllocatorNormalizedGapHistogram(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedByS?: ChunkVis[]): void {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
-  if (W === 0 || H === 0) return;
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, W, H);
-  const sortedByS = _sortedByS ?? chunks
-    .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
-    .slice()
-    .sort((a, b) => a.s - b.s);
-  const values = computeNormalizedGapsFromSorted(sortedByS);
-  if (!values.length) return;
-  const CLIP = 6;
-  const bins = Math.min(96, Math.max(36, Math.floor(W / 10)));
-  const hist = new Array<number>(bins).fill(0);
-  for (const v of values) {
-    const clipped = Math.min(v, CLIP);
-    let idx = Math.floor((clipped / CLIP) * (bins - 1));
-    if (idx < 0) idx = 0;
-    if (idx >= bins) idx = bins - 1;
-    hist[idx]++;
-  }
-  const maxCount = Math.max(...hist, 1);
-  const barW = W / bins;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = Math.floor((H * i) / 4) + 0.5;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-  }
-  const xRef = (1 / CLIP) * W;
-  ctx.strokeStyle = 'rgba(255,176,0,0.85)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(xRef + 0.5, 0); ctx.lineTo(xRef + 0.5, H); ctx.stroke();
-  ctx.fillStyle = 'rgba(0,255,136,0.60)';
-  for (let i = 0; i < bins; i++) {
-    const h = (hist[i] / maxCount) * (H - 8);
-    ctx.fillRect(i * barW, H - h, Math.max(1, barW - 1), h);
-  }
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.font = '12px JetBrains Mono, monospace';
-  ctx.fillText('1× mean', Math.min(W - 60, xRef + 6), 14);
-  ctx.fillText(`clip ${CLIP}×`, W - 70, 14);
-}
-
-export function drawAllocatorResidueMap(canvas: HTMLCanvasElement, chunks: ChunkVis[], _sortedById?: ChunkVis[]): void {
-  const W = canvas.offsetWidth, H = canvas.offsetHeight;
-  if (W === 0 || H === 0) return;
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, W, H);
-  const sorted = _sortedById ?? getAllocatorChunks(chunks);
-  if (!sorted.length) return;
+  if (!sample.length || totalCount <= 0) return;
   const MOD = 1024;
   const rows = Math.min(128, Math.max(32, Math.floor(H / 2)));
-  const cellW = W / MOD, cellH = H / rows;
+  const cellW = W / MOD;
+  const cellH = H / rows;
   ctx.strokeStyle = 'rgba(255,255,255,0.04)';
   ctx.lineWidth = 1;
   for (let i = 1; i < 4; i++) {
     const y = Math.floor((H * i) / 4) + 0.5;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  const n = sorted.length;
-  for (let i = 0; i < n; i++) {
-    const c = sorted[i];
-    const residue = Math.floor(c.s * MOD) % MOD;
-    const row = Math.floor((i / Math.max(1, n)) * rows);
-    ctx.fillStyle = CHUNK_GLOW_COLORS[c.st] ?? 'rgba(255,255,255,0.5)';
+  for (const [xNorm, s, statusCode] of sample) {
+    const residue = Math.floor(s * MOD) % MOD;
+    const row = Math.floor(xNorm * rows);
+    const status = statusCode === 0 ? 'completed'
+      : statusCode === 1 ? 'assigned'
+      : statusCode === 2 ? 'reclaimed'
+      : statusCode === 3 ? 'FOUND'
+      : 'blocked';
+    ctx.fillStyle = CHUNK_GLOW_COLORS[status];
     ctx.fillRect(residue * cellW, row * cellH, Math.max(1, cellW), Math.max(1, cellH));
   }
 }
@@ -535,43 +346,60 @@ export function drawAllocatorDiagnostics(
     residue: HTMLCanvasElement;
   },
   gapMetricsEl: HTMLElement,
-  chunks: ChunkVis[],
-): ReturnType<typeof computeNormalizedGapMetricsFromSorted> {
-  // Finding 6: compute the two derived arrays once and pass them to each
-  // sub-function to avoid O(3×N log N) redundant filter+sort on every redraw.
-  const sortedById = getAllocatorChunks(chunks);
-  const sortedByS  = chunks
-    .filter(c => Number.isFinite(c.id) && Number.isFinite(c.s) && Number.isFinite(c.e))
-    .slice()
-    .sort((a, b) => a.s - b.s);
-  drawAllocatorScatter(canvases.scatter, chunks, sortedById);
-  drawAllocatorGapHistogram(canvases.gap, chunks, sortedByS);
-  updateAllocatorGapMetrics(gapMetricsEl, chunks, sortedByS);
-  drawAllocatorNormalizedGapHistogram(canvases.gapnorm, chunks, sortedByS);
-  drawAllocatorResidueMap(canvases.residue, chunks, sortedById);
-  return computeNormalizedGapMetricsFromSorted(sortedByS);
-}
-
-// ── Tooltip ───────────────────────────────────────────────────────────────────
-
-export function formatTooltipLine(c: ChunkVis): string {
-  const status = c.st === 'FOUND'      ? '🔑 FOUND' :
-                 c.st === 'assigned'   ? '⚡ In Progress' :
-                 c.st === 'completed'  ? '✓ Done' :
-                 c.st === 'blocked'    ? '⊘ Blocked' : '↩ Reclaimed';
-  const idPart = c.st === 'blocked' ? '' : ` &nbsp;Chunk #${c.id}`;
-  const wPart  = c.st === 'blocked' ? '' : ` &nbsp;<span style="color:#e0e0e0">${esc(c.w)}</span>`;
-  return `<span style="color:${CHUNK_COLORS[c.st]}">${status}</span>${idPart}${wPart}`;
-}
-
-export function showTooltip(tooltipEl: HTMLElement, e: MouseEvent, hits: ChunkVis[]): void {
-  if (!hits.length) { tooltipEl.style.display = 'none'; return; }
-  const displayHits = hits.slice(0, 15);
-  let html = displayHits.map(formatTooltipLine).join('<br>');
-  if (hits.length > 15) {
-    html += `<br><span style="color:#888;margin-top:5px;display:inline-block;">+ ${hits.length - 15} more chunks here</span>`;
+  generation: AllocatorGenerationVisualization | null,
+): void {
+  if (!generation) {
+    gapMetricsEl.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">not loaded</span>';
+    drawAllocatorScatter(canvases.scatter, []);
+    drawHistogram(canvases.gap, [], 'rgba(0,255,255,0.55)');
+    drawHistogram(canvases.gapnorm, [], 'rgba(0,255,136,0.60)');
+    drawAllocatorResidueMap(canvases.residue, [], 0);
+    return;
   }
-  tooltipEl.innerHTML = html;
+
+  drawAllocatorScatter(canvases.scatter, generation.scatter);
+  drawHistogram(canvases.gap, generation.gap_histogram.bins, 'rgba(0,255,255,0.55)');
+  drawHistogram(
+    canvases.gapnorm,
+    generation.norm_gap_histogram.bins,
+    'rgba(0,255,136,0.60)',
+    1 / generation.norm_gap_histogram.clip,
+  );
+  drawAllocatorResidueMap(canvases.residue, generation.scatter, generation.total_count);
+
+  if (!generation.metrics) {
+    gapMetricsEl.innerHTML = 'Gap metrics: <span style="color:var(--text-muted)">not enough data</span>';
+    return;
+  }
+  const m = generation.metrics;
+  gapMetricsEl.innerHTML =
+    `Gap metrics: ` +
+    `n <span style="color:var(--accent-cyan)">${formatIntegerDots(m.n)}</span> · ` +
+    `mean <span style="color:var(--accent-amber)">${formatGapNumber(m.mean)}</span> · ` +
+    `median <span style="color:var(--accent-amber)">${formatGapNumber(m.median)}</span> · ` +
+    `p95 <span style="color:var(--accent-green)">${formatGapNumber(m.p95)}</span> · ` +
+    `max <span style="color:var(--accent-green)">${formatGapNumber(m.max)}</span> · ` +
+    `cv <span style="color:var(--accent-cyan)">${m.cv != null ? formatGapNumber(m.cv) : '—'}</span> · ` +
+    `max/mean <span style="color:var(--accent-cyan)">${m.max_over_mean != null ? formatGapNumber(m.max_over_mean) : '—'}</span>`;
+}
+
+export function tooltipLinesForCell(cell: VisualizationCell | undefined): string[] {
+  if (!cell) return [];
+  const lines: string[] = [];
+  for (const status of STATUS_ORDER_ALL) {
+    const count = countAt(cell, status);
+    if (count <= 0) continue;
+    lines.push(`<span style="color:${CHUNK_COLORS[status]}">${STATUS_NAMES[status]}</span> · ${formatIntegerDots(count)}`);
+  }
+  return lines;
+}
+
+export function showTooltipLines(tooltipEl: HTMLElement, e: MouseEvent, lines: string[]): void {
+  if (!lines.length) {
+    tooltipEl.style.display = 'none';
+    return;
+  }
+  tooltipEl.innerHTML = lines.join('<br>');
   tooltipEl.style.display = 'block';
   let tx = e.clientX + 14;
   let ty = e.clientY - tooltipEl.offsetHeight / 2;

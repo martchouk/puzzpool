@@ -48,6 +48,7 @@ add_library(puzzpool_core STATIC
     src/service_submit.cpp
     src/service_admin.cpp
     src/service_stats.cpp
+    src/service_visualization.cpp
     src/service_bootstrap.cpp
     src/service_puzzle_status.cpp
     src/work_service.cpp

@@ -48,7 +48,7 @@ crow::response PoolService::handleStats(const crow::request& req) {
             out["workers"]        = json::array();
             out["scores"]         = json::array();
             out["finders"]        = json::array();
-            out["chunks_vis"]     = json::array();
+            out["vis_revision"]   = 0;
             out["alloc_generations"] = {{"legacy", 0}, {"affine", 0}, {"feistel", 0}};
             return jsonResponse(out);
         }
@@ -64,6 +64,8 @@ crow::response PoolService::handleStats(const crow::request& req) {
 json PoolService::buildStats(const PuzzleRow& puzzle) {
     json out;
     out["puzzle"] = puzzleJson(puzzle);
+    auto revIt = visRevisions_.find(puzzle.id);
+    out["vis_revision"] = revIt == visRevisions_.end() ? 1 : revIt->second;
 
     json visibleWorkers = json::array();
     double totalHashrate = 0;
@@ -216,7 +218,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
 
     json finders = json::array();
     SQLite::Statement fq(db_.raw(), R"SQL(
-        SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
+        SELECT f.worker_name, f.found_address, f.created_at,
                c.id AS chunk_global, c.vchunk_start_hex, c.vchunk_end_hex
         FROM findings f JOIN chunks c ON c.id = f.chunk_id
         WHERE c.puzzle_id = ? AND c.is_test = 0
@@ -226,17 +228,15 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     while (fq.executeStep()) {
         finders.push_back({
             {"worker_name",  fq.getColumn(0).getString()},
-            {"found_key",    fq.getColumn(1).getString()},
-            {"found_address", fq.isColumnNull(2) ? json(nullptr) : json(fq.getColumn(2).getString())},
-            {"created_at",   fq.isColumnNull(3) ? json(nullptr) : json(fq.getColumn(3).getString())},
-            {"chunk_global", fq.getColumn(4).getInt64()},
-            {"vchunk_start", fq.isColumnNull(5) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(5).getString())))},
-            {"vchunk_end",   fq.isColumnNull(6) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(6).getString())))}
+            {"found_address", fq.isColumnNull(1) ? json(nullptr) : json(fq.getColumn(1).getString())},
+            {"created_at",   fq.isColumnNull(2) ? json(nullptr) : json(fq.getColumn(2).getString())},
+            {"chunk_global", fq.getColumn(3).getInt64()},
+            {"vchunk_start", fq.isColumnNull(4) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(4).getString())))},
+            {"vchunk_end",   fq.isColumnNull(5) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(5).getString())))}
         });
     }
     out["finders"] = finders;
 
-    json chunksVis = json::array();
     cpp_int pStart = hexToInt(puzzle.startHex);
     cpp_int pEnd   = hexToInt(puzzle.endHex);
     cpp_int pRange = pEnd - pStart;
@@ -250,18 +250,6 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     cv.bind(1, puzzle.id);
     cpp_int vcStarted = 0, vcCompleted = 0;
     while (cv.executeStep()) {
-        cpp_int cs = hexToInt(cv.getColumn(3).getString()) - pStart;
-        cpp_int ce = hexToInt(cv.getColumn(4).getString()) - pStart;
-        long double s = cs.convert_to<long double>() / pRange.convert_to<long double>();
-        long double e = ce.convert_to<long double>() / pRange.convert_to<long double>();
-        chunksVis.push_back({
-            {"id", cv.getColumn(0).getInt64()},
-            {"st", cv.getColumn(1).getString()},
-            {"w",  cv.isColumnNull(2) ? json(nullptr) : json(cv.getColumn(2).getString())},
-            {"g",  cv.isColumnNull(5) ? json(nullptr) : json(cv.getColumn(5).getString())},
-            {"s",  static_cast<double>(s)},
-            {"e",  static_cast<double>(e)}
-        });
         // Accumulate vchunk coverage while we have the row (Finding 4)
         if (!cv.isColumnNull(6) && !cv.isColumnNull(7)) {
             cpp_int vs = hexToInt(cv.getColumn(6).getString());
@@ -308,21 +296,11 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
                     else
                         mergedBlocked.back().second = maxBig(mergedBlocked.back().second, ve);
                 }
-                // Sum merged intervals and emit one vis entry each
-                int64_t blockedId = -1;
+                // Sum merged intervals across sources for dashboard counts.
                 for (auto& [vs, ve] : mergedBlocked) {
                     blockedTotal += (ve - vs);
-                    long double sNorm = (vs * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
-                    long double eNorm = (ve * vchunkSize).convert_to<long double>() / pRange.convert_to<long double>();
-                    if (eNorm > 1.0L) eNorm = 1.0L;
-                    chunksVis.push_back({
-                        {"id", blockedId--},
-                        {"st", "blocked"},
-                        {"w",  nullptr},
-                        {"g",  nullptr},
-                        {"s",  static_cast<double>(sNorm)},
-                        {"e",  static_cast<double>(eNorm)}
-                    });
+                    (void)vs;
+                    (void)ve;
                 }
             }
         }
@@ -332,7 +310,6 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
         virtualStartedJ   = scalarCount("SELECT COUNT(DISTINCT sector_id) FROM chunks WHERE puzzle_id = ? AND is_test = 0 AND sector_id IS NOT NULL");
         virtualCompletedJ = scalarCount("SELECT COUNT(*) FROM sectors WHERE puzzle_id = ? AND status = 'done'");
     }
-    out["chunks_vis"] = chunksVis;
     json vchunkSizeJ = puzzle.virtualChunkSizeKeys.empty() ? json(nullptr) : json(puzzle.virtualChunkSizeKeys);
     out["virtual_chunks"] = {{"total", virtualTotalJ}, {"started_vchunks", virtualStartedJ}, {"completed_vchunks", virtualCompletedJ}, {"virtual_chunk_size_keys", vchunkSizeJ}, {"blocked_vchunk_count", blockedCountJ}};
     out["shards"]         = out["virtual_chunks"];
