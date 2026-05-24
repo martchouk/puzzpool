@@ -933,6 +933,10 @@
             margin-left: auto;
         }
 
+        .keyspace-label > .panel-refresh-btn {
+            margin-left: auto;
+        }
+
         .alloc-filter-label {
             font-size: 0.65rem;
             font-weight: 600;
@@ -1075,22 +1079,24 @@
                     <button class="alloc-filter-btn" data-layer="FOUND" aria-pressed="false">Found</button>
                     <button class="alloc-filter-btn" data-layer="blocked" aria-pressed="false">Blocked</button>
                 </div>
-                <div class="ks-legend">
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0f8"></div>Done</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#0cf"></div>In Progress</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
-                    <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
+                <div class="panel-header-actions">
+                    <div class="ks-legend">
+                        <div class="ks-legend-item"><div class="ks-swatch" style="background:#0f8"></div>Done</div>
+                        <div class="ks-legend-item"><div class="ks-swatch" style="background:#0cf"></div>In Progress</div>
+                        <div class="ks-legend-item"><div class="ks-swatch" style="background:#fa0"></div>Reclaimed</div>
+                        <div class="ks-legend-item"><div class="ks-swatch" style="background:#f36"></div>Found</div>
+                        <div class="ks-legend-item"><div class="ks-swatch" style="background:#fff"></div>Blocked</div>
+                    </div>
+                    <button id="heatmap-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Night Sky Heatmap" data-panel-title="Refresh Night Sky Heatmap">
+                        <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M3 2v6h6"></path>
+                            <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
+                            <path d="M21 22v-6h-6"></path>
+                            <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
+                            <circle cx="12" cy="12" r="1"></circle>
+                        </svg>
+                    </button>
                 </div>
-                <button id="heatmap-refresh-btn" class="panel-refresh-btn" type="button" aria-label="Refresh Night Sky Heatmap" data-panel-title="Refresh Night Sky Heatmap">
-                    <svg class="panel-refresh-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 2v6h6"></path>
-                        <path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path>
-                        <path d="M21 22v-6h-6"></path>
-                        <path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path>
-                        <circle cx="12" cy="12" r="1"></circle>
-                    </svg>
-                </button>
             </div>
             <div class="canvas-2d-box">
                 <canvas id="heatmap-canvas"></canvas>
