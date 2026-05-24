@@ -6,6 +6,12 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <future>
+#include <thread>
+
 using namespace puzzpool;
 using namespace puzzpool::test;
 using json = nlohmann::json;
@@ -101,4 +107,48 @@ TEST_CASE("allocator visualization endpoint returns generation payloads", "[visu
     CHECK(body["generations"].contains("legacy"));
     CHECK(body["generations"].contains("affine"));
     CHECK(body["generations"].contains("feistel"));
+}
+
+TEST_CASE("handleStats remains responsive while visualization rebuild is in flight", "[visualization][stats][concurrency]") {
+    Config cfg = memConfig();
+    cfg.dbPath = "test-visualization-concurrency.db";
+
+    std::atomic<bool> buildStarted = false;
+    std::promise<void> releaseBuild;
+    auto releaseFuture = releaseBuild.get_future().share();
+
+    PoolService svc{
+        cfg,
+        {},
+        false,
+        [&](std::string_view panel, int64_t) {
+            if (panel != "heatmap") return;
+            buildStarted.store(true);
+            releaseFuture.wait();
+        }
+    };
+
+    crow::request visReq;
+    auto visFuture = std::async(std::launch::async, [&] {
+        return svc.handleHeatmapVisualization(visReq);
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (!buildStarted.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(buildStarted.load());
+
+    crow::request statsReq;
+    auto statsFuture = std::async(std::launch::async, [&] {
+        return svc.handleStats(statsReq);
+    });
+
+    REQUIRE(statsFuture.wait_for(std::chrono::milliseconds(150)) == std::future_status::ready);
+    CHECK(statsFuture.get().code == 200);
+
+    releaseBuild.set_value();
+    CHECK(visFuture.get().code == 200);
+
+    std::remove("test-visualization-concurrency.db");
 }

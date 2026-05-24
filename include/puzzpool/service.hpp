@@ -26,8 +26,13 @@ class PoolService {
 public:
     using AddressStatusFetcher =
         std::function<std::optional<nlohmann::json>(const std::string&, const std::string&)>;
+    using VisualizationBuildHook =
+        std::function<void(std::string_view, int64_t)>;
 
-    explicit PoolService(const Config& cfg, AddressStatusFetcher fetcher = {}, bool refreshStatusesOnInit = true);
+    explicit PoolService(const Config& cfg,
+                         AddressStatusFetcher fetcher = {},
+                         bool refreshStatusesOnInit = true,
+                         VisualizationBuildHook buildHook = {});
 
     crow::response handleStats(const crow::request& req);
     crow::response handleHeatmapVisualization(const crow::request& req);
@@ -76,6 +81,7 @@ private:
     WorkService        ws_;
     SubmissionService  ss_;
     AddressStatusFetcher fetchAddressStatus_;
+    VisualizationBuildHook visualizationBuildHook_;
     std::map<int64_t, std::uint64_t> visRevisions_;
     struct VisualizationCacheEntry {
         std::uint64_t revision = 0;

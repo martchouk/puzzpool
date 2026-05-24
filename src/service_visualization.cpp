@@ -3,11 +3,15 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,6 +53,24 @@ struct RequestedPuzzle {
     std::optional<PuzzleRow> puzzle;
     std::optional<crow::response> error;
 };
+
+bool useDetachedVisualizationReader(const Config& cfg) {
+    return cfg.dbPath != ":memory:";
+}
+
+std::string visualizationLoadedAtUtc() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return oss.str();
+}
 
 crow::response makeErrorResponse(int code, const std::string& msg) {
     crow::response r;
@@ -173,7 +195,7 @@ std::vector<double> computeNormalizedGaps(const std::vector<double>& startsSorte
 }
 
 std::vector<int> histogramFromValues(const std::vector<double>& values, int bins, double maxValue) {
-    std::vector<int> hist(bins, 0);
+    std::vector<int> hist(static_cast<std::size_t>(bins), 0);
     if (values.empty()) return hist;
     double safeMax = maxValue;
     if (!(safeMax > 0.0)) safeMax = 1.0;
@@ -345,54 +367,10 @@ json buildAllocatorGenerationPayload(const std::vector<VisualPoint>& rows) {
     return out;
 }
 
-} // namespace
-
-crow::response PoolService::handleHeatmapVisualization(const crow::request& req) {
-    std::unique_lock lock(mu_);
-    auto requested = resolveRequestedPuzzle(db_, req);
-    if (requested.error) return std::move(*requested.error);
-    const auto& puzzle = *requested.puzzle;
-    const auto revision = visualizationRevisionLocked(puzzle.id);
-    auto& cache = visCache_[puzzle.id];
-    if (cache.revision != revision || cache.heatmap.is_null()) {
-        cache.revision = revision;
-        cache.heatmap = buildHeatmapVisualization(puzzle);
-    }
-    return jsonResponse(cache.heatmap);
-}
-
-crow::response PoolService::handleHilbertVisualization(const crow::request& req) {
-    std::unique_lock lock(mu_);
-    auto requested = resolveRequestedPuzzle(db_, req);
-    if (requested.error) return std::move(*requested.error);
-    const auto& puzzle = *requested.puzzle;
-    const auto revision = visualizationRevisionLocked(puzzle.id);
-    auto& cache = visCache_[puzzle.id];
-    if (cache.revision != revision || cache.hilbert.is_null()) {
-        cache.revision = revision;
-        cache.hilbert = buildHilbertVisualization(puzzle);
-    }
-    return jsonResponse(cache.hilbert);
-}
-
-crow::response PoolService::handleAllocatorVisualization(const crow::request& req) {
-    std::unique_lock lock(mu_);
-    auto requested = resolveRequestedPuzzle(db_, req);
-    if (requested.error) return std::move(*requested.error);
-    const auto& puzzle = *requested.puzzle;
-    const auto revision = visualizationRevisionLocked(puzzle.id);
-    auto& cache = visCache_[puzzle.id];
-    if (cache.revision != revision || cache.allocator.is_null()) {
-        cache.revision = revision;
-        cache.allocator = buildAllocatorVisualization(puzzle);
-    }
-    return jsonResponse(cache.allocator);
-}
-
-json PoolService::buildHeatmapVisualization(const PuzzleRow& puzzle) {
+json buildHeatmapVisualizationFromDb(PoolDb& db, const PuzzleRow& puzzle) {
     const auto totalCells = static_cast<std::size_t>(kHeatmapCols * kHeatmapRows);
     std::vector<std::array<int, 5>> counts(totalCells, {0, 0, 0, 0, 0});
-    for (const auto& point : loadVisualPoints(db_, puzzle, true)) {
+    for (const auto& point : loadVisualPoints(db, puzzle, true)) {
         const int idx = statusIndex(point.status);
         if (idx < 0) continue;
         counts[heatmapIndex(point, totalCells)][static_cast<std::size_t>(idx)] += 1;
@@ -407,15 +385,15 @@ json PoolService::buildHeatmapVisualization(const PuzzleRow& puzzle) {
 
     return {
         {"puzzle_id", puzzle.id},
-        {"loaded_at", nowIsoUtc()},
+        {"loaded_at", visualizationLoadedAtUtc()},
         {"cells", std::move(cells)},
     };
 }
 
-json PoolService::buildHilbertVisualization(const PuzzleRow& puzzle) {
+json buildHilbertVisualizationFromDb(PoolDb& db, const PuzzleRow& puzzle) {
     const auto totalCells = static_cast<std::size_t>(kHilbertN * kHilbertN);
     std::vector<std::array<int, 5>> counts(totalCells, {0, 0, 0, 0, 0});
-    for (const auto& point : loadVisualPoints(db_, puzzle, true)) {
+    for (const auto& point : loadVisualPoints(db, puzzle, true)) {
         const int idx = statusIndex(point.status);
         if (idx < 0) continue;
         counts[hilbertIndex(point)][static_cast<std::size_t>(idx)] += 1;
@@ -430,40 +408,25 @@ json PoolService::buildHilbertVisualization(const PuzzleRow& puzzle) {
 
     return {
         {"puzzle_id", puzzle.id},
-        {"loaded_at", nowIsoUtc()},
+        {"loaded_at", visualizationLoadedAtUtc()},
         {"cells", std::move(cells)},
     };
 }
 
-json PoolService::buildAllocatorVisualization(const PuzzleRow& puzzle) {
-    std::vector<VisualPoint> allRows;
+json buildAllocatorVisualizationFromDb(PoolDb& db, const PuzzleRow& puzzle) {
+    std::vector<VisualPoint> allRows = loadVisualPoints(db, puzzle, false);
     std::vector<VisualPoint> legacyRows;
     std::vector<VisualPoint> affineRows;
     std::vector<VisualPoint> feistelRows;
+    legacyRows.reserve(allRows.size());
+    affineRows.reserve(allRows.size());
+    feistelRows.reserve(allRows.size());
 
-    SQLite::Statement q(db_.raw(), R"SQL(
-        SELECT id, status, start_hex, end_hex, alloc_generation
-        FROM chunks
-        WHERE puzzle_id = ? AND is_test = 0
-        ORDER BY id ASC
-    )SQL");
-    q.bind(1, puzzle.id);
-    const cpp_int puzzleStart = hexToInt(puzzle.startHex);
-    const cpp_int puzzleEnd = hexToInt(puzzle.endHex);
-    const cpp_int puzzleRange = puzzleEnd - puzzleStart;
-    while (q.executeStep()) {
-        VisualPoint point;
-        point.id = q.getColumn(0).getInt64();
-        point.status = q.getColumn(1).getString();
-        point.generation = normalizeGeneration(q.isColumnNull(4) ? "" : q.getColumn(4).getString());
-        const cpp_int start = hexToInt(q.getColumn(2).getString()) - puzzleStart;
-        const cpp_int end = hexToInt(q.getColumn(3).getString()) - puzzleStart;
-        point.s = clamp01(static_cast<double>(start.convert_to<long double>() / puzzleRange.convert_to<long double>()));
-        point.e = clamp01(static_cast<double>(end.convert_to<long double>() / puzzleRange.convert_to<long double>()));
-        allRows.push_back(point);
-        if (point.generation == "legacy") legacyRows.push_back(point);
-        else if (point.generation == "affine") affineRows.push_back(point);
-        else if (point.generation == "feistel") feistelRows.push_back(point);
+    for (const auto& point : allRows) {
+        const std::string generation = normalizeGeneration(point.generation);
+        if (generation == "legacy") legacyRows.push_back(point);
+        else if (generation == "affine") affineRows.push_back(point);
+        else if (generation == "feistel") feistelRows.push_back(point);
     }
 
     json generations;
@@ -474,9 +437,134 @@ json PoolService::buildAllocatorVisualization(const PuzzleRow& puzzle) {
 
     return {
         {"puzzle_id", puzzle.id},
-        {"loaded_at", nowIsoUtc()},
+        {"loaded_at", visualizationLoadedAtUtc()},
         {"generations", std::move(generations)},
     };
+}
+
+} // namespace
+
+crow::response PoolService::handleHeatmapVisualization(const crow::request& req) {
+    for (;;) {
+        PuzzleRow puzzle;
+        std::uint64_t revision = 0;
+        {
+            std::shared_lock lock(mu_);
+            auto requested = resolveRequestedPuzzle(db_, req);
+            if (requested.error) return std::move(*requested.error);
+            puzzle = *requested.puzzle;
+            revision = visualizationRevisionLocked(puzzle.id);
+            auto it = visCache_.find(puzzle.id);
+            if (it != visCache_.end() && it->second.revision == revision && !it->second.heatmap.is_null()) {
+                return jsonResponse(it->second.heatmap);
+            }
+        }
+
+        if (visualizationBuildHook_) visualizationBuildHook_("heatmap", puzzle.id);
+
+        json built;
+        if (useDetachedVisualizationReader(cfg_)) {
+            PoolDb readDb(cfg_, SQLite::OPEN_READONLY, false);
+            built = buildHeatmapVisualizationFromDb(readDb, puzzle);
+        } else {
+            std::shared_lock lock(mu_);
+            built = buildHeatmapVisualizationFromDb(db_, puzzle);
+        }
+
+        std::unique_lock lock(mu_);
+        if (visualizationRevisionLocked(puzzle.id) != revision) continue;
+        auto& cache = visCache_[puzzle.id];
+        if (cache.revision == revision && !cache.heatmap.is_null()) return jsonResponse(cache.heatmap);
+        cache.revision = revision;
+        cache.heatmap = built;
+        return jsonResponse(cache.heatmap);
+    }
+}
+
+crow::response PoolService::handleHilbertVisualization(const crow::request& req) {
+    for (;;) {
+        PuzzleRow puzzle;
+        std::uint64_t revision = 0;
+        {
+            std::shared_lock lock(mu_);
+            auto requested = resolveRequestedPuzzle(db_, req);
+            if (requested.error) return std::move(*requested.error);
+            puzzle = *requested.puzzle;
+            revision = visualizationRevisionLocked(puzzle.id);
+            auto it = visCache_.find(puzzle.id);
+            if (it != visCache_.end() && it->second.revision == revision && !it->second.hilbert.is_null()) {
+                return jsonResponse(it->second.hilbert);
+            }
+        }
+
+        if (visualizationBuildHook_) visualizationBuildHook_("hilbert", puzzle.id);
+
+        json built;
+        if (useDetachedVisualizationReader(cfg_)) {
+            PoolDb readDb(cfg_, SQLite::OPEN_READONLY, false);
+            built = buildHilbertVisualizationFromDb(readDb, puzzle);
+        } else {
+            std::shared_lock lock(mu_);
+            built = buildHilbertVisualizationFromDb(db_, puzzle);
+        }
+
+        std::unique_lock lock(mu_);
+        if (visualizationRevisionLocked(puzzle.id) != revision) continue;
+        auto& cache = visCache_[puzzle.id];
+        if (cache.revision == revision && !cache.hilbert.is_null()) return jsonResponse(cache.hilbert);
+        cache.revision = revision;
+        cache.hilbert = built;
+        return jsonResponse(cache.hilbert);
+    }
+}
+
+crow::response PoolService::handleAllocatorVisualization(const crow::request& req) {
+    for (;;) {
+        PuzzleRow puzzle;
+        std::uint64_t revision = 0;
+        {
+            std::shared_lock lock(mu_);
+            auto requested = resolveRequestedPuzzle(db_, req);
+            if (requested.error) return std::move(*requested.error);
+            puzzle = *requested.puzzle;
+            revision = visualizationRevisionLocked(puzzle.id);
+            auto it = visCache_.find(puzzle.id);
+            if (it != visCache_.end() && it->second.revision == revision && !it->second.allocator.is_null()) {
+                return jsonResponse(it->second.allocator);
+            }
+        }
+
+        if (visualizationBuildHook_) visualizationBuildHook_("allocator", puzzle.id);
+
+        json built;
+        if (useDetachedVisualizationReader(cfg_)) {
+            PoolDb readDb(cfg_, SQLite::OPEN_READONLY, false);
+            built = buildAllocatorVisualizationFromDb(readDb, puzzle);
+        } else {
+            std::shared_lock lock(mu_);
+            built = buildAllocatorVisualizationFromDb(db_, puzzle);
+        }
+
+        std::unique_lock lock(mu_);
+        if (visualizationRevisionLocked(puzzle.id) != revision) continue;
+        auto& cache = visCache_[puzzle.id];
+        if (cache.revision == revision && !cache.allocator.is_null()) return jsonResponse(cache.allocator);
+        cache.revision = revision;
+        cache.allocator = built;
+        return jsonResponse(cache.allocator);
+    }
+}
+
+json PoolService::buildHeatmapVisualization(const PuzzleRow& puzzle) {
+    return buildHeatmapVisualizationFromDb(db_, puzzle);
+}
+
+json PoolService::buildHilbertVisualization(const PuzzleRow& puzzle) {
+    return buildHilbertVisualizationFromDb(db_, puzzle);
+}
+
+json PoolService::buildAllocatorVisualization(const PuzzleRow& puzzle) {
+    return buildAllocatorVisualizationFromDb(db_, puzzle);
 }
 
 } // namespace puzzpool

@@ -6,12 +6,17 @@
 
 namespace puzzpool {
 
-PoolDb::PoolDb(const Config& cfg)
-    : cfg_(cfg), db_(cfg.dbPath, SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE) {
+PoolDb::PoolDb(const Config& cfg, int openFlags, bool initializeSchema)
+    : cfg_(cfg), db_(cfg.dbPath, openFlags) {
+    if ((openFlags & SQLite::OPEN_READONLY) != 0) {
+        exec("PRAGMA query_only=ON");
+        return;
+    }
+
     exec("PRAGMA journal_mode=WAL");
     exec("PRAGMA synchronous=NORMAL");
     exec("PRAGMA foreign_keys=OFF");
-    migrate();
+    if (initializeSchema) migrate();
 }
 
 SQLite::Database& PoolDb::raw() { return db_; }

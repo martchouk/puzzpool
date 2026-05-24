@@ -4,9 +4,13 @@
 
 namespace puzzpool {
 
-PoolService::PoolService(const Config& cfg, AddressStatusFetcher fetcher, bool refreshStatusesOnInit)
+PoolService::PoolService(const Config& cfg,
+                         AddressStatusFetcher fetcher,
+                         bool refreshStatusesOnInit,
+                         VisualizationBuildHook buildHook)
     : cfg_(cfg), db_(cfg), allocator_(db_), ws_(db_, allocator_), ss_(db_),
-      fetchAddressStatus_(fetcher ? std::move(fetcher) : AddressStatusFetcher(fetchAddressStatusJson)) {
+      fetchAddressStatus_(fetcher ? std::move(fetcher) : AddressStatusFetcher(fetchAddressStatusJson)),
+      visualizationBuildHook_(std::move(buildHook)) {
     seedConfiguredKeyspaces();
     ensureSingleActivePuzzle();
     ensureAllocators();

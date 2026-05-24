@@ -15,7 +15,7 @@ namespace puzzpool {
 
 class PoolDb {
 public:
-    explicit PoolDb(const Config& cfg);
+    explicit PoolDb(const Config& cfg, int openFlags = SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE, bool initializeSchema = true);
 
     SQLite::Database& raw();
     const Config&     cfg() const;
