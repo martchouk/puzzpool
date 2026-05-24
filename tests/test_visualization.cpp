@@ -23,6 +23,38 @@ TEST_CASE("handleStats returns vis_revision and omits legacy chunks_vis payload"
     CHECK_FALSE(body.contains("chunks_vis"));
 }
 
+TEST_CASE("handleStats omits private found keys from finder responses", "[visualization][stats][security]") {
+    Config cfg = memConfig();
+    PoolService svc{cfg};
+
+    crow::request workReq;
+    workReq.body = R"({"name":"worker-a","hashrate":1000000})";
+    auto workResp = svc.handleWork(workReq);
+    REQUIRE(workResp.code == 200);
+    const auto jobId = json::parse(workResp.body)["job_id"].get<int64_t>();
+
+    crow::request submitReq;
+    submitReq.body = json{
+        {"name", "worker-a"},
+        {"job_id", jobId},
+        {"status", "FOUND"},
+        {"findings", json::array({json{{"found_key", "0000000000000000000000000000000000000000000000000000000000000042"}, {"found_address", "1ABC"}}})}
+    }.dump();
+    auto submitResp = svc.handleSubmit(submitReq);
+    REQUIRE(submitResp.code == 200);
+
+    crow::request req;
+    auto statsResp = svc.handleStats(req);
+    REQUIRE(statsResp.code == 200);
+
+    auto body = json::parse(statsResp.body);
+    REQUIRE(body.contains("finders"));
+    REQUIRE(body["finders"].is_array());
+    REQUIRE(body["finders"].size() == 1);
+    CHECK_FALSE(body["finders"][0].contains("found_key"));
+    CHECK(body["finders"][0]["found_address"] == "1ABC");
+}
+
 TEST_CASE("heatmap visualization endpoint returns aggregate cell payload", "[visualization][heatmap]") {
     Config cfg = memConfig();
     PoolService svc{cfg};

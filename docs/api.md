@@ -219,7 +219,7 @@ Dashboard summary — polled every 5 seconds by the dashboard.
     { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
   ],
   "finders": [
-    { "worker_name": "rig1", "found_key": "000...001", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
+    { "worker_name": "rig1", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
   ]
 }
 ```
@@ -286,6 +286,11 @@ For `legacy_random_shards_v1`: counts sectors as before (in both `virtual_chunks
 | `virtual_chunk_count` | string\|null | Total number of virtual chunks; `virtual_random_chunks_v1` only |
 | `bootstrap_stage` | number | Bootstrap phase: 0=not started, 1=midpoint assigned, 2=begin assigned, 3=end assigned, ≥3=normal allocation |
 | `status` | object\|null | Cached puzzle solved-state metadata for the dashboard badge |
+
+**`finders[]` note**
+
+Finder responses intentionally omit `found_key`. The backend stores findings internally, but
+private keys are never returned by dashboard-facing API responses.
 
 **`puzzle.status` fields**
 

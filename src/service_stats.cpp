@@ -218,7 +218,7 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
 
     json finders = json::array();
     SQLite::Statement fq(db_.raw(), R"SQL(
-        SELECT f.worker_name, f.found_key, f.found_address, f.created_at,
+        SELECT f.worker_name, f.found_address, f.created_at,
                c.id AS chunk_global, c.vchunk_start_hex, c.vchunk_end_hex
         FROM findings f JOIN chunks c ON c.id = f.chunk_id
         WHERE c.puzzle_id = ? AND c.is_test = 0
@@ -228,12 +228,11 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     while (fq.executeStep()) {
         finders.push_back({
             {"worker_name",  fq.getColumn(0).getString()},
-            {"found_key",    fq.getColumn(1).getString()},
-            {"found_address", fq.isColumnNull(2) ? json(nullptr) : json(fq.getColumn(2).getString())},
-            {"created_at",   fq.isColumnNull(3) ? json(nullptr) : json(fq.getColumn(3).getString())},
-            {"chunk_global", fq.getColumn(4).getInt64()},
-            {"vchunk_start", fq.isColumnNull(5) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(5).getString())))},
-            {"vchunk_end",   fq.isColumnNull(6) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(6).getString())))}
+            {"found_address", fq.isColumnNull(1) ? json(nullptr) : json(fq.getColumn(1).getString())},
+            {"created_at",   fq.isColumnNull(2) ? json(nullptr) : json(fq.getColumn(2).getString())},
+            {"chunk_global", fq.getColumn(3).getInt64()},
+            {"vchunk_start", fq.isColumnNull(4) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(4).getString())))},
+            {"vchunk_end",   fq.isColumnNull(5) ? json(nullptr) : json(bigToDec(hexToInt(fq.getColumn(5).getString())))}
         });
     }
     out["finders"] = finders;
@@ -298,12 +297,10 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
                         mergedBlocked.back().second = maxBig(mergedBlocked.back().second, ve);
                 }
                 // Sum merged intervals across sources for dashboard counts.
-                int64_t blockedId = -1;
                 for (auto& [vs, ve] : mergedBlocked) {
                     blockedTotal += (ve - vs);
                     (void)vs;
                     (void)ve;
-                    --blockedId;
                 }
             }
         }

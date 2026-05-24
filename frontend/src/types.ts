@@ -60,7 +60,6 @@ export interface ScoreEntry {
 
 export interface FinderEntry {
   worker_name: string;
-  found_key: string;
   found_address: string | null;
   created_at: string | null;
   chunk_global: number | null;
