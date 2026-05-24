@@ -27,6 +27,7 @@ let pendingActivateId: number | null = null;
 let lastPuzzles: (PuzzleListEntry & { active: boolean | number })[] = [];
 let selectedId: number | null = null;
 let stageSet = false;
+type BackendStatus = 'online' | 'offline';
 
 // ── Stable DOM references ─────────────────────────────────────────────────────
 
@@ -40,8 +41,57 @@ const allocCanvases = {
   residue: document.getElementById('alloc-residue-canvas') as HTMLCanvasElement,
 };
 const gapMetricsEl = document.getElementById('alloc-gap-metrics')!;
+const backendStatusEl = document.getElementById('backend-status')!;
+const backendStatusIconEl = document.getElementById('backend-status-icon')!;
+const backendStatusLabelEl = document.getElementById('backend-status-label')!;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function svgEl(tag: string): SVGElement {
+  return document.createElementNS('http://www.w3.org/2000/svg', tag);
+}
+
+function buildBackendStatusIcon(state: BackendStatus): SVGSVGElement {
+  const svg = svgEl('svg') as SVGSVGElement;
+  svg.setAttribute('class', 'status-icon');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const makePath = (d: string, cls: string): SVGPathElement => {
+    const path = svgEl('path') as SVGPathElement;
+    path.setAttribute('d', d);
+    path.setAttribute('class', cls);
+    return path;
+  };
+
+  const makeCircle = (cx: string, cy: string, r: string, cls: string): SVGCircleElement => {
+    const circle = svgEl('circle') as SVGCircleElement;
+    circle.setAttribute('cx', cx);
+    circle.setAttribute('cy', cy);
+    circle.setAttribute('r', r);
+    circle.setAttribute('class', cls);
+    return circle;
+  };
+
+  svg.appendChild(makePath('M2 8.82a15 15 0 0 1 20 0', 'status-icon-wave wave-1'));
+  svg.appendChild(makePath('M5 12.859a10 10 0 0 1 14 0', 'status-icon-wave wave-2'));
+  svg.appendChild(makePath('M8.5 16.429a5 5 0 0 1 7 0', 'status-icon-wave wave-3'));
+  svg.appendChild(makeCircle('12', '20', '1.25', 'status-icon-core'));
+
+  if (state === 'offline') {
+    svg.appendChild(makePath('M2 2l20 20', 'status-icon-slash'));
+  }
+
+  return svg;
+}
+
+function setBackendStatus(state: BackendStatus): void {
+  backendStatusEl.classList.toggle('is-online', state === 'online');
+  backendStatusEl.classList.toggle('is-offline', state === 'offline');
+  backendStatusLabelEl.textContent = state === 'online' ? 'ONLINE' : 'OFFLINE';
+  backendStatusIconEl.replaceChildren(buildBackendStatusIcon(state));
+}
 
 function getFilteredChunks(): ChunkVis[] {
   const nonBlocked = chunksVis.filter(c => c.st !== 'blocked');
@@ -306,6 +356,7 @@ function initHilLayerFilter(): void {
 async function updateDashboard(): Promise<void> {
   try {
     const data = await fetchStats(selectedId);
+    setBackendStatus('online');
 
     applyStage(data.stage);
     renderKeyspaceTabs(data.puzzles ?? []);
@@ -488,6 +539,7 @@ async function updateDashboard(): Promise<void> {
       </tr>`).join('');
     }
   } catch (e) {
+    setBackendStatus('offline');
     console.error(e);
   }
 }
@@ -537,6 +589,7 @@ new ResizeObserver(() => {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 requestAnimationFrame(() => {
+  setBackendStatus('offline');
   initAllocatorGenerationFilter();
   initHmLayerFilter();
   initHilLayerFilter();

@@ -51,4 +51,15 @@ describe('frontend accessibility regressions', () => {
   it('prioritizes found and in-progress statuses over blocked/completed in mixed heatmap buckets', () => {
     expect(canvasTs).toMatch(/if \(bucket\.FOUND > 0\) return 'FOUND';[\s\S]*if \(bucket\.assigned > 0\) return 'assigned';[\s\S]*if \(bucket\.reclaimed > 0\) return 'reclaimed';[\s\S]*if \(bucket\.blocked > 0\) return 'blocked';/);
   });
+
+  it('updates the backend connection badge on stats success and failure with wifi icons', () => {
+    expect(html).toMatch(/id="backend-status"/);
+    expect(html).toMatch(/id="backend-status-icon"/);
+    expect(html).toMatch(/id="backend-status-label"/);
+    expect(html).toMatch(/status-badge is-offline/);
+    expect(html).toMatch(/@keyframes wifiWavePulse/);
+    expect(html).toMatch(/status-badge\.is-online[\s\S]*status-icon-wave[\s\S]*animation:/);
+    expect(dashboardTs).toMatch(/setBackendStatus\('online'\);/);
+    expect(dashboardTs).toMatch(/setBackendStatus\('offline'\);/);
+  });
 });
