@@ -15,6 +15,9 @@ cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 echo "[build] build incrementally"
 cmake --build "$BUILD_DIR" -j
 
+echo "[build] check Node.js release age (supply-chain guard)"
+bash "$(dirname "$0")/scripts/check-node-version-age.sh"
+
 echo "[build] install frontend dependencies"
 npm ci --prefix frontend
 

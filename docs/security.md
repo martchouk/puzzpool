@@ -124,6 +124,51 @@ Certbot with auto-renewal.
 
 ---
 
+## Node.js Supply-Chain Protection
+
+A compromised or malicious Node.js release can introduce vulnerabilities at build time.
+To reduce this risk, a minimum release age is enforced before Node.js is used during the
+frontend build step.
+
+### How it works
+
+The script `scripts/check-node-version-age.sh`:
+1. Reads the installed Node.js version (`node --version`).
+2. Fetches the official Node.js release index from `https://nodejs.org/dist/index.json`.
+3. Calculates how many minutes ago the installed version was published.
+4. Rejects the build if the version is younger than `MINIMUM_NODE_RELEASE_AGE` minutes
+   (default **1440 minutes = 24 hours**), logging the release date and how long until the
+   threshold will be met.
+5. Exits non-zero so the build/CI pipeline fails visibly rather than silently proceeding.
+
+This matches the supply-chain mitigation commonly known as the **minimum release age**
+pattern (also used by Renovate's `minimumReleaseAge` setting).
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MINIMUM_NODE_RELEASE_AGE` | `1440` | Minimum age in minutes a Node.js release must have before use. Set to `0` to disable (not recommended in production). |
+
+### Recommended values by risk profile
+
+| Environment | Recommended value | Rationale |
+|-------------|------------------|-----------|
+| Production | `1440` (24 h) | Allows time for community vetting before adoption |
+| Staging / QA | `1440` | Mirror production to catch regressions early |
+| Local development | `0` (disabled) | Developers may intentionally use cutting-edge releases |
+| High-security | `10080` (7 days) | Extended hold for maximum vetting time |
+
+### What to do when a build is rejected
+
+If CI or a local build fails because the Node.js version is too new:
+1. Check the log for the release date and the minutes remaining until it passes.
+2. Wait until the threshold is met — the version will be accepted automatically.
+3. To unblock immediately in a non-production context, set `MINIMUM_NODE_RELEASE_AGE=0` in
+   your environment (do **not** use this in production).
+
+---
+
 ## Recommendations for Production
 
 - Keep `ADMIN_TOKEN` set and rotate it periodically
