@@ -57,8 +57,11 @@ describe('frontend accessibility regressions', () => {
     expect(html).toMatch(/id="backend-status-icon"/);
     expect(html).toMatch(/id="backend-status-label"/);
     expect(html).toMatch(/status-badge is-offline/);
+    expect(html).toMatch(/\.status-icon\s*\{[\s\S]*width:\s*0\.75rem;[\s\S]*height:\s*0\.75rem;/);
     expect(html).toMatch(/@keyframes wifiWavePulse/);
     expect(html).toMatch(/status-badge\.is-online[\s\S]*status-icon-wave[\s\S]*animation:/);
+    expect(html).toMatch(/wave-2\s*\{[\s\S]*animation-delay:\s*0\.12s;/);
+    expect(html).toMatch(/wave-1\s*\{[\s\S]*animation-delay:\s*0\.24s;/);
     expect(dashboardTs).toMatch(/setBackendStatus\('online'\);/);
     expect(dashboardTs).toMatch(/setBackendStatus\('offline'\);/);
   });
