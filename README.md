@@ -116,6 +116,7 @@ cp .env.example .env
 | `PERMUTATION_MODE` | `feistel` | Virtual chunk permutation algorithm: `feistel` (cycle-walking Feistel cipher) or `affine` (linear congruential). Recorded per-chunk as `alloc_generation`. |
 | `KEYSPACE_<NAME>` | *(unset)* | Seed a keyspace on startup: `KEYSPACE_ALL_BTC=<start_hex>:<end_hex>`. Underscores in the variable name become spaces in the puzzle name. Multiple variables are supported. |
 | `PUZZLE_<NAME>_TARGET` | *(unset)* | Optional solved-state target. For address-backed puzzles use a Bitcoin address, for `ALL BTC` use the distinct found-key threshold. Example: `PUZZLE_71_TARGET=1PWo3JeB9jrGwfHDNpdGK54CRas7fsVzXU`, `PUZZLE_ALL_BTC_TARGET=5`. |
+| `MINIMUM_NODE_RELEASE_AGE` | `1440` | **Build-time only.** Minimum age in minutes a Node.js release must have before it is used during the frontend build. Enforced by `scripts/check-node-version-age.sh`. Set to `0` to disable (not recommended in production). See [docs/security.md](docs/security.md) for rationale. |
 
 ---
 
