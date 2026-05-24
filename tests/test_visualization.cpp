@@ -29,6 +29,39 @@ TEST_CASE("handleStats returns vis_revision and omits legacy chunks_vis payload"
     CHECK_FALSE(body.contains("chunks_vis"));
 }
 
+TEST_CASE("vis_revision increments after work assignment and submit", "[visualization][stats][revision]") {
+    Config cfg = memConfig();
+    PoolService svc{cfg};
+
+    crow::request statsReq;
+    auto initialStats = json::parse(svc.handleStats(statsReq).body);
+    const auto initialRevision = initialStats["vis_revision"].get<std::uint64_t>();
+
+    crow::request workReq;
+    workReq.body = R"({"name":"worker-rev","hashrate":1000000})";
+    auto workResp = svc.handleWork(workReq);
+    REQUIRE(workResp.code == 200);
+    const auto jobId = json::parse(workResp.body)["job_id"].get<int64_t>();
+
+    auto afterWorkStats = json::parse(svc.handleStats(statsReq).body);
+    const auto afterWorkRevision = afterWorkStats["vis_revision"].get<std::uint64_t>();
+    CHECK(afterWorkRevision == initialRevision + 1);
+
+    crow::request submitReq;
+    submitReq.body = json{
+        {"name", "worker-rev"},
+        {"job_id", jobId},
+        {"status", "done"},
+        {"keys_scanned", "99999999999999999999"}
+    }.dump();
+    auto submitResp = svc.handleSubmit(submitReq);
+    REQUIRE(submitResp.code == 200);
+
+    auto afterSubmitStats = json::parse(svc.handleStats(statsReq).body);
+    const auto afterSubmitRevision = afterSubmitStats["vis_revision"].get<std::uint64_t>();
+    CHECK(afterSubmitRevision == afterWorkRevision + 1);
+}
+
 TEST_CASE("handleStats omits private found keys from finder responses", "[visualization][stats][security]") {
     Config cfg = memConfig();
     PoolService svc{cfg};
