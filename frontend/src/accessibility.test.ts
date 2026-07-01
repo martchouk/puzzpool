@@ -68,6 +68,25 @@ describe('frontend accessibility regressions', () => {
     expect(dashboardTs).toMatch(/setBackendStatus\('offline'\);/);
   });
 
+  it('adds a Last seen column to the all-time scores table', () => {
+    expect(html).toMatch(/<th>Last seen<\/th>/);
+  });
+
+  it('styles stale score timestamps in white with a score-specific class and updates the empty-state colspan', () => {
+    expect(html).toMatch(/\.td-score-time-stale\s*\{\s*color:\s*#fff;/);
+    expect(dashboardTs).toMatch(/emptyRow\(5, 'No completed work yet'\)/);
+  });
+
+  it('renders score last_seen values through the recency helper', () => {
+    expect(dashboardTs).toMatch(/const lastSeenClass = isRecentUtc\(s\.last_seen\) \? 'td-score-time' : 'td-score-time td-score-time-stale';/);
+    expect(dashboardTs).toMatch(/<td class="\$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
+  });
+
+  it('keeps Visible Workers and Keys Found on the shared td-time class', () => {
+    expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(f\.created_at\)\}<\/td>/);
+  });
+
   it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {
     expect(canvasTs).toMatch(/const statusPasses:\s*ChunkStatus\[\]\[\]\s*=\s*\[\s*\['completed', 'blocked'\],\s*\['reclaimed', 'assigned', 'FOUND'\],\s*\];/);
     expect(canvasTs).toMatch(/for \(const statuses of statusPasses\)[\s\S]*for \(const cell of cells\)/);

@@ -6,6 +6,7 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
+#include <cstdio>
 #include <string>
 
 using namespace puzzpool;
@@ -236,4 +237,66 @@ TEST_CASE("handleStats: blocked_vchunk_count is cross-source union, not sum", "[
     auto sj = json::parse(sr.body);
     std::string count = sj["virtual_chunks"]["blocked_vchunk_count"].get<std::string>();
     CHECK(count == "15");
+}
+
+TEST_CASE("handleStats: score entries include last_seen when worker row exists", "[handler][stats][scores]") {
+    Config cfg = memConfig();
+    cfg.dbPath = "test-score-last-seen-present.db";
+    PoolService svc{cfg};
+
+    auto workResp = svc.handleWork(body(R"({"name":"score-worker","hashrate":1000000})"));
+    REQUIRE(workResp.code == 200);
+    const auto jobId = json::parse(workResp.body)["job_id"].get<int64_t>();
+
+    auto submitResp = svc.handleSubmit(body(json{
+        {"name", "score-worker"},
+        {"job_id", jobId},
+        {"status", "done"},
+        {"keys_scanned", "99999999999999999999"}
+    }.dump()));
+    REQUIRE(submitResp.code == 200);
+
+    PoolDb db{cfg};
+    db.exec("UPDATE workers SET last_seen = '2026-07-01 09:30:00' WHERE name = 'score-worker'");
+
+    crow::request statsReq;
+    auto statsResp = svc.handleStats(statsReq);
+    REQUIRE(statsResp.code == 200);
+    auto stats = json::parse(statsResp.body);
+    REQUIRE(stats["scores"].size() == 1);
+    CHECK(stats["scores"][0]["worker_name"] == "score-worker");
+    CHECK(stats["scores"][0]["last_seen"] == "2026-07-01 09:30:00");
+
+    std::remove(cfg.dbPath.c_str());
+}
+
+TEST_CASE("handleStats: score entries keep null last_seen when worker row is missing", "[handler][stats][scores]") {
+    Config cfg = memConfig();
+    cfg.dbPath = "test-score-last-seen-missing.db";
+    PoolService svc{cfg};
+
+    auto workResp = svc.handleWork(body(R"({"name":"retired-worker","hashrate":1000000})"));
+    REQUIRE(workResp.code == 200);
+    const auto jobId = json::parse(workResp.body)["job_id"].get<int64_t>();
+
+    auto submitResp = svc.handleSubmit(body(json{
+        {"name", "retired-worker"},
+        {"job_id", jobId},
+        {"status", "done"},
+        {"keys_scanned", "99999999999999999999"}
+    }.dump()));
+    REQUIRE(submitResp.code == 200);
+
+    PoolDb db{cfg};
+    db.exec("DELETE FROM workers WHERE name = 'retired-worker'");
+
+    crow::request statsReq;
+    auto statsResp = svc.handleStats(statsReq);
+    REQUIRE(statsResp.code == 200);
+    auto stats = json::parse(statsResp.body);
+    REQUIRE(stats["scores"].size() == 1);
+    CHECK(stats["scores"][0]["worker_name"] == "retired-worker");
+    CHECK(stats["scores"][0]["last_seen"].is_null());
+
+    std::remove(cfg.dbPath.c_str());
 }
