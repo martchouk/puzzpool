@@ -507,6 +507,8 @@
         .td-name { color: var(--text-primary); }
         .td-speed { color: var(--accent-green); }
         .td-time { color: var(--text-secondary); }
+        .td-score-time { color: var(--text-secondary); }
+        .td-score-time-stale { color: #fff; }
         .td-mono { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); }
         .td-rank { color: var(--text-secondary); text-align: center; }
         .td-chunks { color: var(--accent-amber); }
@@ -1128,10 +1130,10 @@
         <div class="section-title">Scores — All Time</div>
         <div class="table-wrap" style="margin-bottom: 2rem;">
             <table>
-                <thead><tr><th></th><th>Worker</th><th>Keys Completed</th><th>Jobs</th></tr></thead>
-                <tbody id="score-list"></tbody>
-            </table>
-        </div>
+                    <thead><tr><th></th><th>Worker</th><th>Keys Completed</th><th>Jobs</th><th>Last seen</th></tr></thead>
+                    <tbody id="score-list"></tbody>
+                </table>
+            </div>
 
         <div class="section-title">Keys Found</div>
         <div class="table-wrap" style="margin-bottom: 2.5rem;">

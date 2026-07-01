@@ -216,7 +216,7 @@ Dashboard summary — polled every 5 seconds by the dashboard.
     }
   ],
   "scores": [
-    { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000" }
+    { "worker_name": "rig1", "completed_chunks": 95, "total_keys": "6300000000000", "last_seen": "2024-01-15 12:34:56" }
   ],
   "finders": [
     { "worker_name": "rig1", "found_address": "1ABC...", "created_at": "2024-01-15 12:34:56", "chunk_global": 42, "vchunk_start": "223735", "vchunk_end": "223745" }
@@ -263,6 +263,14 @@ Dashboard summary — polled every 5 seconds by the dashboard.
 | `total_keys_completed` | string | Total keys covered by completed/FOUND chunks (decimal string) |
 | `vis_revision` | number | Monotonic visualization cache revision for the viewed puzzle. The frontend uses this to mark heavy panels as stale without reloading them automatically. |
 | `alloc_generations` | object | Per-generation chunk counts: `{ "legacy": N, "affine": N, "feistel": N }` — tracks how many chunks were issued under each permutation algorithm |
+
+**`scores[]` fields**
+
+| Field | Type | Description |
+| `worker_name` | string | Worker identifier used for the all-time score row |
+| `completed_chunks` | number | Number of completed or FOUND chunks attributed to the worker |
+| `total_keys` | string | Total keys attributed to the worker as a decimal string |
+| `last_seen` | string\|null | UTC timestamp from `workers.last_seen`; `null` when the score row no longer has a matching worker record |
 
 **`virtual_chunks` field**
 

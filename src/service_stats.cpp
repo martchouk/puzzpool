@@ -202,16 +202,24 @@ json PoolService::buildStats(const PuzzleRow& puzzle) {
     }
     out["total_keys_completed"] = bigToDec(totalKeysCompleted);
 
+    std::map<std::string, std::string> scoreLastSeenMap;
+    SQLite::Statement sq(db_.raw(), "SELECT name, last_seen FROM workers WHERE last_seen IS NOT NULL");
+    while (sq.executeStep()) {
+        scoreLastSeenMap[sq.getColumn(0).getString()] = sq.getColumn(1).getString();
+    }
+
     json scores = json::array();
     std::vector<std::pair<std::string, std::pair<int64_t, cpp_int>>> scoreVec(scoreMap.begin(), scoreMap.end());
     std::sort(scoreVec.begin(), scoreVec.end(), [](const auto& a, const auto& b) {
         return a.second.second > b.second.second;
     });
     for (const auto& [worker, stats] : scoreVec) {
+        auto lastSeenIt = scoreLastSeenMap.find(worker);
         scores.push_back({
             {"worker_name",      worker},
             {"completed_chunks", stats.first},
-            {"total_keys",       bigToDec(stats.second)}
+            {"total_keys",       bigToDec(stats.second)},
+            {"last_seen",        lastSeenIt == scoreLastSeenMap.end() ? json(nullptr) : json(lastSeenIt->second)}
         });
     }
     out["scores"] = scores;

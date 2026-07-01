@@ -46,6 +46,18 @@ export function formatHashrate(h: number): string {
 
 // ── Time ──────────────────────────────────────────────────────────────────────
 
+export function isRecentUtc(
+  s: string | null | undefined,
+  maxAgeMs = 60 * 60 * 1000,
+  nowMs = Date.now(),
+): boolean {
+  if (!s) return false;
+  const ts = new Date(s + 'Z').getTime();
+  if (!Number.isFinite(ts)) return false;
+  return nowMs - ts <= maxAgeMs;
+}
+
+
 export function fmtUtc(s: string | null | undefined): string {
   if (!s) return '—';
   return new Date(s + 'Z').toLocaleString('de-DE', {

@@ -56,6 +56,7 @@ export interface ScoreEntry {
   worker_name: string;
   completed_chunks: number;
   total_keys: string;   // BigInt decimal string
+  last_seen: string | null;
 }
 
 export interface FinderEntry {

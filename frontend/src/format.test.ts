@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { esc } from './format.ts';
+import { esc, isRecentUtc } from './format.ts';
 
 describe('esc()', () => {
   it('returns empty string for null', () => expect(esc(null)).toBe(''));
@@ -28,4 +28,28 @@ describe('esc()', () => {
 
   it('escapes multiple & in sequence', () =>
     expect(esc('a&b&c')).toBe('a&amp;b&amp;c'));
+});
+
+describe('isRecentUtc()', () => {
+  const now = Date.parse('2026-07-01T10:00:00Z');
+
+  it('returns true for timestamps within the last hour', () => {
+    expect(isRecentUtc('2026-07-01 09:30:00', 60 * 60 * 1000, now)).toBe(true);
+  });
+
+  it('returns true for timestamps exactly one hour old', () => {
+    expect(isRecentUtc('2026-07-01 09:00:00', 60 * 60 * 1000, now)).toBe(true);
+  });
+
+  it('returns false for timestamps older than one hour', () => {
+    expect(isRecentUtc('2026-07-01 08:59:59', 60 * 60 * 1000, now)).toBe(false);
+  });
+
+  it('returns false for null timestamps', () => {
+    expect(isRecentUtc(null, 60 * 60 * 1000, now)).toBe(false);
+  });
+
+  it('returns false for invalid timestamps', () => {
+    expect(isRecentUtc('not-a-date', 60 * 60 * 1000, now)).toBe(false);
+  });
 });
