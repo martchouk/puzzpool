@@ -13,7 +13,7 @@ import {
   fetchStats,
 } from './api.ts';
 import {
-  formatBigInt, formatIntegerDots, formatHashrate, fmtUtc,
+  formatBigInt, formatIntegerDots, formatHashrate, fmtUtc, isRecentUtc,
   formatPrecisePercentage, trimHexRange, formatETA,
   renderWorkerProgress, allocatorDiagnosticsHtml, emptyRow, esc,
 } from './format.ts';
@@ -573,14 +573,18 @@ async function updateDashboard(): Promise<void> {
 
     const stbody = document.getElementById('score-list')!;
     if (!data.scores?.length) {
-      stbody.innerHTML = emptyRow(4, 'No completed work yet');
+      stbody.innerHTML = emptyRow(5, 'No completed work yet');
     } else {
-      stbody.innerHTML = data.scores.map((s, i) => `<tr>
+      stbody.innerHTML = data.scores.map((s, i) => {
+        const lastSeenClass = isRecentUtc(s.last_seen) ? 'td-score-time' : 'td-score-time td-score-time-stale';
+        return `<tr>
         <td class="td-rank">#${formatIntegerDots(i + 1)}</td>
         <td class="td-name">${esc(s.worker_name)}</td>
         <td class="td-chunks">${formatBigInt(s.total_keys)}</td>
         <td class="td-chunks">${formatIntegerDots(s.completed_chunks)}</td>
-      </tr>`).join('');
+        <td class="${lastSeenClass}">${fmtUtc(s.last_seen)}</td>
+      </tr>`;
+      }).join('');
     }
 
     const ftbody = document.getElementById('finder-list')!;
