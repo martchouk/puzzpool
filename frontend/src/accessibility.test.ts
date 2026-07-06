@@ -69,7 +69,7 @@ describe('frontend accessibility regressions', () => {
   });
 
   it('adds a Last seen column to the all-time scores table', () => {
-    expect(html).toMatch(/<th>Last seen<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last seen<\/th>/);
   });
 
   it('styles stale score timestamps in white with a score-specific class and updates the empty-state colspan', () => {
@@ -79,12 +79,41 @@ describe('frontend accessibility regressions', () => {
 
   it('renders score last_seen values through the recency helper', () => {
     expect(dashboardTs).toMatch(/const lastSeenClass = isRecentUtc\(s\.last_seen\) \? 'td-score-time' : 'td-score-time td-score-time-stale';/);
-    expect(dashboardTs).toMatch(/<td class="\$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right \$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
   });
 
   it('keeps Visible Workers and Keys Found on the shared td-time class', () => {
-    expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
     expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(f\.created_at\)\}<\/td>/);
+  });
+
+  it('scopes keyboard-scrollable sticky table wrappers to Visible Workers and Scores only', () => {
+    expect(html.match(/class="table-wrap table-wrap-scroll-x"/g) ?? []).toHaveLength(2);
+    expect(html).toMatch(/<div class="table-wrap table-wrap-scroll-x" style="margin-bottom: 2rem;" tabindex="0" aria-label="Visible Workers table, scroll horizontally">/);
+    expect(html).toMatch(/<div class="table-wrap table-wrap-scroll-x" style="margin-bottom: 2rem;" tabindex="0" aria-label="Scores table, scroll horizontally">/);
+    expect(html).not.toMatch(/aria-label="Keys Found table, scroll horizontally"/);
+  });
+
+  it('defines scoped sticky-column table styles with opaque backgrounds and separators', () => {
+    expect(html).toMatch(/\.table-wrap-scroll-x\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*overflow-y:\s*hidden;/);
+    expect(html).toMatch(/\.table-wrap-scroll-x:focus-visible\s*\{[\s\S]*outline:\s*2px solid rgba\(0,255,255,0\.45\);/);
+    expect(html).toMatch(/\.table-wrap-scroll-x table\s*\{[\s\S]*width:\s*max-content;[\s\S]*min-width:\s*100%;/);
+    expect(html).toMatch(/\.sticky-col-left-1,\s*\.sticky-col-left-2,\s*\.sticky-col-right\s*\{[\s\S]*position:\s*sticky;[\s\S]*background:\s*var\(--bg-secondary\);/);
+    expect(html).toMatch(/\.sticky-col-left-2\s*\{[\s\S]*border-right:\s*1px solid var\(--border-default\);/);
+    expect(html).toMatch(/\.sticky-col-right\s*\{[\s\S]*border-left:\s*1px solid var\(--border-default\);/);
+  });
+
+  it('marks the sticky headers and cells for worker and score identity plus recency columns', () => {
+    expect(html).toMatch(/<th class="sticky-col-left-1">#?<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-left-2">Worker<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last Seen<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last seen<\/th>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-1">\$\{dot\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-2 td-name">\$\{esc\(w\.name\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-1 td-rank">#\$\{formatIntegerDots\(i \+ 1\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-2 td-name">\$\{esc\(s\.worker_name\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right \$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
   });
 
   it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {
