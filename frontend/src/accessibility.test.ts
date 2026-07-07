@@ -121,11 +121,16 @@ describe('frontend accessibility regressions', () => {
     expect(rightBlock).not.toContain('border-left');
     expect(rightBlock).not.toContain('box-shadow');
 
-    // Body hover overlays a translucent white tint on the opaque base instead of a
-    // flat #1a1a1a fill, matching the non-sticky hover treatment.
+    // Generic row hover must exclude sticky cells so it does not reset their
+    // per-side opaque background-color to a translucent shorthand fill.
+    expect(html).toMatch(/tbody tr:hover td:not\(\.sticky-col-left-1\):not\(\.sticky-col-left-2\):not\(\.sticky-col-right\)\s*\{\s*background:\s*rgba\(255,255,255,0\.02\);/);
+
+    // Sticky-cell hover then adds only the translucent white overlay on top of
+    // that preserved opaque base instead of using a flat #1a1a1a fill.
     const hoverBlock = html.match(/tbody tr:hover td\.sticky-col-left-1,[\s\S]*?\{([^}]*)\}/)?.[1] ?? '';
     expect(hoverBlock).toMatch(/background-image:\s*linear-gradient\(rgba\(255,255,255,0\.02\),\s*rgba\(255,255,255,0\.02\)\)/);
     expect(hoverBlock).not.toContain('#1a1a1a');
+    expect(hoverBlock).not.toMatch(/\bbackground:\s*rgba\(255,255,255,0\.02\)/);
 
     // Dimmed/offline rows no longer override sticky cells with a distinct #151515 fill.
     expect(html).not.toContain('#151515');

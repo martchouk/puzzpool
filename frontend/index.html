@@ -529,7 +529,9 @@
         }
 
         tbody tr:last-child td { border-bottom: none; }
-        tbody tr:hover td { background: rgba(255,255,255,0.02); }
+        tbody tr:hover td:not(.sticky-col-left-1):not(.sticky-col-left-2):not(.sticky-col-right) {
+            background: rgba(255,255,255,0.02);
+        }
 
         .td-name { color: var(--text-primary); }
         .td-speed { color: var(--accent-green); }
