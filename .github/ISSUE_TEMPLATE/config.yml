@@ -1,0 +1,4 @@
+blank_issues_enabled: true
+# A blank issue (no template, no labels) is treated as a feature idea: the
+# orchestrator claims it for the userstory workflow and stamps feature-idea.
+# Bugs MUST use the Bug Report form so they carry type:bug.
