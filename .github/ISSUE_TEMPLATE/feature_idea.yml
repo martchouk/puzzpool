@@ -1,1 +1,38 @@
-probe
+name: Feature Idea
+description: Propose an idea. It is refined into a ready user story in this issue — no code is written in this stage.
+labels: ["feature-idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe your idea — the userstory workflow (PO, architect, UX designer) refines it
+        **in this issue** into a Definition-of-Ready story. It ends at `status:ready` and stays
+        open as a backlog item. Development starts later, when someone opens an implementation
+        issue referencing it with a `Story: #<n>` line.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Idea
+      description: What problem should be solved, or what would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: users
+    attributes:
+      label: Who benefits?
+      description: Target users or situations where this matters.
+    validations:
+      required: false
+  - type: textarea
+    id: value
+    attributes:
+      label: Why is it valuable?
+    validations:
+      required: false
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or context
+      description: Anything the refinement should know — technical constraints, related issues, deadlines.
+    validations:
+      required: false
