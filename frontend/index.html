@@ -529,7 +529,9 @@
         }
 
         tbody tr:last-child td { border-bottom: none; }
-        tbody tr:hover td { background: rgba(255,255,255,0.02); }
+        tbody tr:hover td:not(.sticky-col-left-1):not(.sticky-col-left-2):not(.sticky-col-right) {
+            background: rgba(255,255,255,0.02);
+        }
 
         .td-name { color: var(--text-primary); }
         .td-speed { color: var(--accent-green); }
@@ -550,7 +552,6 @@
         .sticky-col-right {
             position: sticky;
             z-index: 2;
-            background: var(--bg-secondary);
             background-clip: padding-box;
         }
 
@@ -558,6 +559,7 @@
         .table-wrap-scroll-x thead .sticky-col-left-2,
         .table-wrap-scroll-x thead .sticky-col-right {
             z-index: 3;
+            background-image: linear-gradient(rgba(0,255,255,0.04), rgba(0,255,255,0.04));
         }
 
         .sticky-col-left-1 {
@@ -565,24 +567,23 @@
             width: var(--sticky-col-left-1-width);
             min-width: var(--sticky-col-left-1-width);
             text-align: center;
+            background-color: var(--bg-tertiary);
         }
 
         .sticky-col-left-2 {
             left: var(--sticky-col-left-2-left);
-            border-right: 1px solid var(--border-default);
-            box-shadow: 10px 0 12px -12px rgba(0,0,0,0.9);
+            background-color: var(--bg-tertiary);
         }
 
         .sticky-col-right {
             right: 0;
-            border-left: 1px solid var(--border-default);
-            box-shadow: -10px 0 12px -12px rgba(0,0,0,0.9);
+            background-color: var(--bg-secondary);
         }
 
         tbody tr:hover td.sticky-col-left-1,
         tbody tr:hover td.sticky-col-left-2,
         tbody tr:hover td.sticky-col-right {
-            background: #1a1a1a;
+            background-image: linear-gradient(rgba(255,255,255,0.02), rgba(255,255,255,0.02));
         }
 
         .worker-dot {
@@ -595,9 +596,6 @@
         .worker-dot-on  { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse 2s ease-in-out infinite; }
         .worker-dot-off { background: var(--text-secondary); }
         .worker-dim td { color: var(--text-secondary) !important; }
-        .worker-dim td.sticky-col-left-1,
-        .worker-dim td.sticky-col-left-2,
-        .worker-dim td.sticky-col-right { background: #151515; }
 
         .api-block {
             background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
