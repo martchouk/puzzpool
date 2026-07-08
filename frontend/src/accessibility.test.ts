@@ -69,7 +69,7 @@ describe('frontend accessibility regressions', () => {
   });
 
   it('adds a Last seen column to the all-time scores table', () => {
-    expect(html).toMatch(/<th>Last seen<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last seen<\/th>/);
   });
 
   it('styles stale score timestamps in white with a score-specific class and updates the empty-state colspan', () => {
@@ -79,12 +79,87 @@ describe('frontend accessibility regressions', () => {
 
   it('renders score last_seen values through the recency helper', () => {
     expect(dashboardTs).toMatch(/const lastSeenClass = isRecentUtc\(s\.last_seen\) \? 'td-score-time' : 'td-score-time td-score-time-stale';/);
-    expect(dashboardTs).toMatch(/<td class="\$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right \$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
   });
 
   it('keeps Visible Workers and Keys Found on the shared td-time class', () => {
-    expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
     expect(dashboardTs).toMatch(/<td class="td-time">\$\{fmtUtc\(f\.created_at\)\}<\/td>/);
+  });
+
+  it('scopes keyboard-scrollable sticky table wrappers to Visible Workers and Scores only', () => {
+    expect(html.match(/class="table-wrap table-wrap-scroll-x"/g) ?? []).toHaveLength(2);
+    expect(html).toMatch(/<div class="table-wrap table-wrap-scroll-x" style="margin-bottom: 2rem;" tabindex="0" aria-label="Visible Workers table, scroll horizontally">/);
+    expect(html).toMatch(/<div class="table-wrap table-wrap-scroll-x" style="margin-bottom: 2rem;" tabindex="0" aria-label="Scores table, scroll horizontally">/);
+    expect(html).not.toMatch(/aria-label="Keys Found table, scroll horizontally"/);
+  });
+
+  it('defines scoped sticky-column table styles with opaque per-side backgrounds, tinted sticky headers, and no separators', () => {
+    expect(html).toMatch(/\.table-wrap-scroll-x\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*overflow-y:\s*hidden;/);
+    expect(html).toMatch(/\.table-wrap-scroll-x:focus-visible\s*\{[\s\S]*outline:\s*2px solid rgba\(0,255,255,0\.45\);/);
+    expect(html).toMatch(/\.table-wrap-scroll-x table\s*\{[\s\S]*width:\s*max-content;[\s\S]*min-width:\s*100%;/);
+
+    // The grouped base rule keeps sticky positioning but no longer paints a
+    // single shared flat fill — each column supplies its own opaque per-side base.
+    const groupedBase = html.match(/\.sticky-col-left-1,\s*\.sticky-col-left-2,\s*\.sticky-col-right\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(groupedBase).toContain('position: sticky');
+    expect(groupedBase).toContain('background-clip: padding-box');
+    expect(groupedBase).not.toMatch(/background:\s*var\(--bg-secondary\)/);
+
+    // Per-side opaque fill matches the local gradient tone: left edge -> --bg-tertiary,
+    // right edge -> --bg-secondary. Content must not bleed through pinned cells.
+    const left1Block = html.match(/\.sticky-col-left-1\s*\{([^}]*)\}/)?.[1] ?? '';
+    const left2Block = html.match(/\.sticky-col-left-2\s*\{([^}]*)\}/)?.[1] ?? '';
+    const rightBlock = html.match(/\.sticky-col-right\s*\{([^}]*right:\s*0;[^}]*)\}/)?.[1] ?? '';
+    expect(left1Block).toContain('background-color: var(--bg-tertiary)');
+    expect(left2Block).toContain('background-color: var(--bg-tertiary)');
+    expect(rightBlock).toContain('background-color: var(--bg-secondary)');
+
+    // Separator treatment (vertical line + scroll-edge shadow) is fully removed.
+    expect(left2Block).not.toContain('border-right');
+    expect(left2Block).not.toContain('box-shadow');
+    expect(rightBlock).not.toContain('border-left');
+    expect(rightBlock).not.toContain('box-shadow');
+
+    // Generic row hover must exclude sticky cells so it does not reset their
+    // per-side opaque background-color to a translucent shorthand fill.
+    expect(html).toMatch(/tbody tr:hover td:not\(\.sticky-col-left-1\):not\(\.sticky-col-left-2\):not\(\.sticky-col-right\)\s*\{\s*background:\s*rgba\(255,255,255,0\.02\);/);
+
+    // Sticky-cell hover then adds only the translucent white overlay on top of
+    // that preserved opaque base instead of using a flat #1a1a1a fill.
+    const hoverBlock = html.match(/tbody tr:hover td\.sticky-col-left-1,[\s\S]*?\{([^}]*)\}/)?.[1] ?? '';
+    expect(hoverBlock).toMatch(/background-image:\s*linear-gradient\(rgba\(255,255,255,0\.02\),\s*rgba\(255,255,255,0\.02\)\)/);
+    expect(hoverBlock).not.toContain('#1a1a1a');
+    expect(hoverBlock).not.toMatch(/\bbackground:\s*rgba\(255,255,255,0\.02\)/);
+
+    // Dimmed/offline rows no longer override sticky cells with a distinct #151515 fill.
+    expect(html).not.toContain('#151515');
+
+    // Sticky header cells composite the cyan header tint over their opaque base so
+    // pinned headers match the tinted non-sticky header cells at rest.
+    const headerBlock = html.match(/\.table-wrap-scroll-x thead \.sticky-col-left-1,[\s\S]*?\{([^}]*)\}/)?.[1] ?? '';
+    expect(headerBlock).toContain('z-index: 3');
+    expect(headerBlock).toMatch(/background-image:\s*linear-gradient\(rgba\(0,255,255,0\.04\),\s*rgba\(0,255,255,0\.04\)\)/);
+
+    // The table card gradient must stay horizontal: the flat per-side sticky
+    // fills can only match a gradient whose color does not vary with row
+    // height. A diagonal axis (e.g. 145deg) makes the pinned "Last Seen"
+    // column render as a visibly darker band near the top of the table.
+    const tableWrapBlock = html.match(/\.table-wrap\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(tableWrapBlock).toMatch(/background:\s*linear-gradient\(90deg,\s*var\(--bg-tertiary\)\s*0%,\s*var\(--bg-secondary\)\s*100%\)/);
+  });
+
+  it('marks the sticky headers and cells for worker and score identity plus recency columns', () => {
+    expect(html).toMatch(/<th class="sticky-col-left-1">#?<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-left-2">Worker<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last Seen<\/th>/);
+    expect(html).toMatch(/<th class="sticky-col-right">Last seen<\/th>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-1">\$\{dot\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-2 td-name">\$\{esc\(w\.name\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right td-time">\$\{fmtUtc\(w\.last_seen\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-1 td-rank">#\$\{formatIntegerDots\(i \+ 1\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-left-2 td-name">\$\{esc\(s\.worker_name\)\}<\/td>/);
+    expect(dashboardTs).toMatch(/<td class="sticky-col-right \$\{lastSeenClass\}">\$\{fmtUtc\(s\.last_seen\)\}<\/td>/);
   });
 
   it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {

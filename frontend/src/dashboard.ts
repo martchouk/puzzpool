@@ -558,15 +558,15 @@ async function updateDashboard(): Promise<void> {
         }
 
         return `<tr${dim}>
-          <td>${dot}</td>
-          <td class="td-name">${esc(w.name)}</td>
+          <td class="sticky-col-left-1">${dot}</td>
+          <td class="sticky-col-left-2 td-name">${esc(w.name)}</td>
           <td class="td-mono">${esc(w.version ?? 'unknown')}</td>
           <td class="td-speed">${formatHashrate(w.hashrate)}</td>
           <td class="td-chunks">${w.current_chunk != null ? '#' + formatIntegerDots(w.current_chunk) : '—'}</td>
           <td class="td-chunks">${runStart}</td>
           <td class="td-chunks">${runCount}</td>
           <td class="td-progress">${renderWorkerProgress(w)}</td>
-          <td class="td-time">${fmtUtc(w.last_seen)}</td>
+          <td class="sticky-col-right td-time">${fmtUtc(w.last_seen)}</td>
         </tr>`;
       }).join('');
     }
@@ -578,11 +578,11 @@ async function updateDashboard(): Promise<void> {
       stbody.innerHTML = data.scores.map((s, i) => {
         const lastSeenClass = isRecentUtc(s.last_seen) ? 'td-score-time' : 'td-score-time td-score-time-stale';
         return `<tr>
-        <td class="td-rank">#${formatIntegerDots(i + 1)}</td>
-        <td class="td-name">${esc(s.worker_name)}</td>
+        <td class="sticky-col-left-1 td-rank">#${formatIntegerDots(i + 1)}</td>
+        <td class="sticky-col-left-2 td-name">${esc(s.worker_name)}</td>
         <td class="td-chunks">${formatBigInt(s.total_keys)}</td>
         <td class="td-chunks">${formatIntegerDots(s.completed_chunks)}</td>
-        <td class="${lastSeenClass}">${fmtUtc(s.last_seen)}</td>
+        <td class="sticky-col-right ${lastSeenClass}">${fmtUtc(s.last_seen)}</td>
       </tr>`;
       }).join('');
     }
