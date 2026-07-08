@@ -470,7 +470,10 @@
         }
 
         .table-wrap {
-            background: linear-gradient(145deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
+            /* Horizontal axis only: pinned columns use flat per-side fills
+               (left → --bg-tertiary, right → --bg-secondary), which can only
+               match a gradient whose color does not vary with row height. */
+            background: linear-gradient(90deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
             border: 1px solid var(--border-default);
             border-radius: var(--radius);
             overflow: hidden;

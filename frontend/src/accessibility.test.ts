@@ -140,6 +140,13 @@ describe('frontend accessibility regressions', () => {
     const headerBlock = html.match(/\.table-wrap-scroll-x thead \.sticky-col-left-1,[\s\S]*?\{([^}]*)\}/)?.[1] ?? '';
     expect(headerBlock).toContain('z-index: 3');
     expect(headerBlock).toMatch(/background-image:\s*linear-gradient\(rgba\(0,255,255,0\.04\),\s*rgba\(0,255,255,0\.04\)\)/);
+
+    // The table card gradient must stay horizontal: the flat per-side sticky
+    // fills can only match a gradient whose color does not vary with row
+    // height. A diagonal axis (e.g. 145deg) makes the pinned "Last Seen"
+    // column render as a visibly darker band near the top of the table.
+    const tableWrapBlock = html.match(/\.table-wrap\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(tableWrapBlock).toMatch(/background:\s*linear-gradient\(90deg,\s*var\(--bg-tertiary\)\s*0%,\s*var\(--bg-secondary\)\s*100%\)/);
   });
 
   it('marks the sticky headers and cells for worker and score identity plus recency columns', () => {
