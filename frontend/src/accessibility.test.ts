@@ -26,6 +26,38 @@ describe('frontend accessibility regressions', () => {
     expect(html).toMatch(/data-layer="native"\s+aria-pressed="true"/);
   });
 
+  it('exposes each visualization filter set as a named group in the accessibility tree', () => {
+    expect(html).toMatch(
+      /<div class="alloc-filter-group" id="hm-layer-filter" role="group" aria-label="Night Sky Heatmap layer filter">/,
+    );
+    expect(html).toMatch(
+      /<div class="alloc-filter-group" id="alloc-generation-filter" role="group" aria-label="Allocator Diagnostics generation filter">/,
+    );
+    expect(html).toMatch(
+      /<div class="alloc-filter-group" id="hil-layer-filter" role="group" aria-label="Hilbert Curve Mapping layer filter">/,
+    );
+  });
+
+  it('gives each filter group a unique aria-label identifying its visualization and dimension', () => {
+    const labels = [...html.matchAll(/<div class="alloc-filter-group"[^>]*aria-label="([^"]+)"/g)].map(
+      (m) => m[1],
+    );
+    expect(labels).toEqual([
+      'Night Sky Heatmap layer filter',
+      'Allocator Diagnostics generation filter',
+      'Hilbert Curve Mapping layer filter',
+    ]);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('marks every filter group container with role="group"', () => {
+    const groups = html.match(/<div class="alloc-filter-group"[^>]*>/g) ?? [];
+    expect(groups).toHaveLength(3);
+    for (const group of groups) {
+      expect(group).toContain('role="group"');
+    }
+  });
+
   it('synchronizes filter button aria-pressed state in dashboard logic', () => {
     expect(dashboardTs).toMatch(/setAttribute\('aria-pressed', String\(isActive\)\)/);
   });
