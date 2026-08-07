@@ -15,13 +15,45 @@ New dependency direction (no cycles, extends `docs/architecture.md:72-73`):
 
 ---
 
+## Scope correction after final PO handoff (artifact 105)
+
+The final PO handoff for #153 (attempt 230, artifact 105, SHA-256
+`160b27565fe3ab0e275df27e5e5381e070110fdb32b443a72bd1726ee12eb70a`)
+identified one unnecessary risk in the approved plan: Task 1 extracted the
+existing `sha256Hex` formatter into a shared public `toHex` helper. Slice A does
+not require that refactor, and a padding error there would change every Feistel
+round digest and reorder allocation for every existing puzzle.
+
+This revision supersedes only those Task 1 mechanics:
+
+- the old `hmacSha256Hex` receives the mechanical name `keyedDigestHex`, with
+  its `sha256Hex(key + "\x1f" + msg)` bytes unchanged;
+- the existing `sha256Hex` implementation and its formatter remain byte-for-byte
+  untouched;
+- the real HMAC uses a new file-private raw SHA-256 helper and a separate
+  file-private hex formatter;
+- Step 0 still commits pre-change keyed-digest and permutation goldens before
+  the rename, and Step 7a proves those controls fail by changing the keyed
+  digest delimiter temporarily.
+
+The prior Task 1 Step 1 `toHex` tests, Step 4 public `sha256Raw`/`toHex`
+declarations, Step 5 `sha256Hex` refactor, and Step 7a padding mutation are
+superseded. The accepted M2–M3, S1–S7, and optional review corrections remain
+unchanged.
+
+This correction must be reviewed and merged into PR #154 before Task 1 begins;
+no security-sensitive source implementation may proceed against the superseded
+plan.
+
+---
+
 ## Plan review round 1 — findings resolved
 
-Review of `2e1aa20` requested changes with three blocking findings and four important ones. Every finding is accepted; none is rejected or superseded. Each is resolved at the location named below, and the reviewer's IDs are preserved.
+Review of `2e1aa20` requested changes with three blocking findings and four important ones. Every finding is accepted; none is rejected. Artifact 105 later supersedes only the risky shared-formatter mechanics originally chosen for M1, while preserving the finding's pre-change golden-vector requirement. Each finding is resolved at the location named below, and the reviewer's IDs are preserved.
 
 | ID | Finding | Disposition | Where resolved |
 |----|---------|-------------|----------------|
-| **M1** | AC4's frozen-digest assertion computes its expected value from `sha256Hex`, which this plan refactors, and `tests/test_permutation.cpp` has no cross-version golden vector — so a zero-padding regression in the new `toHex` would reorder every puzzle's allocation with a green suite | **Accepted** | Task 1 Step 0 (capture goldens from the pre-change build **before** editing), Step 1 (literal `sha256Hex` vectors, a literal frozen `keyedDigestHex`, direct `toHex` padding tests), Step 4 (`toHex` promoted to the public header so the padding is directly testable), Step 5a (golden `permuteIndexFeistel` vector in `tests/test_permutation.cpp`); matrix row AC4 |
+| **M1** | AC4's frozen-digest assertion computes its expected value from `sha256Hex`, which the earlier plan refactored, and `tests/test_permutation.cpp` has no cross-version golden vector — so a formatting regression could reorder every puzzle's allocation with a green suite | **Accepted; implementation remedy narrowed by artifact 105** | Task 1 Step 0 (capture and commit goldens from the pre-change build **before** editing), Step 1 (literal frozen `keyedDigestHex` and published `sha256Hex` vectors), Step 5 (leave `sha256Hex` byte-for-byte untouched), Step 5a (golden `permuteIndexFeistel` vector), Step 7a (direct keyed-digest sensitivity mutation); matrix row AC4 |
 | **M2** | Nothing proves all six admin routes are guarded — the AC8 matrix row was vacuous, `main.cpp` is outside `puzzpool_core`, and the smoke test covered one route | **Accepted** | Task 4 Step 6 (all six routes enumerated with their exact methods), Task 4 Step 6a (new committed regression script `tests/test_admin_routes_guarded.sh` looping over all six, denied-without-auth and admitted-with-token), Task 7 Step 7 (documented in `docs/testing.md`), Task 8 Step 4; matrix row AC8 |
 | **M3** | ADR-6 and `docs/security.md` were specified to tell operators that allow-list removal revokes access with no restart, but `src/main.cpp:16` loads `Config` once per process | **Accepted** | Task 2 Step 5 note, Task 4 Step 1 test comment, Task 7 Step 4, ADR-6 in Task 7 Step 6 — all restated as *remove the login, then restart; the change applies to the next request and needs no cookie reissue and no session-store purge* |
 | **S1** | `pp_session` and `pp_oauth_state` share one format and one key, so either verifies as the other | **Accepted** | D-A3 (purpose inside the signed input), Task 3 Steps 1/4 (`TokenPurpose`, `SessionError::WrongPurpose`, one cross-type rejection test per direction) |
@@ -43,18 +75,23 @@ Re-review of `d60184a` approved the plan for implementation and raised three fur
 | ID | Finding | Verified how | Where resolved |
 |----|---------|--------------|----------------|
 | **S5** | The login test's state-binding assertion cannot pass: the cookie carries `base64UrlEncode(nonce)` while the URL carries the bare nonce | Task 6 Step 4 mints the nonce as `base64UrlEncode(nonce_(32))` and puts the bare value in the URL; `signingInput` (Task 3 Step 4) encodes the subject a second time. Base64 of ASCII does not contain its input as a substring, and the base64url alphabet is URL-safe so percent-encoding changes nothing | Task 6 Step 2 — replaced with a `verifyStateToken`-based subject comparison, **not** deleted: it is AC1's only login-side proof of browser binding |
-| **S6** | The six-route guard script is registered in neither CTest nor CI | `.github/workflows/ci.yml:58` already runs `bash tests/test_check_node_version_age.sh`, so the precedent exists; the script appears in no workflow step | Task 7 Step 7a — added to the `build` job, with the residual `branches: [main]` trigger gap stated rather than glossed |
+| **S6** | The six-route guard script is registered in neither CTest nor CI | `.github/workflows/ci.yml:58` already runs `bash tests/test_check_node_version_age.sh`, so the precedent exists; the script appears in no workflow step | Task 7 Step 7a — added to the `build` job; companion issue #155 / PR #157 supplies `dev` trigger coverage and must be present in the eventual `dev` base |
 | **S7** | Phase 2 of the guard script passes vacuously on a dead server, because a `curl` connection error yields no status, which is "not 401" | Phase 2's assertion is "not 401"; the empty string satisfies it. Phase 1 is unaffected — it requires the literal `401` | Task 4 Step 6a — explicit transport-error and empty-status failures, plus a readiness poll on the unauthenticated `/api/v1/stats` |
 
-The five optional items from the round-2 report (`hasSameOriginProof` in the header snippet, the state blob's empty `<b64url(id)>` field requiring `split` to preserve empty tokens, `toHex`'s `char` → `unsigned char` conversion under `-Wconversion`, `serviceWith(cfg)` in the placeholder scan, and the two missing includes in `tests/test_permutation.cpp`) remain open for the implementer; none changes the plan's structure.
+The five optional items from the round-2 report remain prescribed: `hasSameOriginProof` in the header snippet, the state blob's empty `<b64url(id)>` field requiring `split` to preserve empty tokens, `serviceWith(cfg)` in the placeholder scan, the two missing includes in `tests/test_permutation.cpp`, and an explicit `char` → `unsigned char` conversion under `-Wconversion`. The last item now applies to private `hmacDigestToHex` rather than the removed public `toHex`; the safety correction is preserved even though the helper name changed.
 
-## Task 1 Step 0 cannot be completed without a C++ toolchain
+## Task 1 Step 0 remains the pre-change gate
 
-Step 0 captures golden literals by building and running the pre-change tree. Every implementation attempt so far has run in a workspace whose permission layer refuses `cmake`, `make`, every C++ compiler, `npm`, and every interpreter invocation, so the literals cannot be produced — not by transcription, not by an independent reimplementation, because that too needs to execute.
+Step 0 captures golden literals by building and running the pre-change tree.
+The execution profile has now been repaired and the unchanged `f1db2bf` source
+baseline was verified while resolving #155 (9/9 C++ tests and 40/40 frontend
+tests). The implementation attempt must still execute Step 0 and commit its
+goldens before any source edit; prior baseline verification cannot substitute
+for recording the exact allocation vectors on the implementation branch.
 
-**This is a hard prerequisite, not a bookkeeping step.** Task 1 Step 5 refactors the hex formatter out of `sha256Hex` into `toHex`, and the golden vector is the only thing that would catch a zero-padding slip there. Such a slip silently reorders allocation for every existing puzzle (ADR-4), and `.github/workflows/ci.yml:3-7` runs on `main` only, so no CI job would catch it on this branch either. Implementing Task 1 without executing Step 0 reintroduces exactly the M1 hole that round 1 blocked the plan over.
-
-**Do not start Task 1 in an environment that cannot run the commands in Step 0 Step 3.** Confirm the toolchain first; the rest of the plan is unaffected by this constraint and is ready as written.
+**This is a hard prerequisite, not bookkeeping.** The mechanical rename should
+not change bytes, and the committed goldens are what make that claim observable
+across versions. Do not start source edits if the Step 0 commands cannot run.
 
 ---
 
@@ -64,8 +101,8 @@ These are settled inputs for implementation, not open questions. Each is justifi
 
 - **D-A1 — The real HMAC takes the `hmacSha256Hex` name; the old helper becomes `keyedDigestHex`.**
   `src/hash_utils.cpp:36-38` is `sha256Hex(key + "\x1f" + msg)` — a secret-prefix construction that is length-extension forgeable, not a MAC. Its only caller is the Feistel round function at `src/permutation.cpp:27`, where its output bytes must not change or every existing puzzle's allocation order shifts (ADR-4, `docs/architecture-review.md:94`). So the bytes stay frozen under the new honest name, and the new RFC 2104 implementation takes over the name that implies a MAC. Locked by a byte-stability vector plus a test asserting the two functions disagree.
-- **D-A2 — HMAC is implemented once over a raw-digest primitive, not per platform.**
-  `hash_utils.cpp` already branches CommonCrypto/OpenSSL for the digest itself. Adding `sha256Raw()` and building RFC 2104 on top of it (block 64, ipad/opad) keeps one code path, so a cookie signed on macOS verifies identically on the Linux host. Validated against RFC 4231 test vectors.
+- **D-A2 — HMAC is implemented once over file-private raw-digest and hex helpers, not per platform and not by refactoring `sha256Hex`.**
+  `hash_utils.cpp` already branches CommonCrypto/OpenSSL for the digest itself. A new private `sha256Raw()` plus a separate private HMAC hex formatter builds RFC 2104 (block 64, ipad/opad) in one code path, so a cookie signed on macOS verifies identically on Linux. The existing public `sha256Hex` body and formatter remain byte-for-byte untouched. Validated against RFC 4231 test vectors.
 - **D-A3 — The session cookie carries the numeric GitHub id, the MAC covers it, and the token's purpose is inside the MAC.**
   This adopts the PO's D18. AC26 derives the avatar URL from the numeric id, and AC7 requires re-evaluating the allow-list from the cookie on every admin request — so re-calling GitHub or storing server state are both excluded. AC3's "login and absolute expiry" is a minimum, not an exclusive list. Token format:
   `v1.<purpose>.<b64url(subject)>.<b64url(id)>.<expiryUnix>.<hmacHex>` where `<purpose>` is the literal `session` or `state`, MAC over everything before the final dot. Base64url on the two variable fields makes the delimiter unambiguous, so no login can inject a field boundary.
@@ -86,9 +123,7 @@ These are settled inputs for implementation, not open questions. Each is justifi
 1. **libcurl is a new build dependency.** `.github/workflows/ci.yml:21` installs `libssl-dev` but no libcurl; `deps.txt` does not list it. Task 5 adds it to CI, `deps.txt`, and the README prerequisites. Deployment hosts need `libcurl4-openssl-dev` before the next deploy — called out for slice C.
 2. **`Secure` cookies make the OAuth path unusable over plain `http://localhost`.** AC3 mandates `Secure` unconditionally and this plan does not weaken it. Local development keeps using `X-Admin-Token`; documented in `README.md` and `docs/security.md`.
 3. **AC9 is a breaking change for the currently recommended posture.** `docs/security.md:22-35` presents blank `ADMIN_TOKEN` + Nginx IP restriction as a valid option, and `deploy/nginx.conf:38-46` deliberately exposes `/api/v1/admin/activate-puzzle` to the internet with only the server-side token behind it. After this change that route returns 401 until one mechanism is configured. Handled by the README upgrade warning, the rewritten `docs/security.md`, and the startup diagnostic (D12) — but it is a real operator-visible break and reviewers should confirm they want it in slice A.
-4. **No build or test execution has been possible in any planning attempt so far.** The planning sandbox denies `cmake`, `ctest`, `npm`, `openssl`, `shasum`, and interpreter invocations; the review attempt hit the same wall. Every "Expected:" line below is a specification for the implementer to verify, not an observed result. Two consequences the implementer must act on rather than assume away:
-   - The RFC 4231 digests in Task 1, and the two NIST `sha256Hex` vectors, are transcribed from their published sources, not machine-checked here. Confirm them against the published documents before treating a mismatch as an implementation bug.
-   - **The golden literals in Task 1 Step 0 and Step 5a cannot be filled in by a planning attempt at all** — they are outputs of the current binary. Capturing them is therefore the implementer's first action, against the untouched tree, before any source edit. This is not optional bookkeeping; it is the only thing standing between a `toHex` padding slip and a silent reallocation of every existing puzzle.
+4. **Published vectors and branch-local goldens serve different purposes.** The RFC 4231 HMAC and NIST SHA-256 values are external standards; confirm them against the published documents before treating a mismatch as an implementation bug. The keyed-digest and permutation values in Task 1 Step 0 are outputs of the current binary and must be captured and committed on the implementation branch before any source edit. They prove the mechanical rename and allocation order, while leaving `sha256Hex` untouched removes the formatter-refactor risk entirely.
 
    The Crow API calls used throughout (`add_header`, `redirect`, `url_params.get`, `set_header`) *were* verified against the bundled submodule at `third_party/crow` (commit `7ecd59c`), including this revision's finding that `crow::response::get_header_value` is non-const (`http_response.h:76`) while `crow::request`'s is const (`http_request.h:81`), and that `crow::response::headers` is a `std::unordered_multimap` (`ci_map.h:42`) so `equal_range` is the correct way to read repeated `Set-Cookie` headers.
 5. **`src/service_puzzle_status.cpp:55-57` still shells out to `curl` via `popen`.** Migrating it to the new libcurl seam is explicitly out of scope for this story; it is not touched.
@@ -120,7 +155,7 @@ These are settled inputs for implementation, not open questions. Each is justifi
 **Modified**
 
 - Modify: `include/puzzpool/hash_utils.hpp`, `src/hash_utils.cpp`
-  Add `sha256Raw`, `toHex`, real `hmacSha256Hex`, `constantTimeEquals`; rename the old helper to `keyedDigestHex` with a non-MAC warning comment.
+  Mechanically rename the old helper to `keyedDigestHex`; add real `hmacSha256Hex`, `constantTimeEquals`, and file-private raw-digest/HMAC-hex helpers. Leave the existing `sha256Hex` implementation and formatter byte-for-byte untouched.
 - Modify: `src/permutation.cpp`
   Mechanical rename of the single call site at line 27.
 - Modify: `include/puzzpool/config.hpp`, `src/config.cpp`
@@ -155,13 +190,13 @@ These are settled inputs for implementation, not open questions. Each is justifi
 - Add: `tests/test_hash_utils.cpp`
 - Modify: `tests/CMakeLists.txt`, `include/puzzpool/hash_utils.hpp`, `src/hash_utils.cpp`, `src/permutation.cpp`, `tests/test_permutation.cpp`
 
-> **Ordering is load-bearing (review finding M1).** Step 0 captures golden literals from the **unmodified** tree. Nothing under `src/` or `include/` may be edited until Step 0's values are recorded and committed. Capturing them afterwards would freeze whatever the refactor produced, which is exactly the failure the reviewer identified: the previous draft compared `keyedDigestHex(...)` to `sha256Hex(...)`, and Step 5 refactors `sha256Hex` — so both sides of that assertion move together and a zero-padding bug in the new `toHex` would reorder allocation for every existing puzzle with a fully green suite.
+> **Ordering is load-bearing (review finding M1 and artifact 105).** Step 0 captures golden literals from the **unmodified** tree. Nothing under `src/` or `include/` may be edited until Step 0's values are recorded and committed. Capturing them afterwards would freeze whatever the rename produced. The earlier shared-`toHex` refactor is removed: `sha256Hex` stays byte-for-byte untouched, while the goldens prove that renaming the legacy keyed digest and its permutation call site did not change allocation.
 
 - [ ] **Step 0: Capture the golden literals from the pre-change build**
 
 Adding test files does not change any behavior, so goldens captured with these new test files present are still baseline goldens — provided no source under `src/` or `include/` has been touched yet. That is the whole discipline of this step.
 
-1. Create `tests/test_hash_utils.cpp` and register it (Step 2's CMake line), containing only the two capture cases below with deliberately wrong placeholders.
+1. Create `tests/test_hash_utils.cpp` and register it (Step 2's CMake line), containing only the keyed-digest capture case below with a deliberately wrong placeholder.
 2. Append the permutation capture case below to `tests/test_permutation.cpp`, also with a placeholder.
 3. Build and run:
    ```bash
@@ -178,13 +213,6 @@ TEST_CASE("CAPTURE frozen round digest", "[capture]") {
     CHECK(hmacSha256Hex("round-key-0", "12345") == "CAPTURE_ME");
 }
 
-// CAPTURE (pre-change): sha256Hex of the empty string exercises no interesting path on
-// its own, but "abc" and "" are the two published NIST FIPS 180-4 examples, so a
-// mismatch here means the capture procedure itself is wrong rather than the code.
-TEST_CASE("CAPTURE sha256Hex", "[capture]") {
-    CHECK(sha256Hex("abc") == "CAPTURE_ME");
-    CHECK(sha256Hex("") == "CAPTURE_ME");
-}
 ```
 
 ```cpp
@@ -202,11 +230,11 @@ TEST_CASE("CAPTURE feistel golden", "[capture]") {
 }
 ```
 
-Expected after substitution: both files green against the untouched `src/`. Record the five permutation values and the three digest values in the implementation report — they are the evidence AC4 rests on.
+Expected after substitution: both files green against the untouched `src/`. Record the five permutation values and the keyed-digest value in the implementation report — they are the branch-local evidence AC4 rests on. The published NIST values are added independently in Step 1; they are not capture outputs.
 
 - [ ] **Step 1: Write the failing primitive tests first**
 
-`keyedDigestHex`, `toHex` and `constantTimeEquals` do not exist yet and `hmacSha256Hex` is not an HMAC, so both halves fail for the right reason. The two capture cases from Step 0 are rewritten here into their permanent form — same literals, honest names.
+`keyedDigestHex` and `constantTimeEquals` do not exist yet and `hmacSha256Hex` is not an HMAC, so the new target fails for the right reasons. The keyed-digest capture from Step 0 is rewritten here into its permanent form — same literal, honest name. `sha256Hex` receives only published-vector tests; its implementation is not edited.
 
 ```cpp
 #include <puzzpool/hash_utils.hpp>
@@ -245,32 +273,19 @@ TEST_CASE("hmacSha256Hex hashes over-long keys per RFC 2104", "[hash][hmac]") {
 // AC4: the permutation digest is frozen. This literal was captured from the pre-change
 // binary in Step 0 and must never change — ADR-4 allocation determinism depends on it.
 // It is deliberately NOT written as `== sha256Hex(key + "\x1f" + msg)`: that expression
-// moves together with the toHex refactor in Step 5, so it could not detect a change.
+// would derive the expected value from the same implementation and could not detect
+// a changed byte stream.
 TEST_CASE("keyedDigestHex output is byte-for-byte frozen", "[hash][permutation]") {
     CHECK(keyedDigestHex("round-key-0", "12345") == "<Step 0 capture>");
 }
 
-// Published NIST FIPS 180-4 vectors. These pin sha256Hex to values that exist outside
-// this repository, so the whole hex-formatting path is anchored to something the
-// refactor cannot move.
+// Published NIST FIPS 180-4 vectors. These pin the existing sha256Hex behavior to
+// values outside this repository. Its production implementation remains untouched.
 TEST_CASE("sha256Hex matches the published NIST vectors", "[hash]") {
     CHECK(sha256Hex("abc") ==
           "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     CHECK(sha256Hex("") ==
           "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-}
-
-// The specific regression M1 is about: the classic bug when hand-rolling toHex is
-// dropping the per-byte zero padding, which shortens the digest string, changes
-// hexToInt, and silently reorders allocation. Testing toHex directly pins the padding
-// on inputs whose expected output needs no digest computation at all — strictly
-// stronger than hunting for a digest that happens to contain a 0x0? byte.
-TEST_CASE("toHex zero-pads every byte to two lowercase digits", "[hash][hex]") {
-    CHECK(toHex(std::string("\x00\x01\x0f", 3)) == "00010f");
-    CHECK(toHex(std::string("\xa0\xff\x10", 3)) == "a0ff10");
-    CHECK(toHex(std::string("\x00", 1)) == "00");
-    CHECK(toHex("") == "");
-    CHECK(toHex(std::string(32, '\0')).size() == 64);
 }
 
 // Sensitivity: proves the rename did not alias the two, i.e. that the HMAC probe
@@ -312,15 +327,6 @@ namespace puzzpool {
 
 std::string sha256Hex(const std::string& input);
 
-/// Raw 32-byte SHA-256 digest. Used to build HMAC without a second platform branch.
-std::string sha256Raw(std::string_view input);
-
-/// Lowercase hex of arbitrary bytes, two zero-padded digits per byte. Declared here
-/// rather than kept file-local so the zero-padding is directly testable: dropping it
-/// would change every digest string in the process, including the frozen Feistel round
-/// function, and reorder allocation for every existing puzzle (ADR-4).
-std::string toHex(std::string_view bytes);
-
 /// Keyed digest: sha256(key || 0x1f || msg).
 ///
 /// WARNING: this is deliberately NOT an HMAC. It is a secret-prefix construction and
@@ -339,9 +345,19 @@ bool constantTimeEquals(std::string_view a, std::string_view b);
 } // namespace puzzpool
 ```
 
-- [ ] **Step 5: Implement over a shared raw digest**
+- [ ] **Step 5: Implement HMAC with private raw-digest and hex helpers**
+
+Leave the complete existing `sha256Hex()` function byte-for-byte unchanged,
+including its local `digest` buffer, CommonCrypto/OpenSSL call, stream setup,
+loop, padding, and return. Do not extract or reuse its formatter.
+
+Append file-private helpers for the new HMAC path. The duplication in
+`hmacDigestToHex` is intentional: it prevents slice A from modifying the
+allocation digest's formatting path.
 
 ```cpp
+namespace {
+
 std::string sha256Raw(std::string_view input) {
     unsigned char digest[32];
 #if defined(__APPLE__)
@@ -353,7 +369,20 @@ std::string sha256Raw(std::string_view input) {
     return std::string(reinterpret_cast<const char*>(digest), sizeof(digest));
 }
 
+std::string hmacDigestToHex(std::string_view bytes) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (char c : bytes) {
+        const auto b = static_cast<unsigned char>(c);
+        oss << std::setw(2) << static_cast<unsigned>(b);
+    }
+    return oss.str();
+}
+
+} // namespace
+
 std::string keyedDigestHex(const std::string& key, const std::string& msg) {
+    // Mechanical rename only: this is the exact pre-change hmacSha256Hex body.
     return sha256Hex(key + "\x1f" + msg);
 }
 
@@ -372,7 +401,7 @@ std::string hmacSha256Hex(const std::string& key, const std::string& msg) {
     }
 
     const std::string innerDigest = sha256Raw(inner + msg);
-    return toHex(sha256Raw(outer + innerDigest));
+    return hmacDigestToHex(sha256Raw(outer + innerDigest));
 }
 
 bool constantTimeEquals(std::string_view a, std::string_view b) {
@@ -386,20 +415,9 @@ bool constantTimeEquals(std::string_view a, std::string_view b) {
 }
 ```
 
-Move the existing hex loop out of `sha256Hex()` into `toHex(std::string_view)` — declared in the header per Step 4, not file-local — and have `sha256Hex()` return `toHex(sha256Raw(input))`, so there is one hex formatter. The safest implementation is to keep the current `std::ostringstream` body verbatim, because `src/hash_utils.cpp:29-33` already gets the padding right (a per-iteration `std::setw(2)` under a sticky `std::setfill('0')`, which is the ordering people get wrong):
-
-```cpp
-std::string toHex(std::string_view bytes) {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned char b : bytes) {
-        oss << std::setw(2) << static_cast<unsigned>(b);
-    }
-    return oss.str();
-}
-```
-
 Keep `-Wconversion` clean — every `unsigned char` narrowing above is explicit.
+The private raw helper duplicates only the platform digest call; the private hex
+helper formats only the new HMAC result. Neither is declared in the public header.
 
 - [ ] **Step 5a: Promote the captured permutation vector to its permanent form**
 
@@ -434,13 +452,13 @@ return hexToInt(keyedDigestHex(roundKey, bigToDec(right))) & mask;
 
 Run: `ctest --test-dir build --output-on-failure --tests-regex "hash_utils|permutation"`
 
-Expected: the RFC 4231 vectors pass, the NIST `sha256Hex` vectors pass, the `toHex` padding cases pass, the frozen `keyedDigestHex` literal and the golden `permuteIndexFeistel` vector both still match the Step 0 captures, and the pre-existing `test_permutation` suite is unchanged and green. Those last two are the proof that AC4 held; the rest of `test_permutation` cannot supply it.
+Expected: the RFC 4231 vectors pass, the unchanged `sha256Hex` still matches the NIST vectors, the frozen `keyedDigestHex` literal and the golden `permuteIndexFeistel` vector both still match the Step 0 captures, and the pre-existing `test_permutation` suite is unchanged and green. The captured keyed digest and permutation vector are the proof that AC4 held; the rest of `test_permutation` cannot supply it.
 
 - [ ] **Step 7a: Prove the golden vector can fail (sensitivity)**
 
-An assertion that guards against a regression is worth nothing until it has been seen to fail. Temporarily break the padding — change `std::setw(2)` to `std::setw(1)` in `toHex` — and re-run Step 7.
+An assertion that guards against a regression is worth nothing until it has been seen to fail. Temporarily change the delimiter in `keyedDigestHex` from `"\x1f"` to `"\x1e"` and re-run Step 7. Do not touch `sha256Hex`; the mutation is confined to the mechanically renamed wrapper whose bytes AC4 freezes.
 
-Expected: **`test_hash_utils` and `test_permutation` both fail**, with the `toHex` padding case, the frozen `keyedDigestHex` literal, and the golden Feistel vector all reporting mismatches. If the golden vector still passes, the vector is not covering the round function and Step 0 must be redone. Revert the deliberate break and confirm green before committing; record both runs in the implementation report.
+Expected: **`test_hash_utils` and `test_permutation` both fail**, with the frozen `keyedDigestHex` literal and the golden Feistel vector reporting mismatches. The RFC 4231 HMAC and NIST `sha256Hex` cases should remain green, proving the probe is scoped to the allocation digest rather than the new primitive. If the golden vector still passes, it is not covering the round function and Step 0 must be redone. Revert the deliberate break and confirm green before committing; record both runs in the implementation report.
 
 - [ ] **Step 8: Commit**
 
@@ -2044,7 +2062,7 @@ M2 asked for a regression that survives, not a checklist item, and a committed s
 
 Place it after the existing `Run unit tests` step (`ci.yml:32-33`) and before `Smoke test`, so a route that loses its guard fails CI rather than waiting for someone to remember the command.
 
-**State the residual gap plainly rather than implying this closes it.** `.github/workflows/ci.yml:3-7` triggers only on `push`/`pull_request` to `main`, and per the project policy agent branches target `dev` — so **no CI job runs on this PR at all**, and none will until the `dev` → `main` promotion. Wiring the script in is still worth doing: that promotion is exactly where an unguarded admin route would otherwise reach production, and `deploy/nginx.conf:37-46` publishes `/api/v1/admin/activate-puzzle` to the internet. Widening the CI triggers to include `dev` is a pre-existing repository gap, out of scope for this issue, and should be raised separately rather than folded in here.
+**Track the companion CI fix rather than duplicating it.** Issue #155 / PR #157 adds `dev` to the `push` and `pull_request` triggers and has already demonstrated all three jobs on a `dev`-targeted PR. It remains a separate repository-level fix. Before PR #154 is marked ready for implementation review, bring its branch forward onto a `dev` revision containing #157; then this new guard-script step will execute on PR #154 itself. Do not duplicate #157's trigger edits in this implementation branch. If #157 has not merged, record that dependency explicitly in the implementation report instead of claiming dev-targeted CI coverage.
 
 In `deploy/nginx.conf`, add a comment above `location /` recording that `/api/v1/auth/*` is intentionally public (AC23) and that `X-Forwarded-Proto` must stay set so the deployment terminates TLS in front of the `Secure` cookie. No `location` blocks change.
 
@@ -2136,7 +2154,7 @@ gh pr create --draft --base dev --title "feat: GitHub OAuth backend and fail-clo
 | AC1 state | `auth_service.cpp` login/callback, signed `pp_oauth_state` | `test_auth_service` — bound, distinct, cleared with a matching `Path` (S3), mismatch/expired/tampered/wrong-purpose rejected |
 | AC2 libcurl seam | `github_client.cpp`, `auth_service.cpp` exchange | `test_auth_service` — secret/code asserted in POST body, absent from URL |
 | AC3 signed cookie | `session.cpp`, `cookieHeader()` in `auth_service.cpp` | `test_session` (sign/verify/tamper/expire/purpose), `test_auth_service` (attributes) |
-| AC4 frozen digest | `hash_utils.cpp` `keyedDigestHex` + `toHex`, `permutation.cpp:27` | `test_hash_utils` — frozen `keyedDigestHex` **literal** captured pre-change, NIST `sha256Hex` vectors, direct `toHex` padding cases; `test_permutation` golden `permuteIndexFeistel` vector, also captured pre-change; sensitivity run in Task 1 Step 7a |
+| AC4 frozen digest | unchanged `sha256Hex`, mechanically renamed `keyedDigestHex`, `permutation.cpp:27` | `test_hash_utils` — frozen `keyedDigestHex` **literal** captured pre-change plus published NIST `sha256Hex` vectors; `test_permutation` golden `permuteIndexFeistel` vector captured pre-change; scoped delimiter-mutation sensitivity run in Task 1 Step 7a |
 | AC5 logout | `auth_service.cpp` `handleLogout` | `test_auth_service` — `Max-Age=0` with `Path=/`, cross-site rejected, clears while unconfigured |
 | AC6 allow-list parsing | `admin_auth.cpp` `parseAdminGithubUsers`, `isAllowedAdminLogin` | `test_config` — trim, case, empties, empty-denies |
 | AC7 re-evaluated per request | `authorizeAdmin` reads `cfg` every call | `test_admin_auth` — removal denies an already-issued cookie (restart required to change `cfg`; documented, not claimed away) |
@@ -2160,8 +2178,8 @@ AC15–AC19 and AC27 are slice B and are deliberately untouched here.
 ## Self-Review
 
 - **Spec coverage:** every AC in slice A's scope appears in the matrix with a named implementation site and a named test. Nothing is deferred to "a follow-up".
-- **Sensitivity:** the reviewer's sharpest observation about the previous draft was that its two *strongest* claims — AC4's frozen digest and AC8's route wiring — were the two without working controls, while the weaker claims were well guarded. That asymmetry is now inverted. AC4 is anchored to literals captured from the pre-change build plus published NIST vectors, none of which move with the refactor, and Task 1 Step 7a requires *observing* those assertions fail under a deliberate padding break. AC8 is anchored to a committed six-route script, and Task 4 Step 7a requires observing it fail with one guard removed. The pre-existing controls stand: unconfigured-401 paired with configured-allow, CSRF denials paired with two positive same-origin controls, quiet-diagnostics paired with the warning case, `keyedDigestHex ≠ hmacSha256Hex` against an aliasing rename; and three more are added — 503-when-unconfigured paired with not-503-when-configured, the `setCookieNamed(…).empty()` probes paired with a success-path case that finds a cookie, and the `WrongPurpose` rejections paired with each blob verifying under its own purpose.
+- **Sensitivity:** the reviewer's sharpest observation about the previous draft was that its two *strongest* claims — AC4's frozen digest and AC8's route wiring — were the two without working controls, while the weaker claims were well guarded. That asymmetry is now inverted. AC4 is anchored to keyed-digest and permutation literals captured from the pre-change build plus published NIST vectors, while `sha256Hex` is no longer refactored at all; Task 1 Step 7a requires *observing* both allocation assertions fail under a deliberate keyed-digest delimiter mutation while the independent HMAC/SHA tests stay green. AC8 is anchored to a committed six-route script, and Task 4 Step 7a requires observing it fail with one guard removed. The pre-existing controls stand: unconfigured-401 paired with configured-allow, CSRF denials paired with two positive same-origin controls, quiet-diagnostics paired with the warning case, `keyedDigestHex ≠ hmacSha256Hex` against an aliasing rename; and three more are added — 503-when-unconfigured paired with not-503-when-configured, the `setCookieNamed(…).empty()` probes paired with a success-path case that finds a cookie, and the `WrongPurpose` rejections paired with each blob verifying under its own purpose.
 - **Placeholder scan:** no `TODO`, `TBD`, or "tests later" remains. `setCookieNamed` is now spelled out in full, because it is the one helper whose body is *not* mechanical — `crow::response::get_header_value` returns only the first match and the callback emits two `Set-Cookie` headers, so the obvious implementation would make the S3 assertions pass for the wrong reason. `stateParamOf`, `cookieTokenOf` (returns the cookie's value up to the first `;`), `validState`, `expiredStateRequest`, `tamperedStateRequest` and `sessionBlobAsStateRequest` remain local fixtures whose bodies are mechanical.
-- **Review findings:** all eleven findings from round 1 are accepted and resolved; the table at the top of this plan maps each ID to where. None was rejected, and none was deferred to slice B or C except the `limit_req` rate-limit zone, which is a deployment concern by nature and which S4 explicitly routes to slice C.
+- **Review findings:** M1–M3, S1–S7, and O1–O5 are accepted and resolved; the tables at the top of this plan map each stable ID to where. Artifact 105 supersedes only M1's risky shared-formatter implementation mechanics, not its golden-vector requirement; the optional explicit-conversion correction is carried into the private HMAC formatter. None was rejected, and none was deferred to slice B or C except the `limit_req` rate-limit zone, which is a deployment concern by nature and which S4 explicitly routes to slice C.
 - **Type consistency:** the GitHub id is a string end to end (`SessionIdentity::githubId`, cookie field, avatar URL) and is converted once at the callback boundary, where GitHub sends it as a JSON integer.
 - **Scope:** no frontend file, no database schema, no allocator or permutation output, and no `service_*.cpp` file is modified. The only change to existing behavior is that unconfigured admin routes now deny, which is the point of AC9.
