@@ -15,6 +15,29 @@ New dependency direction (no cycles, extends `docs/architecture.md:72-73`):
 
 ---
 
+## Plan review round 1 — findings resolved
+
+Review of `2e1aa20` requested changes with three blocking findings and four important ones. Every finding is accepted; none is rejected or superseded. Each is resolved at the location named below, and the reviewer's IDs are preserved.
+
+| ID | Finding | Disposition | Where resolved |
+|----|---------|-------------|----------------|
+| **M1** | AC4's frozen-digest assertion computes its expected value from `sha256Hex`, which this plan refactors, and `tests/test_permutation.cpp` has no cross-version golden vector — so a zero-padding regression in the new `toHex` would reorder every puzzle's allocation with a green suite | **Accepted** | Task 1 Step 0 (capture goldens from the pre-change build **before** editing), Step 1 (literal `sha256Hex` vectors, a literal frozen `keyedDigestHex`, direct `toHex` padding tests), Step 4 (`toHex` promoted to the public header so the padding is directly testable), Step 5a (golden `permuteIndexFeistel` vector in `tests/test_permutation.cpp`); matrix row AC4 |
+| **M2** | Nothing proves all six admin routes are guarded — the AC8 matrix row was vacuous, `main.cpp` is outside `puzzpool_core`, and the smoke test covered one route | **Accepted** | Task 4 Step 6 (all six routes enumerated with their exact methods), Task 4 Step 6a (new committed regression script `tests/test_admin_routes_guarded.sh` looping over all six, denied-without-auth and admitted-with-token), Task 7 Step 7 (documented in `docs/testing.md`), Task 8 Step 4; matrix row AC8 |
+| **M3** | ADR-6 and `docs/security.md` were specified to tell operators that allow-list removal revokes access with no restart, but `src/main.cpp:16` loads `Config` once per process | **Accepted** | Task 2 Step 5 note, Task 4 Step 1 test comment, Task 7 Step 4, ADR-6 in Task 7 Step 6 — all restated as *remove the login, then restart; the change applies to the next request and needs no cookie reissue and no session-store purge* |
+| **S1** | `pp_session` and `pp_oauth_state` share one format and one key, so either verifies as the other | **Accepted** | D-A3 (purpose inside the signed input), Task 3 Steps 1/4 (`TokenPurpose`, `SessionError::WrongPurpose`, one cross-type rejection test per direction) |
+| **S2** | `crow::response::get_header_value` is non-const, so several ready-to-paste snippets do not compile; and it returns only the first match, which is wrong for the two-`Set-Cookie` callback | **Accepted** | Task 6 Step 2 (`const` dropped from every response local; `setCookieNamed` spelled out as an `equal_range` scan over `r.headers`) |
+| **S3** | The state-cookie clearing assertion passes even when `Path` does not match the issuing header, so the clear would silently not clear | **Accepted** | Task 6 Step 2 (clearing assertions check `Path` and `HttpOnly`), Task 6 Step 4 (`cookieHeader()` helper emits issuing and clearing headers from one attribute set) |
+| **S4** | The callback is an unauthenticated, network-egress-triggering, unbounded route, and any GitHub account can obtain a `pp_session` — both correct, both undocumented | **Accepted** | Task 7 Step 4 — both stated in `docs/security.md` as accepted decisions, with the `limit_req` note handed to slice C |
+| **O1** | `"\x00\xff\x10binary"` is ill-formed — `\x10b` is one maximal-munch escape | **Accepted** | Task 3 Step 1 — adjacent string literals |
+| **O2** | `hasSameOriginProof` let an `Origin` override an explicit `Sec-Fetch-Site: cross-site` | **Accepted** | Task 4 Step 4 — an explicit non-same-origin `Sec-Fetch-Site` is now a definitive rejection |
+| **O3** | `docs/security.md:16-17` says "four admin endpoints"; there are six | **Accepted** | Task 7 Step 4 |
+| **O4** | `sessionTtlMinutes` was clamped below but not above | **Accepted** | Task 2 Step 4 — clamped to `[1, 43200]` (30 days) |
+| **O5** | `handleLogout` returning 503 contradicts "a stale cookie can always be shed" | **Accepted** | Task 6 Step 4 — the clearing header is emitted unconditionally |
+
+Two of these change what the implementer does before writing any code: **M1's Step 0 must run against the unmodified tree**, and **M2 adds a committed script rather than a checklist item**. Both are sequenced explicitly below.
+
+---
+
 ## Design decisions taken in this plan
 
 These are settled inputs for implementation, not open questions. Each is justified against a codebase fact.
@@ -23,11 +46,12 @@ These are settled inputs for implementation, not open questions. Each is justifi
   `src/hash_utils.cpp:36-38` is `sha256Hex(key + "\x1f" + msg)` — a secret-prefix construction that is length-extension forgeable, not a MAC. Its only caller is the Feistel round function at `src/permutation.cpp:27`, where its output bytes must not change or every existing puzzle's allocation order shifts (ADR-4, `docs/architecture-review.md:94`). So the bytes stay frozen under the new honest name, and the new RFC 2104 implementation takes over the name that implies a MAC. Locked by a byte-stability vector plus a test asserting the two functions disagree.
 - **D-A2 — HMAC is implemented once over a raw-digest primitive, not per platform.**
   `hash_utils.cpp` already branches CommonCrypto/OpenSSL for the digest itself. Adding `sha256Raw()` and building RFC 2104 on top of it (block 64, ipad/opad) keeps one code path, so a cookie signed on macOS verifies identically on the Linux host. Validated against RFC 4231 test vectors.
-- **D-A3 — The session cookie carries the numeric GitHub id, and the MAC covers it.**
+- **D-A3 — The session cookie carries the numeric GitHub id, the MAC covers it, and the token's purpose is inside the MAC.**
   This adopts the PO's D18. AC26 derives the avatar URL from the numeric id, and AC7 requires re-evaluating the allow-list from the cookie on every admin request — so re-calling GitHub or storing server state are both excluded. AC3's "login and absolute expiry" is a minimum, not an exclusive list. Token format:
-  `v1.<b64url(login)>.<b64url(id)>.<expiryUnix>.<hmacHex>`, MAC over everything before the final dot. Base64url on the two variable fields makes the delimiter unambiguous, so no login can inject a field boundary.
+  `v1.<purpose>.<b64url(subject)>.<b64url(id)>.<expiryUnix>.<hmacHex>` where `<purpose>` is the literal `session` or `state`, MAC over everything before the final dot. Base64url on the two variable fields makes the delimiter unambiguous, so no login can inject a field boundary.
+  The `<purpose>` label is domain separation (review finding S1). Both blob types are signed with `cfg.sessionSigningSecret`, and without the label they would be byte-compatible: a `pp_oauth_state` blob would verify as a `pp_session` and vice versa. No live escalation follows from that today — a state blob presented as a session yields a random-looking "login" that no allow-list contains — but it becomes live the moment a third blob type is added. `verifySessionToken` therefore takes the expected purpose and returns `SessionError::WrongPurpose` on a mismatch, tested in both directions. One string, one check, and the class of bug is closed.
 - **D-A4 — Cookie-authorized admin `POST`s require an affirmative same-origin signal (AC14).**
-  Accept `Sec-Fetch-Site: same-origin` or `none`, or an `Origin` that equals the configured `PUBLIC_BASE_URL` origin. **Absence of both is rejected**, otherwise the defense is void against any client that simply omits the headers. This is deliberate: a script or `curl` cannot drive admin `POST`s with a session cookie, and should use `X-Admin-Token`, which is not cookie-authorized and therefore skips the CSRF check entirely (AC12). `SameSite=Lax` already blocks the cross-site case; this is the second layer AC14 asks for.
+  Accept `Sec-Fetch-Site: same-origin` or `none`, or — when `Sec-Fetch-Site` is absent — an `Origin` that equals the configured `PUBLIC_BASE_URL` origin. **Absence of both is rejected**, otherwise the defense is void against any client that simply omits the headers. A `Sec-Fetch-Site` that is present and is neither `same-origin` nor `none` is a definitive rejection and is *not* overridable by `Origin` (review finding O2): browsers set the two consistently, so the only thing that override buys is a weaker rule for a request that already told us it was cross-site. This is deliberate: a script or `curl` cannot drive admin `POST`s with a session cookie, and should use `X-Admin-Token`, which is not cookie-authorized and therefore skips the CSRF check entirely (AC12). `SameSite=Lax` already blocks the cross-site case; this is the second layer AC14 asks for.
 - **D-A5 — `PUBLIC_BASE_URL` is a new required setting for the OAuth path.**
   The callback URL must be absolute and per-deployment, and the CSRF check needs an expected origin. The story does not name it, but AC20 forbids selecting secrets with a `Config::stage` branch — a per-stage env var is exactly how that is satisfied. When it is unset, `/api/v1/auth/github/*` returns 503 the same way a missing signing secret does.
 - **D-A6 — OAuth flow failures redirect; configuration failures return 503.**
@@ -42,7 +66,11 @@ These are settled inputs for implementation, not open questions. Each is justifi
 1. **libcurl is a new build dependency.** `.github/workflows/ci.yml:21` installs `libssl-dev` but no libcurl; `deps.txt` does not list it. Task 5 adds it to CI, `deps.txt`, and the README prerequisites. Deployment hosts need `libcurl4-openssl-dev` before the next deploy — called out for slice C.
 2. **`Secure` cookies make the OAuth path unusable over plain `http://localhost`.** AC3 mandates `Secure` unconditionally and this plan does not weaken it. Local development keeps using `X-Admin-Token`; documented in `README.md` and `docs/security.md`.
 3. **AC9 is a breaking change for the currently recommended posture.** `docs/security.md:22-35` presents blank `ADMIN_TOKEN` + Nginx IP restriction as a valid option, and `deploy/nginx.conf:38-46` deliberately exposes `/api/v1/admin/activate-puzzle` to the internet with only the server-side token behind it. After this change that route returns 401 until one mechanism is configured. Handled by the README upgrade warning, the rewritten `docs/security.md`, and the startup diagnostic (D12) — but it is a real operator-visible break and reviewers should confirm they want it in slice A.
-4. **No build or test execution was possible in the planning attempt.** The planning sandbox denied `cmake`, `ctest`, `npm`, and interpreter invocations. Every "Expected:" line below is a specification for the implementer to verify, not an observed result. In particular the RFC 4231 digests in Task 1 are transcribed from the RFC, not machine-checked here — the implementer must confirm them against the published vectors before treating a mismatch as an implementation bug. The Crow API calls used throughout (`add_header`, `redirect`, `url_params.get`, `set_header`) *were* verified against the bundled submodule at `third_party/crow` (commit `7ecd59c`).
+4. **No build or test execution has been possible in any planning attempt so far.** The planning sandbox denies `cmake`, `ctest`, `npm`, `openssl`, `shasum`, and interpreter invocations; the review attempt hit the same wall. Every "Expected:" line below is a specification for the implementer to verify, not an observed result. Two consequences the implementer must act on rather than assume away:
+   - The RFC 4231 digests in Task 1, and the two NIST `sha256Hex` vectors, are transcribed from their published sources, not machine-checked here. Confirm them against the published documents before treating a mismatch as an implementation bug.
+   - **The golden literals in Task 1 Step 0 and Step 5a cannot be filled in by a planning attempt at all** — they are outputs of the current binary. Capturing them is therefore the implementer's first action, against the untouched tree, before any source edit. This is not optional bookkeeping; it is the only thing standing between a `toHex` padding slip and a silent reallocation of every existing puzzle.
+
+   The Crow API calls used throughout (`add_header`, `redirect`, `url_params.get`, `set_header`) *were* verified against the bundled submodule at `third_party/crow` (commit `7ecd59c`), including this revision's finding that `crow::response::get_header_value` is non-const (`http_response.h:76`) while `crow::request`'s is const (`http_request.h:81`), and that `crow::response::headers` is a `std::unordered_multimap` (`ci_map.h:42`) so `equal_range` is the correct way to read repeated `Set-Cookie` headers.
 5. **`src/service_puzzle_status.cpp:55-57` still shells out to `curl` via `popen`.** Migrating it to the new libcurl seam is explicitly out of scope for this story; it is not touched.
 
 ---
@@ -56,7 +84,7 @@ These are settled inputs for implementation, not open questions. Each is justifi
 - Add: `include/puzzpool/secure_random.hpp`, `src/secure_random.cpp`
   `secureRandomBytes(n)` from `arc4random_buf` (Apple) / `getrandom()` (Linux) with a `/dev/urandom` fallback; throws rather than degrading to a PRNG.
 - Add: `include/puzzpool/session.hpp`, `src/session.cpp`
-  Session-token issue/verify, the `SessionError` taxonomy, and `Cookie:` header parsing.
+  One signed-blob format with a `TokenPurpose` label, session/state issue and verify wrappers, the `SessionError` taxonomy, and `Cookie:` header parsing.
 - Add: `include/puzzpool/admin_auth.hpp`, `src/admin_auth.cpp`
   `authorizeAdmin()` — the whole authorization and CSRF decision over a plain request view, plus `isAllowedAdminLogin()` and `startupAuthDiagnostics()`.
 
@@ -72,7 +100,7 @@ These are settled inputs for implementation, not open questions. Each is justifi
 **Modified**
 
 - Modify: `include/puzzpool/hash_utils.hpp`, `src/hash_utils.cpp`
-  Add `sha256Raw`, real `hmacSha256Hex`, `constantTimeEquals`; rename the old helper to `keyedDigestHex` with a non-MAC warning comment.
+  Add `sha256Raw`, `toHex`, real `hmacSha256Hex`, `constantTimeEquals`; rename the old helper to `keyedDigestHex` with a non-MAC warning comment.
 - Modify: `src/permutation.cpp`
   Mechanical rename of the single call site at line 27.
 - Modify: `include/puzzpool/config.hpp`, `src/config.cpp`
@@ -84,11 +112,15 @@ These are settled inputs for implementation, not open questions. Each is justifi
 - Modify: `.github/workflows/ci.yml`, `deps.txt`
   Install libcurl.
 - Modify: `tests/test_config.cpp`
-  Allow-list parsing and stage-independence coverage.
+  Allow-list parsing, TTL clamping, and stage-independence coverage.
+- Modify: `tests/test_permutation.cpp`
+  Golden `permuteIndexFeistel` vector captured from the pre-change build — the cross-version proof of ADR-4 that the existing self-consistency case cannot supply.
 
 **New tests**
 
 - Add: `tests/test_hash_utils.cpp`, `tests/test_session.cpp`, `tests/test_admin_auth.cpp`, `tests/test_auth_service.cpp`
+- Add: `tests/test_admin_routes_guarded.sh`
+  End-to-end guard regression over all six admin routes, because `src/main.cpp` is outside every Catch2 target. Run explicitly, like `tests/test_check_node_version_age.sh`.
 
 **Docs**
 
@@ -100,11 +132,60 @@ These are settled inputs for implementation, not open questions. Each is justifi
 
 **Files:**
 - Add: `tests/test_hash_utils.cpp`
-- Modify: `tests/CMakeLists.txt`, `include/puzzpool/hash_utils.hpp`, `src/hash_utils.cpp`, `src/permutation.cpp`
+- Modify: `tests/CMakeLists.txt`, `include/puzzpool/hash_utils.hpp`, `src/hash_utils.cpp`, `src/permutation.cpp`, `tests/test_permutation.cpp`
+
+> **Ordering is load-bearing (review finding M1).** Step 0 captures golden literals from the **unmodified** tree. Nothing under `src/` or `include/` may be edited until Step 0's values are recorded and committed. Capturing them afterwards would freeze whatever the refactor produced, which is exactly the failure the reviewer identified: the previous draft compared `keyedDigestHex(...)` to `sha256Hex(...)`, and Step 5 refactors `sha256Hex` — so both sides of that assertion move together and a zero-padding bug in the new `toHex` would reorder allocation for every existing puzzle with a fully green suite.
+
+- [ ] **Step 0: Capture the golden literals from the pre-change build**
+
+Adding test files does not change any behavior, so goldens captured with these new test files present are still baseline goldens — provided no source under `src/` or `include/` has been touched yet. That is the whole discipline of this step.
+
+1. Create `tests/test_hash_utils.cpp` and register it (Step 2's CMake line), containing only the two capture cases below with deliberately wrong placeholders.
+2. Append the permutation capture case below to `tests/test_permutation.cpp`, also with a placeholder.
+3. Build and run:
+   ```bash
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUZZPOOL_BUILD_TESTS=ON
+   cmake --build build --parallel "${BUILD_JOBS:-1}"
+   ctest --test-dir build --output-on-failure --tests-regex "hash_utils|permutation"
+   ```
+4. Each case fails and Catch2 prints `with expansion: "<actual>" == "CAPTURE_ME"`. Substitute the printed `<actual>` values into the literals, re-run until green, and commit that state **before** editing any source file.
+
+```cpp
+// CAPTURE (pre-change): the frozen Feistel round digest. Note the PRE-RENAME name —
+// Step 6 renames this call site to keyedDigestHex and the literal must not move.
+TEST_CASE("CAPTURE frozen round digest", "[capture]") {
+    CHECK(hmacSha256Hex("round-key-0", "12345") == "CAPTURE_ME");
+}
+
+// CAPTURE (pre-change): sha256Hex of the empty string exercises no interesting path on
+// its own, but "abc" and "" are the two published NIST FIPS 180-4 examples, so a
+// mismatch here means the capture procedure itself is wrong rather than the code.
+TEST_CASE("CAPTURE sha256Hex", "[capture]") {
+    CHECK(sha256Hex("abc") == "CAPTURE_ME");
+    CHECK(sha256Hex("") == "CAPTURE_ME");
+}
+```
+
+```cpp
+// CAPTURE (pre-change), appended to tests/test_permutation.cpp: this is the assertion
+// that actually speaks for ADR-4. Existing coverage only asserts self-consistency
+// (test_permutation.cpp:25 calls the function twice and compares), which cannot detect
+// a change in the round function's output bytes.
+TEST_CASE("CAPTURE feistel golden", "[capture]") {
+    const cpp_int n("999983");
+    const std::string key = "golden_seed_v1";
+    for (int i : {0, 1, 42, 4242, 999982}) {
+        INFO("index " << i);
+        CHECK(permuteIndexFeistel(cpp_int(i), n, key).str() == "CAPTURE_ME");
+    }
+}
+```
+
+Expected after substitution: both files green against the untouched `src/`. Record the five permutation values and the three digest values in the implementation report — they are the evidence AC4 rests on.
 
 - [ ] **Step 1: Write the failing primitive tests first**
 
-`keyedDigestHex` does not exist yet and `hmacSha256Hex` is not an HMAC, so both halves fail for the right reason.
+`keyedDigestHex`, `toHex` and `constantTimeEquals` do not exist yet and `hmacSha256Hex` is not an HMAC, so both halves fail for the right reason. The two capture cases from Step 0 are rewritten here into their permanent form — same literals, honest names.
 
 ```cpp
 #include <puzzpool/hash_utils.hpp>
@@ -140,11 +221,35 @@ TEST_CASE("hmacSha256Hex hashes over-long keys per RFC 2104", "[hash][hmac]") {
           "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
 }
 
-// AC4: the permutation digest is frozen. This value is the current output of the
-// pre-rename helper and must never change — ADR-4 allocation determinism depends on it.
+// AC4: the permutation digest is frozen. This literal was captured from the pre-change
+// binary in Step 0 and must never change — ADR-4 allocation determinism depends on it.
+// It is deliberately NOT written as `== sha256Hex(key + "\x1f" + msg)`: that expression
+// moves together with the toHex refactor in Step 5, so it could not detect a change.
 TEST_CASE("keyedDigestHex output is byte-for-byte frozen", "[hash][permutation]") {
-    CHECK(keyedDigestHex("round-key-0", "12345") ==
-          sha256Hex(std::string("round-key-0") + "\x1f" + "12345"));
+    CHECK(keyedDigestHex("round-key-0", "12345") == "<Step 0 capture>");
+}
+
+// Published NIST FIPS 180-4 vectors. These pin sha256Hex to values that exist outside
+// this repository, so the whole hex-formatting path is anchored to something the
+// refactor cannot move.
+TEST_CASE("sha256Hex matches the published NIST vectors", "[hash]") {
+    CHECK(sha256Hex("abc") ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256Hex("") ==
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}
+
+// The specific regression M1 is about: the classic bug when hand-rolling toHex is
+// dropping the per-byte zero padding, which shortens the digest string, changes
+// hexToInt, and silently reorders allocation. Testing toHex directly pins the padding
+// on inputs whose expected output needs no digest computation at all — strictly
+// stronger than hunting for a digest that happens to contain a 0x0? byte.
+TEST_CASE("toHex zero-pads every byte to two lowercase digits", "[hash][hex]") {
+    CHECK(toHex(std::string("\x00\x01\x0f", 3)) == "00010f");
+    CHECK(toHex(std::string("\xa0\xff\x10", 3)) == "a0ff10");
+    CHECK(toHex(std::string("\x00", 1)) == "00");
+    CHECK(toHex("") == "");
+    CHECK(toHex(std::string(32, '\0')).size() == 64);
 }
 
 // Sensitivity: proves the rename did not alias the two, i.e. that the HMAC probe
@@ -188,6 +293,12 @@ std::string sha256Hex(const std::string& input);
 
 /// Raw 32-byte SHA-256 digest. Used to build HMAC without a second platform branch.
 std::string sha256Raw(std::string_view input);
+
+/// Lowercase hex of arbitrary bytes, two zero-padded digits per byte. Declared here
+/// rather than kept file-local so the zero-padding is directly testable: dropping it
+/// would change every digest string in the process, including the frozen Feistel round
+/// function, and reorder allocation for every existing puzzle (ADR-4).
+std::string toHex(std::string_view bytes);
 
 /// Keyed digest: sha256(key || 0x1f || msg).
 ///
@@ -254,7 +365,43 @@ bool constantTimeEquals(std::string_view a, std::string_view b) {
 }
 ```
 
-Factor the existing hex loop in `sha256Hex()` into a file-local `toHex(std::string_view)` and have `sha256Hex()` return `toHex(sha256Raw(input))`, so there is one hex formatter. Keep `-Wconversion` clean — every `unsigned char` narrowing above is explicit.
+Move the existing hex loop out of `sha256Hex()` into `toHex(std::string_view)` — declared in the header per Step 4, not file-local — and have `sha256Hex()` return `toHex(sha256Raw(input))`, so there is one hex formatter. The safest implementation is to keep the current `std::ostringstream` body verbatim, because `src/hash_utils.cpp:29-33` already gets the padding right (a per-iteration `std::setw(2)` under a sticky `std::setfill('0')`, which is the ordering people get wrong):
+
+```cpp
+std::string toHex(std::string_view bytes) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned char b : bytes) {
+        oss << std::setw(2) << static_cast<unsigned>(b);
+    }
+    return oss.str();
+}
+```
+
+Keep `-Wconversion` clean — every `unsigned char` narrowing above is explicit.
+
+- [ ] **Step 5a: Promote the captured permutation vector to its permanent form**
+
+Rewrite the Step 0 capture case in `tests/test_permutation.cpp` with its real literals and an honest name. This is the assertion that speaks for ADR-4 across versions; the existing determinism case at `tests/test_permutation.cpp:25` only compares two calls in the same binary and cannot detect a changed round function.
+
+```cpp
+// AC4 / ADR-4: allocation order for every existing puzzle depends on these exact
+// outputs. Captured from the pre-change build; a change here is a data migration,
+// not a test update.
+TEST_CASE("permuteIndexFeistel matches its frozen golden vector", "[permutation][feistel][golden]") {
+    const cpp_int n("999983");
+    const std::string key = "golden_seed_v1";
+    const std::vector<std::pair<int, std::string>> golden{
+        {0, "<Step 0 capture>"},      {1, "<Step 0 capture>"},
+        {42, "<Step 0 capture>"},     {4242, "<Step 0 capture>"},
+        {999982, "<Step 0 capture>"},
+    };
+    for (const auto& [index, expected] : golden) {
+        INFO("index " << index);
+        CHECK(permuteIndexFeistel(cpp_int(index), n, key).str() == expected);
+    }
+}
+```
 
 - [ ] **Step 6: Rename the single permutation call site**
 
@@ -266,13 +413,19 @@ return hexToInt(keyedDigestHex(roundKey, bigToDec(right))) & mask;
 
 Run: `ctest --test-dir build --output-on-failure --tests-regex "hash_utils|permutation"`
 
-Expected: the RFC 4231 vectors pass, the frozen-digest and difference checks pass, and the pre-existing `test_permutation` determinism suite is unchanged and green — the proof that AC4 held.
+Expected: the RFC 4231 vectors pass, the NIST `sha256Hex` vectors pass, the `toHex` padding cases pass, the frozen `keyedDigestHex` literal and the golden `permuteIndexFeistel` vector both still match the Step 0 captures, and the pre-existing `test_permutation` suite is unchanged and green. Those last two are the proof that AC4 held; the rest of `test_permutation` cannot supply it.
+
+- [ ] **Step 7a: Prove the golden vector can fail (sensitivity)**
+
+An assertion that guards against a regression is worth nothing until it has been seen to fail. Temporarily break the padding — change `std::setw(2)` to `std::setw(1)` in `toHex` — and re-run Step 7.
+
+Expected: **`test_hash_utils` and `test_permutation` both fail**, with the `toHex` padding case, the frozen `keyedDigestHex` literal, and the golden Feistel vector all reporting mismatches. If the golden vector still passes, the vector is not covering the round function and Step 0 must be redone. Revert the deliberate break and confirm green before committing; record both runs in the implementation report.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add include/puzzpool/hash_utils.hpp src/hash_utils.cpp src/permutation.cpp \
-        tests/test_hash_utils.cpp tests/CMakeLists.txt
+        tests/test_hash_utils.cpp tests/test_permutation.cpp tests/CMakeLists.txt
 git commit -m "feat: add real HMAC-SHA-256 and freeze the permutation keyed digest"
 ```
 
@@ -392,9 +545,11 @@ Expected: compilation fails on the missing `Config` members and `admin_auth.hpp`
     cfg.githubOauthClientId     = getEnvOr("GITHUB_OAUTH_CLIENT_ID", "");
     cfg.githubOauthClientSecret = getEnvOr("GITHUB_OAUTH_CLIENT_SECRET", "");
     cfg.publicBaseUrl           = trimTrailingSlash(getEnvOr("PUBLIC_BASE_URL", ""));
-    cfg.sessionTtlMinutes       = std::max(1, getEnvInt("SESSION_TTL_MINUTES", 720));
+    cfg.sessionTtlMinutes       = std::clamp(getEnvInt("SESSION_TTL_MINUTES", 720), 1, 43'200);
     cfg.adminGithubUsers        = parseAdminGithubUsers(getEnvOr("ADMIN_GITHUB_USERS", ""));
 ```
+
+The upper clamp of 43 200 minutes (30 days) is deliberate (review finding O4): sessions are stateless and cannot be revoked individually, so a typo like `SESSION_TTL_MINUTES=7200000` would otherwise mint multi-year credentials whose only revocation lever is a secret rotation. Add a `test_config` case asserting that an absurd value clamps to 43 200 and that a negative one clamps to 1.
 
 `parseAdminGithubUsers()` splits on `,`, applies the existing `trim()` from `env.hpp`, lowercases with an explicit `static_cast<char>(std::tolower(static_cast<unsigned char>(ch)))`, and drops empties. Place it in `admin_auth.cpp` and declare it in `admin_auth.hpp` so `config.cpp` does not grow auth logic.
 
@@ -426,7 +581,7 @@ std::vector<std::string> startupAuthDiagnostics(const Config& cfg) {
 }
 ```
 
-The allow-list is read from `cfg` on each call and never cached, which is what makes AC7's "removal takes effect immediately" true by construction.
+The allow-list is read from `cfg` on each call and never cached, which is what makes AC7's "removal takes effect immediately" true — but be precise about what "immediately" means here (review finding M3). `src/main.cpp:16` calls `loadConfigFromEnv()` exactly once per process and nothing re-reads the environment afterwards, so **editing `ADMIN_GITHUB_USERS` has no effect until the service restarts.** What the design does give you, and it is the part that matters operationally, is that no authorization decision is cached anywhere: once the process holds the new configuration the change applies on the very next request, with no cookie reissue, no session store to purge, and no waiting for outstanding sessions to expire. The revocation procedure is therefore *remove the login, then restart* — and every place this plan documents it (the Task 4 test comment, `docs/security.md`, ADR-6) must say so. Making the original "no restart" claim true would take a `Config` reload path; that is new scope and does not belong in slice A.
 
 - [ ] **Step 6: Register the sources and re-run**
 
@@ -503,12 +658,46 @@ TEST_CASE("expiry is absolute and checked against the supplied clock", "[session
 }
 
 TEST_CASE("malformed tokens are rejected without throwing", "[session][security]") {
-    for (const std::string bad : {"", "v1", "v1.a.b.c", "v1.a.b.c.d.e",
-                                  "v2.YWxpY2U.MQ.1770000600.deadbeef",
-                                  "v1.!!!.MQ.1770000600.deadbeef",
-                                  "v1.YWxpY2U.MQ.not-a-number.deadbeef"}) {
+    for (const std::string bad : {"", "v1", "v1.session.a.b.c", "v1.session.a.b.c.d.e",
+                                  "v2.session.YWxpY2U.MQ.1770000600.deadbeef",
+                                  "v1.session.!!!.MQ.1770000600.deadbeef",
+                                  "v1.session.YWxpY2U.MQ.not-a-number.deadbeef"}) {
+        INFO(bad);
         CHECK(verifySessionToken(kSecret, bad, kNow).error == SessionError::Malformed);
     }
+}
+
+// S1 — domain separation. Both blob types are signed with the same key, so without the
+// purpose label inside the signed input they would be byte-compatible and either would
+// verify as the other. Both directions, because one-directional separation is not
+// separation.
+TEST_CASE("a state token never verifies as a session token", "[session][security]") {
+    const auto state = issueStateToken(kSecret, "the-nonce", kNow + 600);
+    CHECK(verifySessionToken(kSecret, state, kNow).error == SessionError::WrongPurpose);
+}
+
+TEST_CASE("a session token never verifies as a state token", "[session][security]") {
+    const auto session = issueSessionToken(kSecret, {"alice", "1"}, kNow + 600);
+    CHECK(verifyStateToken(kSecret, session, kNow).error == SessionError::WrongPurpose);
+}
+
+// Sensitivity for the two cases above: each blob still verifies under its own purpose,
+// so WrongPurpose is detecting the label and not a blanket rejection.
+TEST_CASE("each token still verifies under its own purpose", "[session]") {
+    const auto state = issueStateToken(kSecret, "the-nonce", kNow + 600);
+    const auto verified = verifyStateToken(kSecret, state, kNow);
+    REQUIRE(verified.error == SessionError::None);
+    CHECK(verified.identity.login == "the-nonce");
+    CHECK(verifySessionToken(kSecret, issueSessionToken(kSecret, {"alice", "1"}, kNow + 600),
+                             kNow).error == SessionError::None);
+}
+
+// The purpose is covered by the MAC, not merely compared after the fact: rewriting the
+// label in a valid state blob must fail on the signature, before any purpose check.
+TEST_CASE("the purpose label is inside the MAC", "[session][security]") {
+    auto state = issueStateToken(kSecret, "the-nonce", kNow + 600);
+    const auto relabelled = "v1.session" + state.substr(state.find(".state.") + 6);
+    CHECK(verifySessionToken(kSecret, relabelled, kNow).error == SessionError::BadSignature);
 }
 
 TEST_CASE("an empty signing secret never verifies anything (AC13)", "[session][security]") {
@@ -543,7 +732,9 @@ TEST_CASE("secureRandomBytes returns distinct full-length buffers", "[session][r
 }
 
 TEST_CASE("base64url round-trips binary and omits padding", "[session][base64]") {
-    const std::string raw("\x00\xff\x10binary", 9);
+    // Adjacent literals, not "\x00\xff\x10binary": C++ hex escapes are maximal-munch,
+    // so \x10b would parse as one escape with value 0x10b and not fit in a char.
+    const std::string raw("\x00\xff\x10" "binary", 9);
     const auto encoded = base64UrlEncode(raw);
     CHECK(encoded.find('=') == std::string::npos);
     CHECK(encoded.find('+') == std::string::npos);
@@ -597,52 +788,88 @@ There is deliberately no `std::mt19937` or `std::random_device` fallback: failin
 
 - [ ] **Step 4: Implement the session token**
 
+One signed-blob implementation, two purposes, and two named wrappers so a call site cannot forget which it is minting.
+
+```cpp
+// session.hpp
+enum class TokenPurpose { Session, State };
+enum class SessionError { None, Malformed, WrongPurpose, BadSignature, Expired };
+```
+
 ```cpp
 namespace {
-std::string signingInput(const SessionIdentity& id, int64_t expiresAt) {
-    return "v1." + base64UrlEncode(id.login) + "." + base64UrlEncode(id.githubId) + "."
-         + std::to_string(expiresAt);
-}
+
+constexpr std::string_view purposeLabel(TokenPurpose p) {
+    return p == TokenPurpose::Session ? "session" : "state";
 }
 
-std::string issueSessionToken(const std::string& secret,
-                              const SessionIdentity& id,
-                              int64_t expiresAtUnix) {
-    const std::string payload = signingInput(id, expiresAtUnix);
+std::string signingInput(TokenPurpose purpose, const SessionIdentity& id, int64_t expiresAt) {
+    return std::string("v1.") + std::string(purposeLabel(purpose)) + "."
+         + base64UrlEncode(id.login) + "." + base64UrlEncode(id.githubId) + "."
+         + std::to_string(expiresAt);
+}
+
+std::string issueSignedBlob(const std::string& secret, TokenPurpose purpose,
+                            const SessionIdentity& id, int64_t expiresAtUnix) {
+    const std::string payload = signingInput(purpose, id, expiresAtUnix);
     return payload + "." + hmacSha256Hex(secret, payload);
 }
 
-SessionVerification verifySessionToken(const std::string& secret,
-                                       std::string_view token,
-                                       int64_t nowUnix) {
+SessionVerification verifySignedBlob(const std::string& secret, TokenPurpose expected,
+                                     std::string_view token, int64_t nowUnix) {
     SessionVerification out;
     const auto parts = split(token, '.');
-    if (parts.size() != 5 || parts[0] != "v1") { out.error = SessionError::Malformed; return out; }
+    if (parts.size() != 6 || parts[0] != "v1") { out.error = SessionError::Malformed; return out; }
 
-    const auto login = base64UrlDecode(parts[1]);
-    const auto id    = base64UrlDecode(parts[2]);
+    const auto subject = base64UrlDecode(parts[2]);
+    const auto id      = base64UrlDecode(parts[3]);
     int64_t expiresAt = 0;
-    if (!login || !id || !parseInt64(parts[3], expiresAt)) {
+    if (!subject || !id || !parseInt64(parts[4], expiresAt)) {
         out.error = SessionError::Malformed;
         return out;
     }
 
-    const std::string payload = concatFirstFour(parts);
+    const std::string payload = concatFirstFive(parts);
     if (secret.empty() ||
-        !constantTimeEquals(parts[4], hmacSha256Hex(secret, payload))) {
+        !constantTimeEquals(parts[5], hmacSha256Hex(secret, payload))) {
         out.error = SessionError::BadSignature;
         return out;
     }
+    if (parts[1] != purposeLabel(expected)) { out.error = SessionError::WrongPurpose; return out; }
     if (nowUnix > expiresAt) { out.error = SessionError::Expired; return out; }
 
     out.error = SessionError::None;
-    out.identity = {*login, *id};
+    out.identity = {*subject, *id};
     out.expiresAt = expiresAt;
     return out;
 }
+
+} // namespace
+
+std::string issueSessionToken(const std::string& secret, const SessionIdentity& id,
+                              int64_t expiresAtUnix) {
+    return issueSignedBlob(secret, TokenPurpose::Session, id, expiresAtUnix);
+}
+
+std::string issueStateToken(const std::string& secret, const std::string& nonce,
+                            int64_t expiresAtUnix) {
+    return issueSignedBlob(secret, TokenPurpose::State, {nonce, ""}, expiresAtUnix);
+}
+
+SessionVerification verifySessionToken(const std::string& secret, std::string_view token,
+                                       int64_t nowUnix) {
+    return verifySignedBlob(secret, TokenPurpose::Session, token, nowUnix);
+}
+
+SessionVerification verifyStateToken(const std::string& secret, std::string_view token,
+                                     int64_t nowUnix) {
+    return verifySignedBlob(secret, TokenPurpose::State, token, nowUnix);
+}
 ```
 
-Order matters: shape → signature → expiry. Never read the identity out of an unverified token. The same `issueSessionToken`/`verifySessionToken` pair signs the OAuth state nonce, with the nonce in the `login` field and an empty id — one signed-blob format, one place to get it right.
+Order matters: shape → signature → purpose → expiry. Never read the identity out of an unverified token, and never let the purpose check stand in for the signature — checking the label first would answer "is this the right kind of blob?" about bytes nobody has authenticated yet. Verifying the signature first also means a forged label fails as `BadSignature`, which is what the "purpose is inside the MAC" test above asserts.
+
+The state blob reuses the same format with the nonce in the subject field and an empty id (review finding S1): one signed-blob format, one place to get it right, and a label that keeps the two from being interchangeable.
 
 - [ ] **Step 5: Implement `cookieValue()`**
 
@@ -764,7 +991,10 @@ TEST_CASE("a valid cookie for a non-allow-listed login is denied", "[admin][auth
     CHECK(d.statusCode == 401);
 }
 
-// AC7 — removal takes effect immediately, with no cookie reissue and no restart.
+// AC7 — no authorization decision is cached: once the process holds the new allow-list,
+// an already-issued cookie stops working on the very next request, with no cookie
+// reissue and no session store to purge. Note what this does NOT say: main.cpp:16 loads
+// Config once per process, so editing ADMIN_GITHUB_USERS still requires a restart.
 TEST_CASE("removing a login from the allow-list denies the existing cookie", "[admin][authz]") {
     Config cfg = authCfg();
     const auto token = tokenFor(cfg, "alice");
@@ -809,6 +1039,14 @@ TEST_CASE("a cookie-authorized POST needs an affirmative same-origin signal", "[
 
     AdminRequestView crossFetch = bare;  crossFetch.secFetchSite = "cross-site";
     CHECK_FALSE(authorizeAdmin(cfg, crossFetch, kNow).allowed);
+
+    // O2: an explicit cross-site signal is not overridable by a matching Origin.
+    AdminRequestView crossFetchWithOrigin = crossFetch;
+    crossFetchWithOrigin.origin = "https://puzzle.b58.de";
+    CHECK_FALSE(authorizeAdmin(cfg, crossFetchWithOrigin, kNow).allowed);
+
+    AdminRequestView sameSite = bare;  sameSite.secFetchSite = "same-site";
+    CHECK_FALSE(authorizeAdmin(cfg, sameSite, kNow).allowed);
 
     // Positive controls — the check accepts genuine same-origin requests.
     CHECK(authorizeAdmin(cfg, cookiePost(token), kNow).allowed);
@@ -915,7 +1153,12 @@ AdminAuthDecision authorizeAdmin(const Config& cfg, const AdminRequestView& req,
 }
 
 bool hasSameOriginProof(const Config& cfg, const AdminRequestView& req) {
-    if (req.secFetchSite == "same-origin" || req.secFetchSite == "none") return true;
+    if (!req.secFetchSite.empty()) {
+        // An explicit signal is definitive in both directions (review finding O2): a
+        // request that already told us it is cross-site does not get to overrule itself
+        // with an Origin header it also controls.
+        return req.secFetchSite == "same-origin" || req.secFetchSite == "none";
+    }
     if (!req.origin.empty() && !cfg.publicBaseUrl.empty()) {
         return originOf(req.origin) == originOf(cfg.publicBaseUrl);
     }
@@ -955,9 +1198,20 @@ std::optional<crow::response> adminGuard(const Config& cfg, const crow::request&
 
 Add two adapter-level cases to `tests/test_admin_auth.cpp` — one denied (asserting 401, the JSON body, and that the body contains neither header value) and one allowed (`std::nullopt`) — built with `crow::request::add_header()`.
 
-- [ ] **Step 6: Rewire `main.cpp`**
+- [ ] **Step 6: Rewire `main.cpp` — all six routes, named**
 
-Delete the lambda at `src/main.cpp:73-82` and call the shared guard, leaving all six route bodies otherwise identical:
+Delete the lambda at `src/main.cpp:73-82` and call the shared guard. This is the one part of slice A that is structurally untestable from Catch2: `main.cpp` is outside `puzzpool_core` (`CMakeLists.txt:41-61`, `tests/CMakeLists.txt:6` links `puzzpool_core` only), and the six route bodies are near-identical copies, so a missed edit leaves a route unguarded while every test binary stays green. `test_handler_validation` will not catch it either — it calls `PoolService` methods directly, below the guard. Hence the explicit table, and hence Step 6a.
+
+| Route | Method | `src/main.cpp` | Handler |
+|---|---|---|---|
+| `/api/v1/admin/activate-puzzle` | POST | `:84-88` | `handleActivatePuzzle(req)` |
+| `/api/v1/admin/set-puzzle` | POST | `:90-94` | `handleSetPuzzle(req)` |
+| `/api/v1/admin/set-test-chunk` | POST | `:96-100` | `handleSetTestChunk(req)` |
+| `/api/v1/admin/puzzles` | GET | `:102-106` | `handleAdminPuzzles()` |
+| `/api/v1/admin/reclaim` | POST | `:108-112` | `handleAdminReclaim()` |
+| `/api/v1/admin/import-ranges` | POST | `:114-118` | `handleImportRanges(req)` |
+
+Every one of the six gets the same first line; nothing else in the bodies changes:
 
 ```cpp
 #include <puzzpool/admin_guard.hpp>
@@ -968,6 +1222,39 @@ Delete the lambda at `src/main.cpp:73-82` and call the shared guard, leaving all
             return service.handleActivatePuzzle(req);
         });
 ```
+
+Before moving on, confirm mechanically that no route kept the old lambda and that the lambda is gone:
+
+```bash
+grep -c 'adminGuard(cfg, req)' src/main.cpp     # expect 6
+grep -n 'cfg.adminToken.empty()' src/main.cpp   # expect no output
+```
+
+`/api/v1/admin/activate-puzzle` deserves particular care: `deploy/nginx.conf:37-46` deliberately publishes it to the internet with no IP restriction, so a miss there is a publicly reachable unauthenticated mutation — precisely the hole this issue exists to close.
+
+- [ ] **Step 6a: Commit a six-route regression script (review finding M2)**
+
+The grep above is a one-time check; this is the regression that survives. Add `tests/test_admin_routes_guarded.sh`, following the shape of the existing `tests/test_check_node_version_age.sh` (plain bash, `PASS`/`FAIL` counters, non-zero exit on failure, no CTest registration — it is run explicitly like the node-age guard is).
+
+The script builds the server, then runs the same loop twice over all six routes:
+
+```bash
+ADMIN_ROUTES=(
+    "POST /api/v1/admin/activate-puzzle"
+    "POST /api/v1/admin/set-puzzle"
+    "POST /api/v1/admin/set-test-chunk"
+    "GET  /api/v1/admin/puzzles"
+    "POST /api/v1/admin/reclaim"
+    "POST /api/v1/admin/import-ranges"
+)
+```
+
+- **Phase 1 — fail closed (AC9).** Start the server with `ADMIN_TOKEN`, `ADMIN_GITHUB_USERS`, and `SESSION_SIGNING_SECRET` all unset. Every route in the list must answer `401`. A route that answers anything else — including `400` for a missing body, which would mean the request reached the handler — is a failure.
+- **Phase 2 — sensitivity, and AC12.** Restart with `ADMIN_TOKEN` set to a throwaway value and repeat with `-H "X-Admin-Token: $ADMIN_TOKEN"`. Every route must answer something **other than `401`**. This is the control that makes phase 1 meaningful: without it, a server that 401s unconditionally — or that failed to start at all — would pass phase 1. Assert on "not 401" rather than on `200`, because most of these routes legitimately return `400` for an empty body; the guard, not the handler, is what is under test.
+
+Use a throwaway `ADMIN_TOKEN` value generated in the script, a temporary `DB_PATH` under `mktemp -d`, and a non-default port. Never a real credential, and remove the temporary database on exit via `trap`.
+
+This is what replaces the previous AC8 matrix row, which claimed only that "the guard tests exist at all" — true, and silent about whether `main.cpp` calls the guard on each route.
 
 And print the diagnostics beside the existing startup lines at `src/main.cpp:138-140`:
 
@@ -983,12 +1270,23 @@ Run: `ctest --test-dir build --output-on-failure --tests-regex "admin_auth|handl
 
 Expected: the full matrix passes and `test_handler_validation`'s admin-handler cases are unchanged — they call `PoolService` methods directly, below the guard, which is why extraction does not disturb them.
 
+Run: `bash tests/test_admin_routes_guarded.sh`
+
+Expected: 12 checks pass — six routes denied with no mechanism configured, six admitted past the guard with `X-Admin-Token`.
+
+- [ ] **Step 7a: Prove the six-route script can fail (sensitivity)**
+
+Temporarily delete the `adminGuard` line from **one** route body — use `/api/v1/admin/reclaim`, not the one the old smoke test happened to cover — rebuild, and re-run the script.
+
+Expected: **phase 1 fails on exactly that route** and the script exits non-zero. If it still passes, the loop is not reaching that route and the script is not evidence for AC8. Restore the line, rebuild, confirm green, and record both runs in the implementation report.
+
 - [ ] **Step 8: Commit**
 
 ```bash
 git add include/puzzpool/admin_auth.hpp src/admin_auth.cpp \
         include/puzzpool/admin_guard.hpp src/admin_guard.cpp \
-        src/main.cpp tests/test_admin_auth.cpp tests/CMakeLists.txt CMakeLists.txt
+        src/main.cpp tests/test_admin_auth.cpp tests/test_admin_routes_guarded.sh \
+        tests/CMakeLists.txt CMakeLists.txt
 git commit -m "feat: extract a fail-closed admin guard into puzzpool_core"
 ```
 
@@ -1134,13 +1432,28 @@ Config oauthCfg() {
     return cfg;
 }
 
-std::string setCookieNamed(const crow::response& r, const std::string& name);  // "" when absent
+// Returns the first Set-Cookie header whose cookie name is `name`, or "" when absent.
+//
+// This body is NOT mechanical and must not use crow::response::get_header_value()
+// (review finding S2): that returns only the FIRST match, and the callback deliberately
+// emits two Set-Cookie headers — one clearing pp_oauth_state, one issuing pp_session.
+// Using it would make roughly half of the assertions below pass or fail for the wrong
+// reason. crow::response::headers is a ci_map, i.e. std::unordered_multimap
+// (third_party/crow/include/crow/ci_map.h:42), so scan equal_range.
+std::string setCookieNamed(crow::response& r, const std::string& name) {
+    const std::string prefix = name + "=";
+    const auto range = r.headers.equal_range("Set-Cookie");
+    for (auto it = range.first; it != range.second; ++it) {
+        if (it->second.rfind(prefix, 0) == 0) return it->second;
+    }
+    return "";
+}
 
 } // namespace
 
 // ── AC13 / AC26: unconfigured means 503, never a silently-unsigned cookie ──
 
-TEST_CASE("every auth route returns 503 without SESSION_SIGNING_SECRET", "[auth][config]") {
+TEST_CASE("the auth routes return 503 without SESSION_SIGNING_SECRET", "[auth][config]") {
     Config cfg = oauthCfg();
     cfg.sessionSigningSecret.clear();
     FakeGitHub gh;
@@ -1148,8 +1461,23 @@ TEST_CASE("every auth route returns 503 without SESSION_SIGNING_SECRET", "[auth]
 
     CHECK(svc.handleGithubLogin(crow::request{}).code == 503);
     CHECK(svc.handleGithubCallback(crow::request{}).code == 503);
-    CHECK(svc.handleLogout(crow::request{}).code == 503);
     CHECK(svc.handleAuthMe(crow::request{}).code == 503);
+    // handleLogout is deliberately excluded (review finding O5): clearing a cookie needs
+    // no signing key, and 503 here would strand a stale cookie in the browser exactly
+    // when the secret has been rotated away. It still enforces same-origin, so a bare
+    // request with no origin proof is 403, never 503 — covered below.
+    CHECK(svc.handleLogout(crow::request{}).code == 403);
+}
+
+// Sensitivity for the three 503s above: the same probes must not return 503 once the
+// secret is present, so the assertion is detecting configuration and not a route that
+// is 503 unconditionally.
+TEST_CASE("the same probes leave 503 behind once the secret is set", "[auth][config]") {
+    FakeGitHub gh;
+    AuthService svc{oauthCfg(), gh.client(), [] { return kNow; }, fixedNonce};
+    CHECK(svc.handleGithubLogin(crow::request{}).code != 503);
+    CHECK(svc.handleGithubCallback(crow::request{}).code != 503);
+    CHECK(svc.handleAuthMe(crow::request{}).code != 503);
 }
 
 TEST_CASE("login returns 503 when the OAuth app is not configured", "[auth][config]") {
@@ -1162,8 +1490,15 @@ TEST_CASE("login returns 503 when the OAuth app is not configured", "[auth][conf
 
 // ── AC1: unguessable, browser-bound, single-use state ──
 
+// NOTE on `auto r` rather than `const auto r` throughout this file (review finding S2):
+// crow::response::get_header_value is NOT const (third_party/crow/include/crow/
+// http_response.h:76, unlike crow::request's at http_request.h:81), and setCookieNamed
+// above takes a non-const reference. A `const auto r` local does not compile here, and
+// a temporary cannot bind to setCookieNamed's parameter — so every response under test
+// is a named non-const local.
+
 TEST_CASE("login redirects to GitHub and binds the state to a cookie", "[auth][oauth]") {
-    const auto r = loginService().handleGithubLogin(crow::request{});
+    auto r = loginService().handleGithubLogin(crow::request{});
     REQUIRE(r.code == 302);
     const std::string location = r.get_header_value("Location");
     CHECK(location.rfind("https://github.com/login/oauth/authorize?", 0) == 0);
@@ -1175,12 +1510,16 @@ TEST_CASE("login redirects to GitHub and binds the state to a cookie", "[auth][o
     CHECK(stateCookie.find("HttpOnly") != std::string::npos);
     CHECK(stateCookie.find("Secure") != std::string::npos);
     CHECK(stateCookie.find("SameSite=Lax") != std::string::npos);
+    // Path is asserted here as well as on the clearing header (S3), because the two
+    // must match for the clear to have any effect at all.
+    CHECK(stateCookie.find("Path=/api/v1/auth") != std::string::npos);
     // The state in the URL must be bound to, and not equal to, the signed cookie blob.
     CHECK(stateCookie.find(stateParamOf(location)) != std::string::npos);
+    CHECK(cookieTokenOf(stateCookie) != stateParamOf(location));
 }
 
 TEST_CASE("the login URL never carries the client secret (AC22)", "[auth][security]") {
-    const auto r = loginService().handleGithubLogin(crow::request{});
+    auto r = loginService().handleGithubLogin(crow::request{});
     CHECK(r.get_header_value("Location").find("client-secret") == std::string::npos);
     CHECK(r.body.find("client-secret") == std::string::npos);
 }
@@ -1196,7 +1535,7 @@ TEST_CASE("two logins produce different state values", "[auth][oauth]") {
 TEST_CASE("a valid callback issues a hardened session cookie", "[auth][oauth]") {
     FakeGitHub gh;
     auto svc = callbackService(gh);
-    const auto r = svc.handleGithubCallback(callbackRequest("the-code", validState()));
+    auto r = svc.handleGithubCallback(callbackRequest("the-code", validState()));
 
     REQUIRE(r.code == 302);
     CHECK(r.get_header_value("Location") == "/");
@@ -1228,10 +1567,22 @@ TEST_CASE("the code and secret travel in the POST body, not the URL (AC2)", "[au
     CHECK(joined(gh.lastGetHeaders).find("Authorization: Bearer gho_fake") != std::string::npos);
 }
 
+// AC1 single-use. A clearing Set-Cookie removes nothing unless its name, Path and Domain
+// all match the issuing header (RFC 6265) — so `Max-Age=0` alone is not evidence that
+// the cookie is gone (review finding S3). The state cookie is issued with
+// Path=/api/v1/auth, so a clearing header emitted with Path=/ or with no Path at all
+// leaves the original in the browser and the state blob stays replayable for its full
+// 600-second window, with this assertion still green. Assert the whole attribute set.
 TEST_CASE("the state cookie is cleared on every callback, making it single-use", "[auth][oauth]") {
     FakeGitHub gh;
-    const auto r = callbackService(gh).handleGithubCallback(callbackRequest("c", validState()));
-    CHECK(setCookieNamed(r, "pp_oauth_state").find("Max-Age=0") != std::string::npos);
+    auto r = callbackService(gh).handleGithubCallback(callbackRequest("c", validState()));
+    const std::string cleared = setCookieNamed(r, "pp_oauth_state");
+    REQUIRE_FALSE(cleared.empty());
+    CHECK(cleared.find("Max-Age=0") != std::string::npos);
+    CHECK(cleared.find("Path=/api/v1/auth") != std::string::npos);
+    CHECK(cleared.find("HttpOnly") != std::string::npos);
+    CHECK(cleared.find("Secure") != std::string::npos);
+    CHECK(cookieTokenOf(cleared).empty());
 }
 
 TEST_CASE("callbacks that fail state validation issue no session", "[auth][oauth][security]") {
@@ -1244,11 +1595,15 @@ TEST_CASE("callbacks that fail state validation issue no session", "[auth][oauth
              {"missing code",      callbackRequest("", validState())},
              {"expired state",     expiredStateRequest()},
              {"tampered state cookie", tamperedStateRequest()},
+             {"session blob as state", sessionBlobAsStateRequest()},   // S1
          }) {
         INFO(c.name);
-        const auto r = callbackService(gh).handleGithubCallback(c.req);
+        auto r = callbackService(gh).handleGithubCallback(c.req);
         CHECK(setCookieNamed(r, "pp_session").empty());
         CHECK(r.get_header_value("Location").find("auth=error") != std::string::npos);
+        // The state cookie is cleared even on the failure paths — that is what stops a
+        // failed attempt from leaving a reusable state blob behind.
+        CHECK(setCookieNamed(r, "pp_oauth_state").find("Path=/api/v1/auth") != std::string::npos);
     }
 }
 
@@ -1259,26 +1614,36 @@ TEST_CASE("provider failures issue no session", "[auth][oauth]") {
                           HttpResult{0, "", true}}) {
         FakeGitHub gh;
         gh.tokenResponse = response;
-        const auto r = callbackService(gh).handleGithubCallback(
+        auto r = callbackService(gh).handleGithubCallback(
             callbackRequest("c", validState()));
         CHECK(setCookieNamed(r, "pp_session").empty());
     }
 
     FakeGitHub badUser;
     badUser.userResponse = {403, R"({"message":"Forbidden"})", false};
-    CHECK(setCookieNamed(callbackService(badUser).handleGithubCallback(
-              callbackRequest("c", validState())), "pp_session").empty());
+    auto forbidden = callbackService(badUser).handleGithubCallback(
+        callbackRequest("c", validState()));
+    CHECK(setCookieNamed(forbidden, "pp_session").empty());
 
     FakeGitHub noLogin;
     noLogin.userResponse = {200, R"({"id":1})", false};   // login missing
-    CHECK(setCookieNamed(callbackService(noLogin).handleGithubCallback(
-              callbackRequest("c", validState())), "pp_session").empty());
+    auto missingLogin = callbackService(noLogin).handleGithubCallback(
+        callbackRequest("c", validState()));
+    CHECK(setCookieNamed(missingLogin, "pp_session").empty());
+}
+
+// Sensitivity for every `setCookieNamed(r, "pp_session").empty()` above: the same probe
+// must find a cookie on the success path, or it is asserting that the helper is broken.
+TEST_CASE("the no-session probe finds a session on the success path", "[auth][oauth]") {
+    FakeGitHub gh;
+    auto r = callbackService(gh).handleGithubCallback(callbackRequest("c", validState()));
+    CHECK_FALSE(setCookieNamed(r, "pp_session").empty());
 }
 
 TEST_CASE("a failed callback never leaks the code, token, or secret (AC22)", "[auth][security]") {
     FakeGitHub gh;
     gh.tokenResponse = {401, R"({"error":"bad_verification_code","hint":"client-secret"})", false};
-    const auto r = callbackService(gh).handleGithubCallback(callbackRequest("the-code", validState()));
+    auto r = callbackService(gh).handleGithubCallback(callbackRequest("the-code", validState()));
     for (const std::string secret : {"client-secret", "the-code", "gho_fake"}) {
         CHECK(r.body.find(secret) == std::string::npos);
         CHECK(r.get_header_value("Location").find(secret) == std::string::npos);
@@ -1288,11 +1653,17 @@ TEST_CASE("a failed callback never leaks the code, token, or secret (AC22)", "[a
 // ── AC5: logout ──
 
 TEST_CASE("logout expires the session cookie", "[auth][logout]") {
-    const auto r = authedService().handleLogout(sameOriginPost(validSessionCookie()));
+    auto r = authedService().handleLogout(sameOriginPost(validSessionCookie()));
     CHECK(r.code == 200);
     const std::string cookie = setCookieNamed(r, "pp_session");
+    REQUIRE_FALSE(cookie.empty());
     CHECK(cookie.find("Max-Age=0") != std::string::npos);
     CHECK(cookie.find("HttpOnly") != std::string::npos);
+    // S3: the session cookie is issued with Path=/, so the clearing header must carry
+    // Path=/ too or the browser keeps the original and logout silently does nothing.
+    CHECK(cookie.find("Path=/;") != std::string::npos);
+    CHECK(cookie.find("Secure") != std::string::npos);
+    CHECK(cookieTokenOf(cookie).empty());
 }
 
 TEST_CASE("a cross-site logout POST is rejected", "[auth][logout][csrf]") {
@@ -1303,10 +1674,21 @@ TEST_CASE("a cross-site logout POST is rejected", "[auth][logout][csrf]") {
     CHECK(authedService().handleLogout(req).code == 403);
 }
 
+// O5: a stale cookie must always be sheddable. After a secret rotation or an OAuth
+// teardown, the one request that clears the stale cookie is the one that would have
+// stopped working under the old 503 rule.
+TEST_CASE("logout still clears the cookie when auth is unconfigured", "[auth][logout]") {
+    Config cfg = oauthCfg();
+    cfg.sessionSigningSecret.clear();
+    auto r = serviceWith(cfg).handleLogout(sameOriginPost(validSessionCookie()));
+    CHECK(r.code == 200);
+    CHECK(setCookieNamed(r, "pp_session").find("Max-Age=0") != std::string::npos);
+}
+
 // ── AC26: /auth/me ──
 
 TEST_CASE("me returns the identity and an id-derived avatar for a valid cookie", "[auth][me]") {
-    const auto r = authedService().handleAuthMe(getWithCookie(validSessionCookie()));
+    auto r = authedService().handleAuthMe(getWithCookie(validSessionCookie()));
     REQUIRE(r.code == 200);
     const auto body = nlohmann::json::parse(r.body);
     CHECK(body["authenticated"] == true);
@@ -1319,7 +1701,7 @@ TEST_CASE("me reports signed out for every invalid cookie shape", "[auth][me]") 
     for (const std::string cookie : {"", "pp_session=", "pp_session=garbage",
                                      "pp_session=" + tamperedSessionToken(),
                                      "pp_session=" + expiredSessionToken()}) {
-        const auto r = authedService().handleAuthMe(getWithRawCookie(cookie));
+        auto r = authedService().handleAuthMe(getWithRawCookie(cookie));
         INFO(cookie);
         CHECK(r.code == 200);
         const auto body = nlohmann::json::parse(r.body);
@@ -1339,7 +1721,7 @@ TEST_CASE("me distinguishes a signed-in non-admin from an admin", "[auth][me]") 
 }
 
 TEST_CASE("me never echoes the cookie or the signing secret (AC22)", "[auth][me][security]") {
-    const auto r = authedService().handleAuthMe(getWithCookie(validSessionCookie()));
+    auto r = authedService().handleAuthMe(getWithCookie(validSessionCookie()));
     CHECK(r.body.find(validSessionToken()) == std::string::npos);
     CHECK(r.body.find(oauthCfg().sessionSigningSecret) == std::string::npos);
 }
@@ -1348,7 +1730,9 @@ TEST_CASE("me never echoes the cookie or the signing secret (AC22)", "[auth][me]
 Build `crow::request` fixtures with `req.add_header("Cookie", ...)` and
 `req.url_params = crow::query_string("?code=...&state=...")` — both verified against the
 bundled Crow (`third_party/crow/include/crow/http_request.h:74-85`,
-`query_string.h:345,381`).
+`query_string.h:345,381`). `sessionBlobAsStateRequest()` puts a valid `pp_session` blob
+into the `pp_oauth_state` cookie with a matching `state` parameter; it is the end-to-end
+form of the S1 domain-separation cases in `test_session`.
 
 - [ ] **Step 3: Register and confirm failure**
 
@@ -1364,14 +1748,27 @@ Expected: fails to compile — `AuthService` does not exist.
 
 Shape each one as: configuration gate → parse → verify → act → serialise. Notes that matter:
 
-- **login** — 503 if `sessionSigningSecret`, `githubOauthClientId`, `githubOauthClientSecret`, or `publicBaseUrl` is empty. Nonce is `base64UrlEncode(nonce_(32))`. The `pp_oauth_state` cookie holds `issueSessionToken(secret, {nonce, ""}, now + 600)`; the URL's `state` parameter is the bare nonce. The signature makes the cookie unforgeable, the cookie makes the state browser-bound, and comparing the two in the callback is what closes the login-CSRF hole. Scope is empty (`scope=`) per AC1's "no-scope". URL-encode every parameter.
-- **callback** — 503 on missing configuration. Then: read `code`/`state` via `req.url_params.get()` (returns `char*`, so null-check); read `pp_oauth_state`; `verifySessionToken` it; `constantTimeEquals(nonceFromCookie, stateParam)`. Always emit the state-clearing `Set-Cookie`, on success and failure alike — that is what makes it single-use. Exchange with `Accept: application/json` and body `client_id=…&client_secret=…&code=…&redirect_uri=…`, all URL-encoded. Treat a 200 that contains `error` and no `access_token` as failure (GitHub does this). Then `GET https://api.github.com/user` with `Authorization: Bearer …`, `Accept: application/vnd.github+json`, `User-Agent: puzzpool`. Require a non-empty string `login` and an integer `id`. Issue `pp_session` with `now + sessionTtlMinutes * 60`. `nlohmann::json::parse` must use the non-throwing overload or be wrapped — a malformed provider body must not 500.
-- **logout** — 503 when unconfigured; reject without same-origin proof (403, reusing `hasSameOriginProof`); otherwise emit the `Max-Age=0` clearing cookie and `200 {"authenticated":false}`. Clearing does not require a valid session, so a stale cookie can always be shed.
+- **login** — 503 if `sessionSigningSecret`, `githubOauthClientId`, `githubOauthClientSecret`, or `publicBaseUrl` is empty. Nonce is `base64UrlEncode(nonce_(32))`. The `pp_oauth_state` cookie holds `issueStateToken(secret, nonce, now + 600)`; the URL's `state` parameter is the bare nonce. The signature makes the cookie unforgeable, the cookie makes the state browser-bound, and comparing the two in the callback is what closes the login-CSRF hole. Scope is empty (`scope=`) per AC1's "no-scope". URL-encode every parameter.
+- **callback** — 503 on missing configuration. Then: read `code`/`state` via `req.url_params.get()` (returns `char*`, so null-check); read `pp_oauth_state`; `verifyStateToken` it — not `verifySessionToken`, which is what the `WrongPurpose` separation from D-A3 buys; `constantTimeEquals(nonceFromCookie, stateParam)`. Always emit the state-clearing `Set-Cookie`, on success and failure alike — that is what makes it single-use. Exchange with `Accept: application/json` and body `client_id=…&client_secret=…&code=…&redirect_uri=…`, all URL-encoded. Treat a 200 that contains `error` and no `access_token` as failure (GitHub does this). Then `GET https://api.github.com/user` with `Authorization: Bearer …`, `Accept: application/vnd.github+json`, `User-Agent: puzzpool`. Require a non-empty string `login` and an integer `id`. Issue `pp_session` with `now + sessionTtlMinutes * 60`. `nlohmann::json::parse` must use the non-throwing overload or be wrapped — a malformed provider body must not 500.
+- **logout** — **no configuration gate** (review finding O5): clearing a cookie needs no signing key, and returning 503 would strand a stale cookie in the browser at exactly the moment the secret was rotated away or the OAuth app was torn down — the one request that sheds it would be the one that stops working. Reject without same-origin proof (403, reusing `hasSameOriginProof`); otherwise emit the clearing cookie and `200 {"authenticated":false}`, configured or not. Clearing does not require a valid session either.
 - **me** — 503 when unconfigured; otherwise always 200. `{"authenticated":false}` for every failure mode, with no `reason` field: distinguishing "expired" from "forged" tells an attacker which half of the token to work on.
 
-Cookie attribute string, one shared helper:
-`pp_session=<token>; Path=/; Max-Age=<ttl>; HttpOnly; Secure; SameSite=Lax`
-and for the state cookie `Path=/api/v1/auth; Max-Age=600`. Use `res.add_header("Set-Cookie", …)` — not `set_header` — because the callback emits two (`http_response.h:60,69`).
+**Cookies come from one helper, in both directions (review finding S3).** RFC 6265 removes a cookie only when the clearing `Set-Cookie` matches the original's name, `Path` and `Domain`; a clear emitted with a different `Path` leaves the original in place and looks successful from the server side. Hand-writing the issuing and clearing strings separately is how they drift, so define the attribute set once per cookie and derive both:
+
+```cpp
+struct CookieSpec { std::string_view name; std::string_view path; };
+constexpr CookieSpec kSessionCookie{"pp_session", "/"};
+constexpr CookieSpec kStateCookie{"pp_oauth_state", "/api/v1/auth"};
+
+std::string cookieHeader(const CookieSpec& spec, std::string_view value, long maxAgeSeconds) {
+    return std::string(spec.name) + "=" + std::string(value)
+         + "; Path=" + std::string(spec.path)
+         + "; Max-Age=" + std::to_string(maxAgeSeconds)
+         + "; HttpOnly; Secure; SameSite=Lax";
+}
+```
+
+Issuing is `cookieHeader(kSessionCookie, token, ttlSeconds)` / `cookieHeader(kStateCookie, blob, 600)`; clearing is the same call with an empty value and `0`. Emit with `res.add_header("Set-Cookie", …)` — not `set_header` — because the callback emits two (`http_response.h:60,69`).
 
 - [ ] **Step 5: Wire the routes in `main.cpp`**
 
@@ -1472,11 +1869,35 @@ Also document creating the two GitHub OAuth apps (PROD and TEST) with callback U
 
 - [ ] **Step 3: `docs/api.md` — a new Authentication API section**
 
-Before `## Admin API` (`docs/api.md:422`), document all four routes: method, path, parameters, redirect behavior, `Set-Cookie` attributes (without any example token value), the `/auth/me` response shape for both states, and the 503-when-unconfigured rule. Then extend the Admin API preamble with the two accepted mechanisms, the `401` fail-closed rule, and the `403 csrf_check_failed` response for cookie-authorized `POST`s without same-origin proof.
+Before `## Admin API` (`docs/api.md:422`), document all four routes: method, path, parameters, redirect behavior, `Set-Cookie` attributes including `Path` (without any example token value), the `/auth/me` response shape for both states, and the 503-when-unconfigured rule — stating explicitly that `POST /api/v1/auth/logout` is exempt from it and always clears the cookie, so a stale cookie can be shed after a secret rotation. Then extend the Admin API preamble with the two accepted mechanisms, the `401` fail-closed rule applying to all six admin routes, and the `403 csrf_check_failed` response for cookie-authorized `POST`s without same-origin proof.
 
 - [ ] **Step 4: `docs/security.md` — rewrite Admin Route Protection**
 
-`docs/security.md:16-50` currently presents "Option A — Nginx IP restriction" as sufficient with a blank token, which this change makes false. Rewrite to: mechanisms (token, GitHub sign-in), the fail-closed rule, the allow-list and its immediate-revocation property, cookie properties and why each is set, the CSRF defense and why absence of a signal is rejected, constant-time comparison, `SESSION_SIGNING_SECRET` handling and rotation (rotation invalidates all sessions — that is the revocation lever), the deliberate non-MAC status of `keyedDigestHex`, and the Nginx layer as remaining defense in depth.
+`docs/security.md:16-50` currently presents "Option A — Nginx IP restriction" as sufficient with a blank token, which this change makes false. It also says "The four admin endpoints" at `:16-17`; there are six (review finding O3) — correct the count while rewriting.
+
+Rewrite to cover: the two mechanisms (token, GitHub sign-in), the fail-closed rule, the allow-list, cookie properties and why each is set, the CSRF defense and why absence of a signal is rejected, constant-time comparison, `SESSION_SIGNING_SECRET` handling, the deliberate non-MAC status of `keyedDigestHex`, and the Nginx layer as remaining defense in depth.
+
+**Revocation must be documented exactly as it behaves (review finding M3).** `src/main.cpp:16` loads `Config` once per process. Write the procedure as:
+
+```md
+To revoke an admin's access, remove their login from `ADMIN_GITHUB_USERS` and restart
+the service. The change applies to the very next request: no authorization decision is
+cached, so there is no cookie to reissue, no session store to purge, and no wait for
+outstanding sessions to expire. The restart is required because configuration is read
+once at startup.
+
+Rotating `SESSION_SIGNING_SECRET` invalidates every issued session at once and likewise
+takes effect at the next restart. An individual session cannot be revoked before its
+absolute expiry — that is the accepted trade-off of stateless sessions (ADR-6), and it
+is why `SESSION_TTL_MINUTES` is capped at 30 days.
+```
+
+Do **not** write "takes effect immediately with no restart". An operator reads this line while revoking a compromised admin under time pressure, and acting on it would leave the compromised login working.
+
+Two further properties belong here as accepted decisions rather than being left for a later reader to discover (review finding S4):
+
+- **Any GitHub account can obtain a valid `pp_session` cookie** from a public deployment. The callback issues the cookie before any allow-list check; only the admin guard and `/auth/me`'s `is_admin` consult the list. This is deliberate — slice B needs to distinguish "signed in" from "signed in and allowed to act" — but it means the signed-cookie surface is open to the internet, not to admins. Authorization, not authentication, is what protects the admin routes.
+- **Each `/login` + `/callback` pair costs one synchronous outbound HTTPS call to GitHub** from a Crow worker thread with a 10-second timeout. An anonymous client can drive that loop with a garbage `code`: the state check passes, because they obtained a real state cookie from `/login`, and the exchange runs before GitHub rejects it. With enough concurrency this parks worker threads on a network wait. Not a reason to change slice A's design; record it, and hand the bounding `limit_req` zone to slice C's deployment note.
 
 - [ ] **Step 5: `docs/architecture.md` — modules and dependency direction**
 
@@ -1498,17 +1919,50 @@ RFC 4231 vectors, a byte-stability vector, and a test asserting the two disagree
 
 Sessions are a signed, absolutely-expiring cookie rather than server-side state: the pool
 runs as a single process with one SQLite file, and per-request session rows would add a
-write path and a retention obligation for no gain. The trade-off is accepted deliberately —
-an individual session cannot be revoked before expiry; revocation is by allow-list removal,
-which takes effect on the next request because the guard re-reads the list from `Config`
-every time, or by rotating `SESSION_SIGNING_SECRET`, which invalidates all sessions at once.
+write path and a retention obligation for no gain. The trade-off is accepted deliberately:
+an individual session cannot be revoked before its absolute expiry.
+
+Revocation is by allow-list removal or by rotating `SESSION_SIGNING_SECRET`. Because the
+guard re-reads `ADMIN_GITHUB_USERS` from `Config` on every request and caches no
+authorization decision, either change applies to the very next request — no cookie
+reissue, no session store to purge. Both still require a service restart, because
+`src/main.cpp:16` loads configuration once per process; a live-reload path was considered
+and deliberately left out of slice A. `SESSION_TTL_MINUTES` is capped at 30 days so a
+misconfiguration cannot mint a credential that outlives any practical rotation cadence.
+
 The guard moved from a lambda in `main.cpp` into `puzzpool_core` so the unconfigured case is
-directly testable, and now denies by default instead of returning `nullopt`.
+directly testable, and now denies by default instead of returning `nullopt`. Because the
+route wiring itself stays in `main.cpp` and is outside every Catch2 target,
+`tests/test_admin_routes_guarded.sh` asserts end to end that all six admin routes deny
+without configuration and admit with a token — the Catch2 matrix proves the decision, the
+script proves it is actually on every route.
+
+Session and OAuth-state blobs share one signed format and one key, so the token's purpose
+(`session` / `state`) is part of the signed input. Without that label the two would be
+interchangeable; with it, presenting one where the other is expected fails as
+`WrongPurpose`.
 ```
 
 - [ ] **Step 7: `docs/testing.md` and `deploy/nginx.conf`**
 
-List the four new test binaries and what each covers. In `deploy/nginx.conf`, add a comment above `location /` recording that `/api/v1/auth/*` is intentionally public (AC23) and that `X-Forwarded-Proto` must stay set so the deployment terminates TLS in front of the `Secure` cookie. No `location` blocks change.
+Add the four new test binaries to the coverage table with what each covers.
+
+Add `tests/test_admin_routes_guarded.sh` beside the existing `tests/test_check_node_version_age.sh` entry, as a script that is run explicitly rather than through CTest, with its command and what it proves:
+
+```md
+### Admin route guard regression
+
+`bash tests/test_admin_routes_guarded.sh` starts the server twice and checks all six
+`/api/v1/admin/*` routes end to end: every route returns `401` when neither `ADMIN_TOKEN`
+nor `ADMIN_GITHUB_USERS` is configured, and every route is admitted past the guard with a
+valid `X-Admin-Token`. Run it whenever an admin route is added, removed, or rewired —
+`src/main.cpp` is outside `puzzpool_core`, so no Catch2 target can see the wiring, and a
+route that loses its guard leaves the whole suite green.
+```
+
+Extend the "Smoke Test (local server)" section at `docs/testing.md:86-98` with the auth checks from Task 8 Step 4.
+
+In `deploy/nginx.conf`, add a comment above `location /` recording that `/api/v1/auth/*` is intentionally public (AC23) and that `X-Forwarded-Proto` must stay set so the deployment terminates TLS in front of the `Secure` cookie. No `location` blocks change.
 
 - [ ] **Step 8: Commit**
 
@@ -1548,17 +2002,25 @@ Run: `bash tests/test_check_node_version_age.sh`
 
 Expected: passes; the guard is untouched.
 
-- [ ] **Step 4: Local-server smoke test — route wiring and startup changed, so this is required**
+- [ ] **Step 4: All six admin routes, end to end**
 
-Per `docs/testing.md`, start the server and check:
-- with no auth configured: startup prints the warning naming `ADMIN_TOKEN` and `ADMIN_GITHUB_USERS`, and `GET /api/v1/admin/puzzles` returns `401` (the fail-closed behavior, end to end);
-- with `ADMIN_TOKEN` set: the same route with `X-Admin-Token` returns `200` (AC12 intact);
+Run: `bash tests/test_admin_routes_guarded.sh`
+
+Expected: 12 checks pass — the six routes of Task 4 Step 6 each denied with `401` when no mechanism is configured, and each admitted past the guard with a valid `X-Admin-Token`. Record the per-route results, not just the exit code.
+
+This is the evidence for AC8 and the end-to-end half of AC9. It is a script rather than a checklist item precisely because `main.cpp` is outside every Catch2 target: the previous draft checked one route by hand, which would not have detected five of the six wiring mistakes it was meant to catch.
+
+- [ ] **Step 5: Local-server smoke test — startup and the auth routes**
+
+Per `docs/testing.md`, start the server and check what the script above does not cover:
+- with no auth configured: startup prints the warning naming `ADMIN_TOKEN` and `ADMIN_GITHUB_USERS`;
 - with no `SESSION_SIGNING_SECRET`: `GET /api/v1/auth/me` returns `503`;
-- with the full OAuth configuration but no cookie: `GET /api/v1/auth/me` returns `200 {"authenticated":false}`.
+- with the full OAuth configuration but no cookie: `GET /api/v1/auth/me` returns `200 {"authenticated":false}`;
+- `GET /api/v1/auth/github/login` returns `302` to `github.com` with a `pp_oauth_state` cookie, and `POST /api/v1/auth/logout` with an `Origin` matching `PUBLIC_BASE_URL` returns `200` with a `Max-Age=0` cookie — including with `SESSION_SIGNING_SECRET` unset, per O5.
 
 Use a throwaway token value; never a real credential. Delete `pool.db` afterwards.
 
-- [ ] **Step 5: Self-review the diff against AC22 before pushing**
+- [ ] **Step 6: Self-review the diff against AC22 before pushing**
 
 ```bash
 git diff dev...HEAD | grep -nEi 'client_secret=[^&"]|gho_|ADMIN_TOKEN=[^[:space:]]|SESSION_SIGNING_SECRET=[^[:space:]]'
@@ -1566,7 +2028,14 @@ git diff dev...HEAD | grep -nEi 'client_secret=[^&"]|gho_|ADMIN_TOKEN=[^[:space:
 
 Expected: no hits outside `.env.example` placeholders and the documented `openssl rand` recipes. Confirm no `pool.db`, `.env`, WAL/SHM file, or build artifact is staged.
 
-- [ ] **Step 6: Push and open the implementation PR**
+Also confirm the sensitivity runs from Steps 7a (Task 1) and 7a (Task 4) are recorded and that the deliberate breaks were reverted:
+
+```bash
+grep -n 'setw(1)' src/hash_utils.cpp                       # expect no output
+grep -c 'adminGuard(cfg, req)' src/main.cpp                # expect 6
+```
+
+- [ ] **Step 7: Push and open the implementation PR**
 
 ```bash
 git push -u origin feature/153-github-oauth-backend
@@ -1580,26 +2049,26 @@ gh pr create --draft --base dev --title "feat: GitHub OAuth backend and fail-clo
 
 | AC | Where it is implemented | Where it is proven |
 |----|------------------------|--------------------|
-| AC1 state | `auth_service.cpp` login/callback, signed `pp_oauth_state` | `test_auth_service` — bound, distinct, cleared, mismatch/expired/tampered rejected |
+| AC1 state | `auth_service.cpp` login/callback, signed `pp_oauth_state` | `test_auth_service` — bound, distinct, cleared with a matching `Path` (S3), mismatch/expired/tampered/wrong-purpose rejected |
 | AC2 libcurl seam | `github_client.cpp`, `auth_service.cpp` exchange | `test_auth_service` — secret/code asserted in POST body, absent from URL |
-| AC3 signed cookie | `session.cpp`, cookie helper in `auth_service.cpp` | `test_session` (sign/verify/tamper/expire), `test_auth_service` (attributes) |
-| AC4 frozen digest | `hash_utils.cpp` `keyedDigestHex`, `permutation.cpp:27` | `test_hash_utils` byte-stability + difference; existing `test_permutation` |
-| AC5 logout | `auth_service.cpp` `handleLogout` | `test_auth_service` — `Max-Age=0`, cross-site rejected |
+| AC3 signed cookie | `session.cpp`, `cookieHeader()` in `auth_service.cpp` | `test_session` (sign/verify/tamper/expire/purpose), `test_auth_service` (attributes) |
+| AC4 frozen digest | `hash_utils.cpp` `keyedDigestHex` + `toHex`, `permutation.cpp:27` | `test_hash_utils` — frozen `keyedDigestHex` **literal** captured pre-change, NIST `sha256Hex` vectors, direct `toHex` padding cases; `test_permutation` golden `permuteIndexFeistel` vector, also captured pre-change; sensitivity run in Task 1 Step 7a |
+| AC5 logout | `auth_service.cpp` `handleLogout` | `test_auth_service` — `Max-Age=0` with `Path=/`, cross-site rejected, clears while unconfigured |
 | AC6 allow-list parsing | `admin_auth.cpp` `parseAdminGithubUsers`, `isAllowedAdminLogin` | `test_config` — trim, case, empties, empty-denies |
-| AC7 re-evaluated per request | `authorizeAdmin` reads `cfg` every call | `test_admin_auth` — removal denies an already-issued cookie |
-| AC8 extracted guard | `admin_auth.cpp` + `admin_guard.cpp`, `main.cpp` wiring only | the guard tests exist at all — they link `puzzpool_core` |
+| AC7 re-evaluated per request | `authorizeAdmin` reads `cfg` every call | `test_admin_auth` — removal denies an already-issued cookie (restart required to change `cfg`; documented, not claimed away) |
+| AC8 extracted guard | `admin_auth.cpp` + `admin_guard.cpp`, `main.cpp` wiring only | `tests/test_admin_routes_guarded.sh` — all six routes `401` unconfigured and admitted with a token, end to end; sensitivity run in Task 4 Step 7a. `test_admin_auth` proves the decision; only the script proves the wiring |
 | AC9 fail closed | `authorizeAdmin` default-deny | `test_admin_auth` unconfigured→401, with a configured-mechanism sensitivity control |
 | AC10 upgrade note + diagnostic | `.env.example`, `README.md`, `startupAuthDiagnostics` | `test_config` diagnostics, incl. quiet-when-configured and no-secret checks |
 | AC11 constant time | `constantTimeEquals` for token and MAC | `test_hash_utils` truth table; used in `authorizeAdmin`/`verifySessionToken` |
 | AC12 token still works | first branch of `authorizeAdmin` | `test_admin_auth` token accept/reject, and token POST skips CSRF |
-| AC13 503 without secret | config gate in all four handlers; cookie branch refuses empty secret | `test_auth_service` 503×4; `test_session`/`test_admin_auth` empty-secret |
-| AC14 CSRF | `hasSameOriginProof`, applied to cookie-authorized POSTs | `test_admin_auth` — bare/cross-site/cross-fetch denied, two positive controls |
+| AC13 503 without secret | config gate in `login`/`callback`/`me`; cookie branch refuses empty secret. `logout` deliberately exempt (O5) | `test_auth_service` 503×3 with a not-503-when-configured control, plus logout-still-clears; `test_session`/`test_admin_auth` empty-secret |
+| AC14 CSRF | `hasSameOriginProof`, applied to cookie-authorized POSTs | `test_admin_auth` — bare/cross-site/same-site/cross-site-with-matching-Origin denied, two positive controls |
 | AC20 per-stage credentials | plain env reads, no `Config::stage` branch | `test_config` — values identical across `STAGE` |
 | AC21 documented env | `.env.example`, `README.md` | reviewed in Task 7; no real values |
 | AC22 no leaks | fixed error codes; no verbose curl; no secret in bodies | leak assertions in `test_admin_auth` and `test_auth_service` |
 | AC23 Nginx unchanged | comment only in `deploy/nginx.conf` | diff review — no `location` block changes |
 | AC24 docs with behavior | Task 7 | the same PR as the behavior |
-| AC25 both suites | Task 8 | recorded commands and counts |
+| AC25 both suites | Task 8 | recorded commands and counts, including the two sensitivity runs and `tests/test_admin_routes_guarded.sh` |
 | AC26 `/auth/me` | `auth_service.cpp` `handleAuthMe` | `test_auth_service` — signed-in, signed-out, tampered, expired, avatar from id |
 
 AC15–AC19 and AC27 are slice B and are deliberately untouched here.
@@ -1607,7 +2076,8 @@ AC15–AC19 and AC27 are slice B and are deliberately untouched here.
 ## Self-Review
 
 - **Spec coverage:** every AC in slice A's scope appears in the matrix with a named implementation site and a named test. Nothing is deferred to "a follow-up".
-- **Sensitivity:** the three assertions that could pass vacuously each carry a control — the unconfigured-401 case is paired with a configured-allow case, the CSRF denials are paired with two positive same-origin controls, and the quiet-diagnostics case pairs with the warning case. The frozen-digest check is paired with a test that the two primitives differ, so a rename that aliased them would fail.
-- **Placeholder scan:** no `TODO`, `TBD`, or "tests later" remains. The four helper functions referenced but not spelled out in test snippets (`setCookieNamed`, `stateParamOf`, `cookieTokenOf`, `validState`) are local test fixtures whose bodies are mechanical.
+- **Sensitivity:** the reviewer's sharpest observation about the previous draft was that its two *strongest* claims — AC4's frozen digest and AC8's route wiring — were the two without working controls, while the weaker claims were well guarded. That asymmetry is now inverted. AC4 is anchored to literals captured from the pre-change build plus published NIST vectors, none of which move with the refactor, and Task 1 Step 7a requires *observing* those assertions fail under a deliberate padding break. AC8 is anchored to a committed six-route script, and Task 4 Step 7a requires observing it fail with one guard removed. The pre-existing controls stand: unconfigured-401 paired with configured-allow, CSRF denials paired with two positive same-origin controls, quiet-diagnostics paired with the warning case, `keyedDigestHex ≠ hmacSha256Hex` against an aliasing rename; and three more are added — 503-when-unconfigured paired with not-503-when-configured, the `setCookieNamed(…).empty()` probes paired with a success-path case that finds a cookie, and the `WrongPurpose` rejections paired with each blob verifying under its own purpose.
+- **Placeholder scan:** no `TODO`, `TBD`, or "tests later" remains. `setCookieNamed` is now spelled out in full, because it is the one helper whose body is *not* mechanical — `crow::response::get_header_value` returns only the first match and the callback emits two `Set-Cookie` headers, so the obvious implementation would make the S3 assertions pass for the wrong reason. `stateParamOf`, `cookieTokenOf` (returns the cookie's value up to the first `;`), `validState`, `expiredStateRequest`, `tamperedStateRequest` and `sessionBlobAsStateRequest` remain local fixtures whose bodies are mechanical.
+- **Review findings:** all eleven findings from round 1 are accepted and resolved; the table at the top of this plan maps each ID to where. None was rejected, and none was deferred to slice B or C except the `limit_req` rate-limit zone, which is a deployment concern by nature and which S4 explicitly routes to slice C.
 - **Type consistency:** the GitHub id is a string end to end (`SessionIdentity::githubId`, cookie field, avatar URL) and is converted once at the callback boundary, where GitHub sends it as a JSON integer.
 - **Scope:** no frontend file, no database schema, no allocator or permutation output, and no `service_*.cpp` file is modified. The only change to existing behavior is that unconfigured admin routes now deny, which is the point of AC9.
