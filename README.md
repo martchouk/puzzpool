@@ -260,6 +260,10 @@ See [docs/testing.md](docs/testing.md) for test scenarios and manual verificatio
 | `dev` | Active development. Test server always tracks this branch. |
 | `feat/<topic>` | Optional isolation for large or risky changes — branch off `dev`, PR back into `dev`. |
 
+CI runs for pushes to both `main` and `dev`, and for pull requests targeting
+either branch. `bash tests/test_ci_branch_coverage.sh` protects this trigger
+contract from accidental regression.
+
 ```
 feat/xyz  ●──●──●
                 ↓ PR → dev
