@@ -36,6 +36,26 @@ Review of `2e1aa20` requested changes with three blocking findings and four impo
 
 Two of these change what the implementer does before writing any code: **M1's Step 0 must run against the unmodified tree**, and **M2 adds a committed script rather than a checklist item**. Both are sequenced explicitly below.
 
+## Plan review round 2 — findings resolved
+
+Re-review of `d60184a` approved the plan for implementation and raised three further findings, none blocking. All three are accepted; each was independently re-derived against the tree at `f1db2bf` before being applied.
+
+| ID | Finding | Verified how | Where resolved |
+|----|---------|--------------|----------------|
+| **S5** | The login test's state-binding assertion cannot pass: the cookie carries `base64UrlEncode(nonce)` while the URL carries the bare nonce | Task 6 Step 4 mints the nonce as `base64UrlEncode(nonce_(32))` and puts the bare value in the URL; `signingInput` (Task 3 Step 4) encodes the subject a second time. Base64 of ASCII does not contain its input as a substring, and the base64url alphabet is URL-safe so percent-encoding changes nothing | Task 6 Step 2 — replaced with a `verifyStateToken`-based subject comparison, **not** deleted: it is AC1's only login-side proof of browser binding |
+| **S6** | The six-route guard script is registered in neither CTest nor CI | `.github/workflows/ci.yml:58` already runs `bash tests/test_check_node_version_age.sh`, so the precedent exists; the script appears in no workflow step | Task 7 Step 7a — added to the `build` job, with the residual `branches: [main]` trigger gap stated rather than glossed |
+| **S7** | Phase 2 of the guard script passes vacuously on a dead server, because a `curl` connection error yields no status, which is "not 401" | Phase 2's assertion is "not 401"; the empty string satisfies it. Phase 1 is unaffected — it requires the literal `401` | Task 4 Step 6a — explicit transport-error and empty-status failures, plus a readiness poll on the unauthenticated `/api/v1/stats` |
+
+The five optional items from the round-2 report (`hasSameOriginProof` in the header snippet, the state blob's empty `<b64url(id)>` field requiring `split` to preserve empty tokens, `toHex`'s `char` → `unsigned char` conversion under `-Wconversion`, `serviceWith(cfg)` in the placeholder scan, and the two missing includes in `tests/test_permutation.cpp`) remain open for the implementer; none changes the plan's structure.
+
+## Task 1 Step 0 cannot be completed without a C++ toolchain
+
+Step 0 captures golden literals by building and running the pre-change tree. Every implementation attempt so far has run in a workspace whose permission layer refuses `cmake`, `make`, every C++ compiler, `npm`, and every interpreter invocation, so the literals cannot be produced — not by transcription, not by an independent reimplementation, because that too needs to execute.
+
+**This is a hard prerequisite, not a bookkeeping step.** Task 1 Step 5 refactors the hex formatter out of `sha256Hex` into `toHex`, and the golden vector is the only thing that would catch a zero-padding slip there. Such a slip silently reorders allocation for every existing puzzle (ADR-4), and `.github/workflows/ci.yml:3-7` runs on `main` only, so no CI job would catch it on this branch either. Implementing Task 1 without executing Step 0 reintroduces exactly the M1 hole that round 1 blocked the plan over.
+
+**Do not start Task 1 in an environment that cannot run the commands in Step 0 Step 3.** Confirm the toolchain first; the rest of the plan is unaffected by this constraint and is ready as written.
+
 ---
 
 ## Design decisions taken in this plan
@@ -110,7 +130,8 @@ These are settled inputs for implementation, not open questions. Each is justifi
 - Modify: `CMakeLists.txt`, `tests/CMakeLists.txt`
   New sources, `find_package(CURL REQUIRED)`, four new test targets.
 - Modify: `.github/workflows/ci.yml`, `deps.txt`
-  Install libcurl.
+  Install libcurl (Task 5), and run `tests/test_admin_routes_guarded.sh` in the `build`
+  job (Task 7 Step 7a).
 - Modify: `tests/test_config.cpp`
   Allow-list parsing, TTL clamping, and stage-independence coverage.
 - Modify: `tests/test_permutation.cpp`
@@ -1252,6 +1273,38 @@ ADMIN_ROUTES=(
 - **Phase 1 — fail closed (AC9).** Start the server with `ADMIN_TOKEN`, `ADMIN_GITHUB_USERS`, and `SESSION_SIGNING_SECRET` all unset. Every route in the list must answer `401`. A route that answers anything else — including `400` for a missing body, which would mean the request reached the handler — is a failure.
 - **Phase 2 — sensitivity, and AC12.** Restart with `ADMIN_TOKEN` set to a throwaway value and repeat with `-H "X-Admin-Token: $ADMIN_TOKEN"`. Every route must answer something **other than `401`**. This is the control that makes phase 1 meaningful: without it, a server that 401s unconditionally — or that failed to start at all — would pass phase 1. Assert on "not 401" rather than on `200`, because most of these routes legitimately return `400` for an empty body; the guard, not the handler, is what is under test.
 
+**Phase 2 must fail explicitly when the server is not answering (review finding S7).** "Not 401" is satisfied by the empty string, and a `curl` that cannot connect prints exactly that — so a phase-2 server that never came up turns all six checks green and silently retires the only control phase 1 has. Phase 1 is not exposed to this (it requires the literal `401`), which is precisely why the weakness is easy to miss. Two rules close it:
+
+```bash
+# Poll for readiness; never `sleep N` and hope.
+wait_for_server() {
+    for _ in $(seq 1 50); do
+        # /api/v1/stats (src/main.cpp:38) is unauthenticated, so readiness never
+        # depends on the guard under test. There is no /health route in this repo.
+        if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/v1/stats"; then return 0; fi
+        sleep 0.2
+    done
+    echo "FAIL: server did not become ready on port ${PORT}"
+    exit 1
+}
+
+# A transport failure is a script failure, never a passing "not 401".
+status="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" "${url}" ...)" || {
+    echo "FAIL: ${method} ${path} — curl transport error"
+    FAILURES=$((FAILURES + 1))
+    continue
+}
+case "${status}" in
+    ''|000) echo "FAIL: ${method} ${path} — no HTTP status (server down?)"
+            FAILURES=$((FAILURES + 1)) ;;
+    401)    echo "FAIL: ${method} ${path} — still 401 with a valid X-Admin-Token"
+            FAILURES=$((FAILURES + 1)) ;;
+    *)      echo "PASS: ${method} ${path} — ${status}" ;;
+esac
+```
+
+Apply the same readiness poll before phase 1, and use an existing unauthenticated route for the probe so readiness never depends on the guard under test.
+
 Use a throwaway `ADMIN_TOKEN` value generated in the script, a temporary `DB_PATH` under `mktemp -d`, and a non-default port. Never a real credential, and remove the temporary database on exit via `trap`.
 
 This is what replaces the previous AC8 matrix row, which claimed only that "the guard tests exist at all" — true, and silent about whether `main.cpp` calls the guard on each route.
@@ -1514,7 +1567,25 @@ TEST_CASE("login redirects to GitHub and binds the state to a cookie", "[auth][o
     // must match for the clear to have any effect at all.
     CHECK(stateCookie.find("Path=/api/v1/auth") != std::string::npos);
     // The state in the URL must be bound to, and not equal to, the signed cookie blob.
-    CHECK(stateCookie.find(stateParamOf(location)) != std::string::npos);
+    //
+    // Bound: verify the cookie blob and compare its SUBJECT to the URL parameter — do
+    // NOT substring-search the cookie for the parameter (review finding S5). Step 4 mints
+    // the nonce as base64UrlEncode(nonce_(32)) and puts the BARE nonce in the URL, while
+    // signingInput base64url-encodes the subject field a second time. Base64-encoding
+    // ASCII does not leave the input as a substring of its output, and the base64url
+    // alphabet is already URL-safe so no percent-encoding brings the two back into
+    // alignment — a `find` here would fail against a perfectly correct handler.
+    //
+    // This assertion is AC1's only login-side proof of browser binding. The callback
+    // cases cannot supply it: validState() builds the cookie/parameter pair by hand as a
+    // consistent pair, so it cannot detect a handler that writes the wrong value into
+    // either side. Do not delete this check if it fails — fix the handler.
+    const auto issuedState = verifyStateToken(oauthCfg().sessionSigningSecret,
+                                              cookieTokenOf(stateCookie), kNow);
+    REQUIRE(issuedState.error == SessionError::None);
+    CHECK(issuedState.identity.login == stateParamOf(location));
+    // Not equal: the signed blob must stay in the cookie. Leaking it into the redirect
+    // URL would hand it to GitHub's logs and to any Referer on the way.
     CHECK(cookieTokenOf(stateCookie) != stateParamOf(location));
 }
 
@@ -1811,7 +1882,7 @@ git commit -m "feat: add GitHub OAuth login, callback, logout, and identity rout
 ### Task 7: Documentation, configuration surface, and the upgrade warning
 
 **Files:**
-- Modify: `.env.example`, `README.md`, `docs/api.md`, `docs/security.md`, `docs/architecture.md`, `docs/architecture-review.md`, `docs/testing.md`, `deploy/nginx.conf`
+- Modify: `.env.example`, `README.md`, `docs/api.md`, `docs/security.md`, `docs/architecture.md`, `docs/architecture-review.md`, `docs/testing.md`, `deploy/nginx.conf`, `.github/workflows/ci.yml` (Step 7a)
 
 - [ ] **Step 1: `.env.example` — remove the fail-open guidance (AC10) and add the new settings (AC21)**
 
@@ -1961,6 +2032,19 @@ route that loses its guard leaves the whole suite green.
 ```
 
 Extend the "Smoke Test (local server)" section at `docs/testing.md:86-98` with the auth checks from Task 8 Step 4.
+
+- [ ] **Step 7a: Wire the guard script into CI (review finding S6)**
+
+M2 asked for a regression that survives, not a checklist item, and a committed script nobody runs is a checklist item. `.github/workflows/ci.yml:58` already establishes the precedent by running `bash tests/test_check_node_version_age.sh`, so add the guard script to the `build` job — it needs the compiled server, which only that job has:
+
+```yaml
+      - name: Admin route guard regression
+        run: bash tests/test_admin_routes_guarded.sh
+```
+
+Place it after the existing `Run unit tests` step (`ci.yml:32-33`) and before `Smoke test`, so a route that loses its guard fails CI rather than waiting for someone to remember the command.
+
+**State the residual gap plainly rather than implying this closes it.** `.github/workflows/ci.yml:3-7` triggers only on `push`/`pull_request` to `main`, and per the project policy agent branches target `dev` — so **no CI job runs on this PR at all**, and none will until the `dev` → `main` promotion. Wiring the script in is still worth doing: that promotion is exactly where an unguarded admin route would otherwise reach production, and `deploy/nginx.conf:37-46` publishes `/api/v1/admin/activate-puzzle` to the internet. Widening the CI triggers to include `dev` is a pre-existing repository gap, out of scope for this issue, and should be raised separately rather than folded in here.
 
 In `deploy/nginx.conf`, add a comment above `location /` recording that `/api/v1/auth/*` is intentionally public (AC23) and that `X-Forwarded-Proto` must stay set so the deployment terminates TLS in front of the `Secure` cookie. No `location` blocks change.
 
