@@ -49,6 +49,40 @@ This runs `tsc --noEmit` (strict type check) followed by `vite build` (bundle to
 
 ---
 
+## Frontend Unit Tests (Vitest)
+
+```bash
+npm test --prefix frontend
+```
+
+This runs the Vitest suite (`vitest run`) over `frontend/src/*.test.ts`. All tests must
+pass before a frontend change is merged.
+
+### Test coverage
+
+| File | What is verified |
+|------|-----------------|
+| `frontend/src/format.test.ts` | Number/hex/duration formatting helpers |
+| `frontend/src/performance.test.ts` | Performance-sensitive rendering helpers |
+| `frontend/src/accessibility.test.ts` | Accessibility regressions in the built dashboard markup |
+
+### Accessibility regression tests
+
+`accessibility.test.ts` asserts against `frontend/index.html` to lock in accessible
+markup. Covered guarantees include:
+
+- Filter buttons manage `aria-pressed` state and the dashboard logic keeps it in sync.
+- Each visualization filter set is exposed as a **named group** in the accessibility
+  tree: the Night Sky Heatmap layer filter (`#hm-layer-filter`), the Allocator
+  Diagnostics generation filter (`#alloc-generation-filter`), and the Hilbert Curve
+  Mapping layer filter (`#hil-layer-filter`) each carry `role="group"` and a unique
+  `aria-label` naming the visualization and filter dimension.
+
+When adding or renaming a filter group in `frontend/index.html`, update these
+assertions so the accessible-name contract stays enforced.
+
+---
+
 ## Smoke Test (local server)
 
 ```bash
