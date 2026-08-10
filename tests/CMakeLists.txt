@@ -29,6 +29,7 @@ add_puzzpool_test(test_auth_routes)
 
 find_program(PUZZPOOL_BASH_EXECUTABLE bash)
 find_program(PUZZPOOL_NODE_EXECUTABLE node)
+find_program(PUZZPOOL_CURL_EXECUTABLE curl)
 
 if(PUZZPOOL_BASH_EXECUTABLE AND PUZZPOOL_NODE_EXECUTABLE)
     add_test(NAME test_check_node_version_age
@@ -42,5 +43,28 @@ else()
     message(WARNING
         "Skipping test_check_node_version_age: bash and node are both required "
         "(bash='${PUZZPOOL_BASH_EXECUTABLE}', node='${PUZZPOOL_NODE_EXECUTABLE}')."
+    )
+endif()
+
+# ── Route-wiring smoke test ──────────────────────────────────────────────────
+# Starts the real server and checks that every admin route is behind the guard
+# and that /api/v1/auth/* is reachable and fails closed. The unit suites cover
+# the authorization decision; only this covers main.cpp's wiring of it.
+
+if(PUZZPOOL_BASH_EXECUTABLE AND PUZZPOOL_CURL_EXECUTABLE)
+    add_test(NAME test_admin_routes_smoke
+        COMMAND "${PUZZPOOL_BASH_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_admin_routes_smoke.sh"
+                "$<TARGET_FILE:puzzpool>"
+    )
+    set_tests_properties(test_admin_routes_smoke PROPERTIES
+        # Binds a fixed local port, so it must not overlap another test run.
+        RUN_SERIAL TRUE
+        TIMEOUT 120
+    )
+else()
+    message(WARNING
+        "Skipping test_admin_routes_smoke: bash and curl are both required "
+        "(bash='${PUZZPOOL_BASH_EXECUTABLE}', curl='${PUZZPOOL_CURL_EXECUTABLE}')."
     )
 endif()

@@ -32,7 +32,24 @@ and visualises it on a live dashboard.
   ────────
   HTTPS :443  ──▶  Nginx  ──▶  127.0.0.1:8888
                     │
-                    └─ /api/v1/admin/*  (IP-restricted or token-gated)
+                    ├─ /api/v1/auth/*   (public; OAuth + session cookie)
+                    └─ /api/v1/admin/*  (central default-deny guard; IP-restricted
+                                         at Nginx as defence in depth)
+
+  Admin sign-in
+  ─────────────
+  Browser ──GET /auth/github/login──▶ AuthService ──302──▶ github.com
+          ◀──302 + pp_oauth_state───                          │
+          ────GET /auth/github/callback?code&state───────────┘
+                        │
+                        ├─ libcurl (injectable seam) ──▶ github.com/login/oauth/access_token
+                        ├─ libcurl (injectable seam) ──▶ api.github.com/user
+                        └─ 302 "/" + signed pp_session cookie
+
+  Every /api/v1/admin/* request ──▶ authorizeAdminRequest(cfg, view, now)
+                                     ├─ X-Admin-Token   (constant-time)
+                                     └─ pp_session      (HMAC + expiry + allow-list
+                                                         + CSRF proof on POST)
 ```
 
 ## Tech Stack
@@ -42,6 +59,7 @@ and visualises it on a live dashboard.
 | HTTP server | C++20, [Crow](https://crowcpp.org/) | Header-only, async I/O, built-in JSON |
 | Database | SQLite 3 via [SQLiteCpp](https://github.com/SRombauts/SQLiteCpp) | Synchronous; WAL mode for concurrent reads |
 | Permutations | Boost Multiprecision (`cpp_int`) | 256-bit arithmetic for Feistel/affine chunk ordering |
+| Outbound HTTP | libcurl | GitHub OAuth calls, behind an injectable `HttpClient` seam |
 | Frontend source | TypeScript (strict), Vite, vite-plugin-singlefile | `frontend/` directory |
 | Frontend output | `public/index.html` | Single self-contained file; built by `update.sh`; generated and untracked |
 | Reverse proxy | Nginx | TLS termination, admin-route IP restriction |
@@ -51,7 +69,10 @@ and visualises it on a live dashboard.
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.cpp` | Route wiring (Crow), admin guard, reclaimer thread |
+| `src/main.cpp` | Route wiring (Crow), startup diagnostics, reclaimer thread |
+| `src/auth.cpp` | Session/state signing, allow-list, and the central admin authorization decision — deliberately Crow-free so every allow and deny path is unit-testable |
+| `src/auth_service.cpp` | `AuthService` — Crow adapters for `/api/v1/auth/*` and for the admin guard |
+| `src/http_client.cpp` | libcurl-backed `HttpClient` seam used for GitHub provider calls |
 | `src/service.cpp` | `PoolService` — holds mutex, delegates to sub-services |
 | `src/service_work.cpp` | HTTP adapter for `/work` and `/heartbeat` |
 | `src/service_submit.cpp` | HTTP adapter for `/submit` |
@@ -66,11 +87,20 @@ and visualises it on a live dashboard.
 | `src/config.cpp` | `loadConfigFromEnv()` — reads `.env` + process env |
 | `src/permutation.cpp` | Feistel and affine permutation for chunk ordering |
 | `src/hex_bigint.cpp` | Hex ↔ bigint conversion utilities |
-| `src/hash_utils.cpp` | SHA-256 / HMAC-SHA-256 (Apple CommonCrypto or OpenSSL) |
+| `src/hash_utils.cpp` | SHA-256, the frozen `keyedDigestHex`, and RFC 2104 HMAC-SHA-256 (Apple CommonCrypto or OpenSSL) |
 | `src/env.cpp` | dotenv loader, `getEnvOr` / `getEnvInt` helpers |
 
 Headers live under `include/puzzpool/`. Dependency direction (no cycles):
-`main → service → {work_service, submission_service} → allocator → db → config → env`
+
+```
+main → service      → {work_service, submission_service} → allocator → db → config → env
+     → auth_service → {auth, http_client}                                  → config → env
+```
+
+`auth` depends on `config` and `hash_utils` only. It has no Crow, no database, and
+no I/O, so `authorizeAdminRequest()` is a pure function of configuration plus a
+small `AdminRequestView`. `AuthService` holds no lock and no database handle, so
+its blocking provider calls never run under the `PoolService` mutex.
 
 ## Frontend Modules
 
@@ -148,6 +178,21 @@ SQLite. `PoolService` is a thin HTTP adapter: parse → lock mutex → delegate 
 **Worker identity by name** — No registration or authentication. Workers are identified
 only by the `name` string they send with each request. Chunk ownership is enforced by
 `WHERE worker_name = ?` in all UPDATE statements.
+
+**One default-deny admin guard** — Authorization is a single pure function in
+`puzzpool_core`, not a lambda in `main.cpp`, so every allow and deny path — missing
+configuration, wrong token, bad signature, expired cookie, revoked login, failed
+CSRF check — is covered by direct unit tests. Two independent mechanisms may each
+authorize a request (`X-Admin-Token`, or a signed GitHub session whose login is on
+the allow-list); neither configured means nobody is authorized. See
+[security.md](security.md) and ADR-5/ADR-6 in
+[architecture-review.md](architecture-review.md).
+
+**Stateless sessions** — The session is an HMAC-signed cookie carrying the login,
+the numeric GitHub id, and an absolute expiry. Nothing is stored server-side, so
+there is no session table to migrate, expire, or replicate. The cost is that a
+cookie cannot be revoked individually before it expires; revocation works through
+the allow-list instead, which is consulted on every request.
 
 **Single-file frontend** — `public/index.html` has no runtime dependencies. The C++ server
 serves that generated file with a single static-file route. TypeScript strict mode and the

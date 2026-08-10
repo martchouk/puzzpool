@@ -3,13 +3,24 @@
 ## C++ Unit Tests (Catch2 + CTest)
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUZZPOOL_BUILD_TESTS=ON
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-Tests are built automatically (`PUZZPOOL_BUILD_TESTS=ON` by default). Each test binary
-links against the `puzzpool_core` static library (all sources except `main.cpp`).
+Each test binary links against the `puzzpool_core` static library (all sources except
+`main.cpp`).
+
+`ctest` also runs `tests/test_check_node_version_age.sh`, the unit tests for the
+Node.js supply-chain guard (`scripts/check-node-version-age.sh`). It mocks
+`node --version` and `curl`, so it makes no network calls. It is registered only when
+both `bash` and `node` are found at configure time; otherwise CMake prints a warning
+and skips it, so a missing interpreter never masquerades as a pass.
+
+`tests/test_admin_routes_smoke.sh` is registered the same way (it needs `bash` and
+`curl`). It starts the real `puzzpool` binary on `127.0.0.1:18899` with a temporary
+database, so it runs `RUN_SERIAL`. Pass a different port as its second argument if
+that one is taken.
 
 ### Test coverage
 
@@ -19,6 +30,11 @@ links against the `puzzpool_core` static library (all sources except `main.cpp`)
 | `tests/test_permutation.cpp` | Feistel: determinism, bounds `[0,n)`, 100k-sample injectivity, edge keyspace sizes; Affine: bounded, deterministic, 10k injectivity |
 | `tests/test_submission.cpp` | `submitDone` (exact/overscan accepted, underscan rejected+reclaimed, wrong worker, missing fields, negative); `submitFound` (valid, deduplication, empty array, invalid hex); `clearTestChunkIfNeeded` |
 | `tests/test_allocator.cpp` | `upsertWorker` (new/fresh), `assignWork` (valid chunk, idempotent, two-worker non-overlap), `reclaimChunk`, `existingAssignedChunk` (found/nullopt), `reclaimTimedOutChunks` (backdated/fresh) |
+| `tests/test_hash_utils.cpp` | `keyedDigestHex` golden vectors and the frozen Feistel allocation order (ADR-4/ADR-5); `hmacSha256Hex` against the RFC 4231 vectors; proof that the two helpers are not aliased |
+| `tests/test_auth.cpp` | base64url round-trip and rejection; constant-time comparison; fail-closed signing with no secret; session encode/decode, expiry, tampering, wrong key, purpose confusion; allow-list parsing and matching; cookie parsing; CSRF proof; the full admin-guard allow/deny matrix; startup diagnostics |
+| `tests/test_auth_routes.cpp` | `/api/v1/auth/*` through `AuthService` with a stubbed `HttpClient`: 503 when unconfigured, redirect and state cookie shape, state mismatch/tampering/expiry/replay, provider transport and payload failures, session cookie attributes, `/auth/me` signed-in and signed-out bodies, logout, and the Crow guard adapter |
+| `tests/test_check_node_version_age.sh` | `scripts/check-node-version-age.sh` — threshold enforcement, disable switch, network and lookup failures (mocked `node` and `curl`) |
+| `tests/test_admin_routes_smoke.sh` | Route wiring against a real running server: all six admin routes denied when nothing is configured and accepted with a valid `X-Admin-Token`, `/api/v1/auth/*` reachable and 503 without a signing secret, cookie attributes on the redirect, and no secret in the redirect or the server log |
 
 ### In-memory isolation
 
@@ -172,7 +188,7 @@ print('finders:', d['finders'])
 
 **Scenario 4 — Admin token**
 ```bash
-# Without token (should fail if ADMIN_TOKEN is set)
+# Without a credential — always 401, including when ADMIN_TOKEN is blank
 curl -s -X GET $BASE_URL/api/v1/admin/puzzles
 # → {"error":"unauthorized"}
 
@@ -180,6 +196,58 @@ curl -s -X GET $BASE_URL/api/v1/admin/puzzles
 curl -s -X GET $BASE_URL/api/v1/admin/puzzles \
   -H "X-Admin-Token: $ADMIN_TOKEN" | python3 -m json.tool
 ```
+
+**Scenario 5 — Fail-closed admin guard**
+```bash
+# Start the server with neither mechanism configured.
+env -u ADMIN_TOKEN -u ADMIN_GITHUB_USERS ./build/bin/puzzpool
+# Startup log names the missing variables:
+#   [puzzpool-cpp] WARNING: neither ADMIN_TOKEN nor ADMIN_GITHUB_USERS is configured …
+
+curl -s -o /dev/null -w '%{http_code}\n' $BASE_URL/api/v1/admin/puzzles
+# → 401   (previously this returned 200)
+```
+
+**Scenario 6 — GitHub sign-in**
+
+Requires `SESSION_SIGNING_SECRET`, `GITHUB_OAUTH_CLIENT_ID`,
+`GITHUB_OAUTH_CLIENT_SECRET`, and your login in `ADMIN_GITHUB_USERS`.
+
+```bash
+# Fail-closed behaviour with no signing secret
+env -u SESSION_SIGNING_SECRET ./build/bin/puzzpool &
+curl -s $BASE_URL/api/v1/auth/me
+# → {"error":"auth_unavailable","reason":"session_signing_secret_missing"}  (503)
+
+# Signed-out identity with signing configured
+curl -s $BASE_URL/api/v1/auth/me
+# → {"authenticated":false,"is_admin":false}
+
+# Redirect and state cookie
+curl -s -D - -o /dev/null $BASE_URL/api/v1/auth/github/login
+# → 302 to github.com/login/oauth/authorize?client_id=…&state=…
+# → Set-Cookie: pp_oauth_state=…; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600
+
+# Complete the flow in a browser, then check the session cookie attributes in
+# DevTools → Application → Cookies: pp_session must be HttpOnly + Secure + Lax.
+curl -s --cookie "pp_session=$COOKIE" $BASE_URL/api/v1/auth/me
+# → {"authenticated":true,"login":"…","avatar_url":"…","is_admin":true}
+
+# CSRF: a cookie-authorized POST without same-origin proof is refused
+curl -s -X POST --cookie "pp_session=$COOKIE" $BASE_URL/api/v1/admin/reclaim
+# → {"error":"csrf_check_failed"}  (403)
+
+curl -s -X POST --cookie "pp_session=$COOKIE" \
+  -H "Sec-Fetch-Site: same-origin" $BASE_URL/api/v1/admin/reclaim
+# → 200
+
+# Sign out
+curl -s -X POST --cookie "pp_session=$COOKIE" $BASE_URL/api/v1/auth/logout
+# → {"ok":true}   with Set-Cookie: pp_session=; … Max-Age=0
+```
+
+Never paste a real `SESSION_SIGNING_SECRET`, OAuth client secret, access token, or
+session cookie value into a log, issue, or review artifact.
 
 ---
 

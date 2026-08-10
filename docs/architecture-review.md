@@ -101,6 +101,26 @@ Stats are computed on-demand from the `chunks` table. Virtual chunk counts are t
 
 ---
 
+### ADR-5: A real HMAC alongside the frozen allocator digest
+
+**Context:** `hash_utils` exposed a helper named `hmacSha256Hex` that was in fact `sha256(key ‖ 0x1f ‖ msg)` — a secret-prefix construction, and therefore length-extension forgeable rather than a message-authentication code. Authenticating a session cookie with it would have been exploitable. It could not simply be corrected in place: `src/permutation.cpp` uses it as the Feistel round function, so changing one output byte would reorder allocation for every puzzle that has already issued work, breaking ADR-4's determinism guarantee.
+
+**Decision:** Keep the legacy construction byte-for-byte identical but rename it to `keyedDigestHex` and document at the declaration that it is deliberately not a MAC. Add a separate, correctly implemented RFC 2104 `hmacSha256Hex`/`hmacSha256Raw` and use it for every signed value. Authentication uses `SESSION_SIGNING_SECRET`, a key distinct from any allocator seed.
+
+**Consequences:** Existing allocation order is preserved — `tests/test_hash_utils.cpp` pins both the digest bytes and the resulting permutation order with golden vectors captured from the pre-rename tree, so a future "cleanup" of the odd-looking helper fails the build instead of silently reordering live puzzles. The new HMAC is verified against the RFC 4231 vectors. The cost is two similar-looking helpers in one header; the naming and the comments carry the distinction.
+
+---
+
+### ADR-6: Stateless signed sessions behind a single default-deny guard
+
+**Context:** Admin access was a shared `ADMIN_TOKEN` checked by a lambda inside `main()`. That guard returned "allowed" whenever the token was unset — a fail-open default — and it was untestable, because `main.cpp` is not part of `puzzpool_core`, the only target the test suite links. The pool also needed per-operator, revocable access.
+
+**Decision:** Extract authorization into `authorizeAdminRequest()` in `puzzpool_core`, taking the configuration and a small `AdminRequestView` and returning a decision. It is default-deny: with neither `ADMIN_TOKEN` nor a usable `ADMIN_GITHUB_USERS` configured, every admin route returns 401. Two mechanisms may each authorize a request, and `main.cpp` only wires the decision to the six routes. Sessions are stateless HMAC-signed cookies rather than rows in SQLite, and revocation runs through the allow-list, which is re-read on every request.
+
+**Consequences:** Every allow and deny path is directly unit-testable, including the unconfigured case that motivated the change. No session table, migration, or expiry sweep is needed, and a rotated `SESSION_SIGNING_SECRET` invalidates all outstanding sessions at once. The trade-offs: an individual cookie cannot be revoked before it expires (removing the login from the allow-list is the revocation path, and it takes effect on the next request), and the fail-closed switch is a breaking change for deployments that relied on a blank `ADMIN_TOKEN` — documented as an upgrade warning in `README.md` and `docs/security.md`.
+
+---
+
 ## 3. Dimension-by-Dimension Findings
 
 ### D1 — Virtual keyspace representation

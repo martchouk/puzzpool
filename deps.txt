@@ -1,7 +1,8 @@
 # Linux
-sudo apt install -y build-essential cmake ninja-build git pkg-config libsqlite3-dev libboost-all-dev nlohmann-json3-dev libasio-dev
+sudo apt install -y build-essential cmake ninja-build git pkg-config libsqlite3-dev libboost-all-dev nlohmann-json3-dev libasio-dev libcurl4-openssl-dev
 
 #mac
+# libcurl ships with macOS; the Homebrew formula is only needed for a newer version.
 brew update && brew install git cmake ninja pkg-config boost nlohmann-json sqlite asio
 
 git submodule add https://github.com/CrowCpp/Crow.git third_party/crow

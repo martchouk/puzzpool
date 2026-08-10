@@ -15,16 +15,16 @@ progress in real time: stat cards (hashrate, ETA, keys completed), three canvas-
 
 ## Quick Start (local)
 
-**Prerequisites:** GCC 12+ or Clang 15+, CMake 3.20+, `libboost-dev`, `nlohmann-json3-dev`, Node.js 20+ (frontend build only)
+**Prerequisites:** GCC 12+ or Clang 15+, CMake 3.20+, `libboost-dev`, `nlohmann-json3-dev`, `libcurl4-openssl-dev`, Node.js 20+ (frontend build only)
 
 ```bash
 # Ubuntu / Debian
-sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev
+sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev libcurl4-openssl-dev
 
 git clone --recurse-submodules https://github.com/martchouk/puzzpool.git
 cd puzzpool
 ./update-deps.sh     # build C++ server + frontend dashboard
-cp .env.example .env # configure (set ADMIN_TOKEN at minimum)
+cp .env.example .env # configure (set ADMIN_TOKEN or ADMIN_GITHUB_USERS — admin routes fail closed)
 ./build/bin/puzzpool # → server on http://127.0.0.1:8888
 ```
 
@@ -85,6 +85,10 @@ See [docs/api.md](docs/api.md) for full request/response schemas.
 | `POST` | `/api/v1/submit` | Report chunk done or key found |
 | `POST` | `/api/v1/heartbeat` | Reset reclaim timer for long jobs |
 | `GET`  | `/api/v1/stats` | Dashboard data |
+| `GET`  | `/api/v1/auth/github/login` | Start GitHub OAuth sign-in |
+| `GET`  | `/api/v1/auth/github/callback` | Complete sign-in and issue the session cookie |
+| `GET`  | `/api/v1/auth/me` | Current signed-in identity, or a signed-out result |
+| `POST` | `/api/v1/auth/logout` | Clear the session cookie |
 | `POST` | `/api/v1/admin/set-puzzle` | Create / activate a puzzle |
 | `POST` | `/api/v1/admin/activate-puzzle` | Switch the active puzzle by ID |
 | `POST` | `/api/v1/admin/set-test-chunk` | Set verification chunk for new workers |
@@ -109,7 +113,13 @@ cp .env.example .env
 | `TIMEOUT_MINUTES` | `15` | Minutes before an inactive chunk is reclaimed |
 | `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
 | `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
-| `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
+| `ADMIN_TOKEN` | *(unset)* | If set, admin routes accept the `X-Admin-Token` header. A blank value does **not** disable authentication — see the upgrade warning below. |
+| `ADMIN_GITHUB_USERS` | *(unset)* | Comma-separated GitHub logins allowed to administer the pool. Case-insensitive, whitespace-tolerant, re-read on every admin request. An empty list grants nobody access. |
+| `GITHUB_OAUTH_CLIENT_ID` | *(unset)* | Client ID of **this stage's** GitHub OAuth application |
+| `GITHUB_OAUTH_CLIENT_SECRET` | *(unset)* | Client secret of this stage's GitHub OAuth application |
+| `GITHUB_OAUTH_CALLBACK_URL` | *(unset)* | Optional explicit callback URL. When empty, GitHub uses the URL registered on the app. |
+| `SESSION_SIGNING_SECRET` | *(unset)* | HMAC-SHA-256 key for the session cookie. When unset or empty, `/api/v1/auth/*` returns `503` and no session cookie is issued or accepted. There is no default key. |
+| `SESSION_TTL_MINUTES` | `720` | Lifetime of an issued session cookie, in minutes |
 | `BLOCKEXPLORER_API` | `https://mempool.space/api/address/` | Backend API base used to refresh address-backed puzzle solved state |
 | `BLOCKEXPLORER_URL` | `https://mempool.space/address/` | Public explorer URL used for the puzzle badge link |
 | `BLOCKEXPLORER_POLL_SEC` | `600` | Seconds between backend puzzle-status refreshes |
@@ -124,7 +134,7 @@ cp .env.example .env
 
 ### Prerequisites
 
-- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `libasio-dev`, `nlohmann-json3-dev`, `libssl-dev`
+- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `libasio-dev`, `nlohmann-json3-dev`, `libssl-dev`, `libcurl4-openssl-dev`
 - Node.js 20+ (only needed at build time to compile the TypeScript dashboard)
 - Nginx, Certbot, systemd
 - DNS A record pointing your domain to the server
@@ -133,7 +143,7 @@ cp .env.example .env
 
 ```bash
 # 1. Install build dependencies
-sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev nodejs npm
+sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev libcurl4-openssl-dev nodejs npm
 
 # 2. Clone with submodules
 git clone --recurse-submodules https://github.com/martchouk/puzzpool.git ~/git/puzzpool
@@ -141,7 +151,8 @@ cd ~/git/puzzpool
 
 # 3. Configure
 cp .env.example .env
-# Edit .env — set ADMIN_TOKEN at minimum
+# Edit .env — admin routes fail closed, so set ADMIN_TOKEN and/or
+# ADMIN_GITHUB_USERS + SESSION_SIGNING_SECRET + the GitHub OAuth credentials
 
 # 4. Build C++ server + TypeScript dashboard
 ./update-deps.sh
@@ -223,8 +234,38 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
 
 ## Security
 
-- Admin routes are **IP-restricted** at the Nginx level by default (see `deploy/nginx.conf`)
-- Set `ADMIN_TOKEN` for token-based admin authentication
+> ### ⚠️ Upgrade warning — admin routes now fail closed
+>
+> Earlier releases treated a blank or unset `ADMIN_TOKEN` as *"authentication
+> disabled"* and let every `/api/v1/admin/*` request through. That was a
+> fail-open default, and `deploy/nginx.conf` deliberately exposes
+> `/api/v1/admin/activate-puzzle` to the internet so the dashboard can reach it
+> — so on such a deployment that route was reachable by anyone.
+>
+> **From this release, a blank value denies everybody.** If neither
+> `ADMIN_TOKEN` nor `ADMIN_GITHUB_USERS` is configured, every admin route
+> returns `401`.
+>
+> **Before upgrading**, set at least one of them in `.env` or the systemd unit:
+>
+> ```bash
+> ADMIN_TOKEN=$(openssl rand -hex 32)
+> # and / or
+> ADMIN_GITHUB_USERS=your-github-login
+> SESSION_SIGNING_SECRET=$(openssl rand -hex 32)
+> ```
+>
+> The server prints a warning naming the missing variables at startup if it
+> comes up with no usable admin authentication.
+
+- Admin routes are protected by **one central, default-deny guard**. A configured
+  `ADMIN_TOKEN` (via the `X-Admin-Token` header) and a signed GitHub session
+  cookie each authorize a request; neither configured means nobody is authorized.
+- Admin routes remain **IP-restricted** at the Nginx level as defence in depth
+  (see `deploy/nginx.conf`)
+- GitHub sign-in uses a no-scope OAuth flow with an unguessable, browser-bound,
+  single-use `state`, and an `HttpOnly; Secure; SameSite=Lax` signed session
+  cookie. Cookie-authorized admin `POST`s additionally require same-origin proof.
 - Workers are identified by name only — no passwords (by design for an open public puzzle)
 - All SQL uses parameterised queries (no injection risk)
 - Dashboard renders all user-supplied data via `textContent` (no XSS risk)
@@ -237,13 +278,17 @@ See [docs/security.md](docs/security.md) for the full threat model and recommend
 
 ```bash
 # Build and run unit tests
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPUZZPOOL_BUILD_TESTS=ON
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
 # TypeScript type check + frontend build
 npm run build --prefix frontend
 ```
+
+`ctest` also runs `tests/test_check_node_version_age.sh`, the unit tests for the
+Node.js supply-chain guard. It mocks `node --version` and `curl`, so it makes no
+network calls; it is skipped when `bash` or `node` is not on `PATH`.
 
 `frontend/` is the only authored frontend source. `public/index.html` is generated output,
 served by the C++ server at runtime, and is intentionally not tracked in git.
