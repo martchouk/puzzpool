@@ -48,6 +48,7 @@ add_library(puzzpool_core STATIC
     src/secure_random.cpp
     src/session.cpp
     src/admin_auth.cpp
+    src/admin_guard.cpp
     src/permutation.cpp
     src/db.cpp
     src/allocator.cpp

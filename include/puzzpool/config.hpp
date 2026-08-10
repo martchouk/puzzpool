@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace puzzpool {
 
@@ -29,6 +30,19 @@ struct Config {
     std::string permutationMode = "feistel";
     std::string stage           = "PROD";
     std::string adminToken;
+
+    // ── GitHub sign-in (slice A of story #149) ────────────────────────────────
+    // All read from this deployment stage's own environment. There is deliberately
+    // no Config::stage branch here (AC20): PROD and TEST use separate OAuth apps,
+    // so only the active stage's credentials are ever loaded.
+    std::string sessionSigningSecret;
+    std::string githubOauthClientId;
+    std::string githubOauthClientSecret;
+    std::string publicBaseUrl;
+    int         sessionTtlMinutes = 720;
+    /// Normalised: trimmed, lowercased, empties dropped. An empty list grants nobody.
+    std::vector<std::string> adminGithubUsers;
+
     std::string blockExplorerApi = "https://mempool.space/api/address/";
     std::string blockExplorerUrl = "https://mempool.space/address/";
     int         blockExplorerPollSec = 600;

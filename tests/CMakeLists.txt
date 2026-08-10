@@ -19,3 +19,16 @@ add_puzzpool_test(test_puzzle_status)
 add_puzzpool_test(test_visualization)
 add_puzzpool_test(test_hash_utils)
 add_puzzpool_test(test_session)
+add_puzzpool_test(test_admin_auth)
+
+# ── Admin route guard regression (end to end) ────────────────────────────────
+# This one is not a Catch2 target on purpose. The admin route wiring lives in
+# src/main.cpp, which is outside puzzpool_core and therefore invisible to every
+# target above: a route that loses its adminGuard() line leaves the whole Catch2
+# suite green while being publicly reachable. The script drives the real server
+# binary over HTTP instead. RUN_SERIAL because it binds a fixed port.
+add_test(NAME test_admin_routes_guarded
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_admin_routes_guarded.sh)
+set_tests_properties(test_admin_routes_guarded PROPERTIES
+    ENVIRONMENT "SERVER_BIN=$<TARGET_FILE:puzzpool>"
+    RUN_SERIAL TRUE)

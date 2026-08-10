@@ -1,3 +1,5 @@
+#include <puzzpool/admin_auth.hpp>
+#include <puzzpool/admin_guard.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/service.hpp>
 
@@ -70,50 +72,46 @@ int main() {
             return service.handleSubmit(req);
         });
 
-        auto adminGuard = [&cfg](const crow::request& req) -> std::optional<crow::response> {
-            if (cfg.adminToken.empty()) return std::nullopt;
-            auto token = req.get_header_value("X-Admin-Token");
-            if (token == cfg.adminToken) return std::nullopt;
-            crow::response r;
-            r.code = 401;
-            r.set_header("Content-Type", "application/json");
-            r.body = nlohmann::json({{"error", "unauthorized"}}).dump();
-            return r;
-        };
+        // Every /api/v1/admin/* route goes through the one guard in puzzpool_core.
+        // It is default-deny: with neither ADMIN_TOKEN nor a usable GitHub session
+        // configured, all six routes below return 401 (AC9). Adding a route here
+        // without this line makes it public — tests/test_admin_routes_guarded.sh is
+        // the regression that checks all six, because main.cpp is outside every
+        // Catch2 target.
 
         CROW_ROUTE(app, "/api/v1/admin/activate-puzzle").methods(crow::HTTPMethod::POST)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleActivatePuzzle(req);
         });
 
         CROW_ROUTE(app, "/api/v1/admin/set-puzzle").methods(crow::HTTPMethod::POST)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleSetPuzzle(req);
         });
 
         CROW_ROUTE(app, "/api/v1/admin/set-test-chunk").methods(crow::HTTPMethod::POST)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleSetTestChunk(req);
         });
 
         CROW_ROUTE(app, "/api/v1/admin/puzzles").methods(crow::HTTPMethod::GET)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleAdminPuzzles();
         });
 
         CROW_ROUTE(app, "/api/v1/admin/reclaim").methods(crow::HTTPMethod::POST)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleAdminReclaim();
         });
 
         CROW_ROUTE(app, "/api/v1/admin/import-ranges").methods(crow::HTTPMethod::POST)
         ([&](const crow::request& req) {
-            if (auto denied = adminGuard(req)) return std::move(*denied);
+            if (auto denied = adminGuard(cfg, req)) return std::move(*denied);
             return service.handleImportRanges(req);
         });
 
@@ -138,6 +136,12 @@ int main() {
         std::cout << "[puzzpool-cpp] server running on http://127.0.0.1:" << cfg.port << "\n";
         std::cout << "[puzzpool-cpp] database: " << cfg.dbPath << "\n";
         if (!cfg.adminToken.empty()) std::cout << "[puzzpool-cpp] admin token auth: enabled\n";
+        if (!cfg.adminGithubUsers.empty())
+            std::cout << "[puzzpool-cpp] github sign-in auth: " << cfg.adminGithubUsers.size()
+                      << " allow-listed login(s)\n";
+        for (const auto& line : puzzpool::startupAuthDiagnostics(cfg)) {
+            std::cerr << "[puzzpool-cpp] " << line << "\n";
+        }
 
         app.port(static_cast<uint16_t>(cfg.port)).bindaddr("127.0.0.1").multithreaded().run();
         return 0;

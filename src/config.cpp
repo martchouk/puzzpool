@@ -1,3 +1,4 @@
+#include <puzzpool/admin_auth.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/env.hpp>
 #include <puzzpool/hex_bigint.hpp>
@@ -9,6 +10,17 @@
 #include <string>
 
 namespace puzzpool {
+
+namespace {
+
+/// PUBLIC_BASE_URL is compared against an Origin header, which never has a trailing
+/// slash, so normalise it once here rather than at every comparison site.
+std::string trimTrailingSlash(std::string s) {
+    while (!s.empty() && s.back() == '/') s.pop_back();
+    return s;
+}
+
+} // namespace
 
 Config loadConfigFromEnv() {
     loadDotEnv(".env", false);
@@ -33,6 +45,18 @@ Config loadConfigFromEnv() {
     cfg.permutationMode = getEnvOr("PERMUTATION_MODE", "feistel");
     cfg.stage           = getEnvOr("STAGE", "PROD");
     cfg.adminToken      = getEnvOr("ADMIN_TOKEN", "");
+
+    // GitHub sign-in. Read straight from this stage's environment — no Config::stage
+    // branch selects between PROD and TEST credentials (AC20).
+    cfg.sessionSigningSecret    = getEnvOr("SESSION_SIGNING_SECRET", "");
+    cfg.githubOauthClientId     = getEnvOr("GITHUB_OAUTH_CLIENT_ID", "");
+    cfg.githubOauthClientSecret = getEnvOr("GITHUB_OAUTH_CLIENT_SECRET", "");
+    cfg.publicBaseUrl           = trimTrailingSlash(getEnvOr("PUBLIC_BASE_URL", ""));
+    // Clamped at both ends. Sessions are stateless and cannot be revoked
+    // individually, so a typo like 7200000 would otherwise mint a multi-year
+    // credential whose only revocation lever is rotating the signing secret.
+    cfg.sessionTtlMinutes = std::clamp(getEnvInt("SESSION_TTL_MINUTES", 720), 1, 43'200);
+    cfg.adminGithubUsers  = parseAdminGithubUsers(getEnvOr("ADMIN_GITHUB_USERS", ""));
     cfg.blockExplorerApi = getEnvOr("BLOCKEXPLORER_API", cfg.blockExplorerApi);
     cfg.blockExplorerUrl = getEnvOr("BLOCKEXPLORER_URL", cfg.blockExplorerUrl);
     cfg.blockExplorerPollSec = std::max(30, getEnvInt("BLOCKEXPLORER_POLL_SEC", cfg.blockExplorerPollSec));
