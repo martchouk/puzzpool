@@ -54,4 +54,9 @@ struct Config {
 
 Config loadConfigFromEnv();
 
+// Comma-separated, whitespace-tolerant, case-insensitive. Returns lowercase
+// entries with duplicates removed; an empty or blank list yields no entries,
+// which denies everybody (AC6).
+std::vector<std::string> parseAdminGithubUsers(const std::string& raw);
+
 } // namespace puzzpool

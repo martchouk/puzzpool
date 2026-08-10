@@ -79,10 +79,9 @@ std::string githubAvatarUrl(std::int64_t githubId);
 
 // ── Allow-list ────────────────────────────────────────────────────────────────
 
-// Comma-separated, whitespace-tolerant, case-insensitive. Returns lowercase
-// entries with duplicates removed; an empty or blank list yields no entries,
-// which denies everybody (AC6).
-std::vector<std::string> parseAdminGithubUsers(const std::string& raw);
+// Matches case-insensitively against the normalized list produced by
+// parseAdminGithubUsers() (declared in <puzzpool/config.hpp>). An empty list or
+// an empty login denies (AC6).
 bool isAllowedAdminLogin(const std::vector<std::string>& allowList, const std::string& login);
 
 // ── Cookies ───────────────────────────────────────────────────────────────────

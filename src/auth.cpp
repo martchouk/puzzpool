@@ -266,20 +266,6 @@ std::string githubAvatarUrl(std::int64_t githubId) {
 
 // ── Allow-list ────────────────────────────────────────────────────────────────
 
-std::vector<std::string> parseAdminGithubUsers(const std::string& raw) {
-    std::vector<std::string> out;
-    std::istringstream       stream(raw);
-    std::string              item;
-    while (std::getline(stream, item, ',')) {
-        const std::string normalized = toLower(trim(item));
-        if (normalized.empty()) continue;
-        if (std::find(out.begin(), out.end(), normalized) == out.end()) {
-            out.push_back(normalized);
-        }
-    }
-    return out;
-}
-
 bool isAllowedAdminLogin(const std::vector<std::string>& allowList, const std::string& login) {
     if (allowList.empty() || login.empty()) return false;
     const std::string normalized = toLower(login);

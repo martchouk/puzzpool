@@ -1,4 +1,3 @@
-#include <puzzpool/auth.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/env.hpp>
 #include <puzzpool/hex_bigint.hpp>
@@ -7,9 +6,26 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace puzzpool {
+
+std::vector<std::string> parseAdminGithubUsers(const std::string& raw) {
+    std::vector<std::string> out;
+    std::istringstream       stream(raw);
+    std::string              item;
+    while (std::getline(stream, item, ',')) {
+        std::string normalized = trim(item);
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (normalized.empty()) continue;
+        if (std::find(out.begin(), out.end(), normalized) == out.end()) {
+            out.push_back(normalized);
+        }
+    }
+    return out;
+}
 
 Config loadConfigFromEnv() {
     loadDotEnv(".env", false);
