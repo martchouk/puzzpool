@@ -88,23 +88,51 @@ the WorkPackage wins.
 - Prefer `textContent` for untrusted values. When structured markup requires
   `innerHTML`, pass every worker-, puzzle-, or finding-derived string through
   the shared `esc()` helper.
-- Preserve accessible names, roles, focus behavior, and `aria-pressed` state.
-  Update `frontend/src/accessibility.test.ts` when dashboard controls or filter
-  groups change.
+- Preserve accessible names, roles, focus behavior, and state semantics.
+  Source-level checks in `frontend/src/accessibility.test.ts` may verify markup
+  conventions, but they do not prove runtime keyboard focus. Use a DOM-capable
+  test harness or browser test for actual focus movement, focus restoration,
+  keyboard operation, and focus visibility; never claim focus coverage from a
+  source-regex assertion.
 - Keep polling and rendering work bounded. Changes to canvas rendering,
   dashboard polling, or large collections require a regression or performance
   test that would fail if the expensive behavior returns.
 
 ## Security and local state
 
-- Admin routes must remain behind the central admin-token check and the
-  documented Nginx restriction. Never expose an admin mutation through an
-  unguarded route.
+- Admin routes must remain behind one central, directly testable authorization
+  guard and the documented Nginx restriction. The guard is default-deny: a
+  missing or blank authentication configuration never makes an admin mutation
+  public. A configured `X-Admin-Token` and an independently validated signed
+  GitHub session may each authorize a request; route handlers must not
+  reimplement or combine those mechanisms ad hoc.
+- Keep authorization decisions outside `main.cpp` route lambdas so unit tests
+  can cover every allow and deny path, including missing configuration,
+  malformed or expired cookies, bad signatures, failed CSRF checks, and token
+  comparison. Compare secrets in constant time where the platform permits it.
+- The allocator's legacy deterministic keyed digest is compatibility behavior,
+  not HMAC and not a message-authentication primitive. Preserve its byte-for-
+  byte allocator output while naming it accordingly (for example,
+  `keyedDigestHex`). Authentication must use standards-compliant HMAC-SHA-256
+  with a distinct signing key.
+- Missing or empty session-signing secrets fail closed. OAuth and cookie
+  endpoints must report service unavailability and must neither issue nor
+  accept a signed session until valid configuration is present; never install
+  a built-in or predictable fallback key.
+- OAuth client secrets, authorization codes, access tokens, and session secrets
+  must not appear in shell commands, process arguments, URLs, logs, fixtures,
+  reports, or issue comments. Perform provider calls through a library HTTP
+  client behind an injectable test seam, with bounded response bodies and
+  blocking network I/O outside the `PoolService` mutex.
+- Production and test deployments use separate OAuth applications and secret
+  values. Load only the active deployment stage's credentials; do not load both
+  stages and select between them with a runtime `Config::stage` branch.
 - Worker names are intentionally unauthenticated, but a worker must not be
   able to complete another worker's assigned job.
-- Never commit or print `.env`, `ADMIN_TOKEN`, database files, WAL/SHM files,
-  or `BINGO_FOUND_KEYS.txt`. Do not place real discovered private keys in
-  fixtures, logs, review reports, or issue comments.
+- Never commit or print `.env`, `ADMIN_TOKEN`, OAuth credentials, session
+  signing keys, database files, WAL/SHM files, or `BINGO_FOUND_KEYS.txt`. Do not
+  place real discovered private keys in fixtures, logs, review reports, or
+  issue comments.
 - Do not weaken the Node.js minimum-release-age guard in CI or production.
   `MINIMUM_NODE_RELEASE_AGE=0` is acceptable only for an explicitly local
   development run.
@@ -158,6 +186,10 @@ bash tests/test_check_node_version_age.sh
 - Run the local-server smoke test from `docs/testing.md` when route wiring,
   startup, configuration, database initialization, or the generated dashboard
   changes.
+- When authentication changes, smoke-test the redirect/callback/session path,
+  cookie attributes, configured legacy-token behavior, and fail-closed `503`
+  behavior with missing signing configuration. Keep deterministic unit tests
+  for signature, expiry, CSRF, and authorization failure branches.
 - Run the skipped permutation benchmark explicitly when changing permutation
   or allocator performance; do not treat it as part of ordinary CTest.
 - Report exact commands and results. Do not claim the full suite passed when
