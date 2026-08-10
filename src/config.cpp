@@ -1,3 +1,4 @@
+#include <puzzpool/auth.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/env.hpp>
 #include <puzzpool/hex_bigint.hpp>
@@ -36,6 +37,15 @@ Config loadConfigFromEnv() {
     cfg.blockExplorerApi = getEnvOr("BLOCKEXPLORER_API", cfg.blockExplorerApi);
     cfg.blockExplorerUrl = getEnvOr("BLOCKEXPLORER_URL", cfg.blockExplorerUrl);
     cfg.blockExplorerPollSec = std::max(30, getEnvInt("BLOCKEXPLORER_POLL_SEC", cfg.blockExplorerPollSec));
+
+    // GitHub OAuth admin sign-in. Values are trimmed so that a stray trailing
+    // space in .env cannot silently produce an unusable secret or client id.
+    cfg.githubOauthClientId     = trim(getEnvOr("GITHUB_OAUTH_CLIENT_ID", ""));
+    cfg.githubOauthClientSecret = trim(getEnvOr("GITHUB_OAUTH_CLIENT_SECRET", ""));
+    cfg.githubOauthCallbackUrl  = trim(getEnvOr("GITHUB_OAUTH_CALLBACK_URL", ""));
+    cfg.sessionSigningSecret    = trim(getEnvOr("SESSION_SIGNING_SECRET", ""));
+    cfg.adminGithubUsers        = parseAdminGithubUsers(getEnvOr("ADMIN_GITHUB_USERS", ""));
+    cfg.sessionTtlMinutes       = std::max(1, getEnvInt("SESSION_TTL_MINUTES", cfg.sessionTtlMinutes));
 
     for (const auto& [key, value] : envMap) {
         if (key.rfind("KEYSPACE_", 0) == 0) {

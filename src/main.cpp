@@ -1,3 +1,5 @@
+#include <puzzpool/auth.hpp>
+#include <puzzpool/auth_service.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/service.hpp>
 
@@ -15,6 +17,7 @@ int main() {
     try {
         puzzpool::Config cfg = puzzpool::loadConfigFromEnv();
         puzzpool::PoolService service(cfg);
+        puzzpool::AuthService authService(cfg);
 
         crow::SimpleApp app;
 
@@ -70,15 +73,32 @@ int main() {
             return service.handleSubmit(req);
         });
 
-        auto adminGuard = [&cfg](const crow::request& req) -> std::optional<crow::response> {
-            if (cfg.adminToken.empty()) return std::nullopt;
-            auto token = req.get_header_value("X-Admin-Token");
-            if (token == cfg.adminToken) return std::nullopt;
-            crow::response r;
-            r.code = 401;
-            r.set_header("Content-Type", "application/json");
-            r.body = nlohmann::json({{"error", "unauthorized"}}).dump();
-            return r;
+        // ── Auth API (public per AC23; fails closed with 503 when unconfigured) ──
+
+        CROW_ROUTE(app, "/api/v1/auth/github/login").methods(crow::HTTPMethod::GET)
+        ([&authService](const crow::request& req) {
+            return authService.handleGithubLogin(req);
+        });
+
+        CROW_ROUTE(app, "/api/v1/auth/github/callback").methods(crow::HTTPMethod::GET)
+        ([&authService](const crow::request& req) {
+            return authService.handleGithubCallback(req);
+        });
+
+        CROW_ROUTE(app, "/api/v1/auth/logout").methods(crow::HTTPMethod::POST)
+        ([&authService](const crow::request& req) {
+            return authService.handleLogout(req);
+        });
+
+        CROW_ROUTE(app, "/api/v1/auth/me").methods(crow::HTTPMethod::GET)
+        ([&authService](const crow::request& req) {
+            return authService.handleMe(req);
+        });
+
+        // The authorization decision lives in puzzpool_core so every allow and
+        // deny path is unit-tested; this lambda only wires it to the routes.
+        auto adminGuard = [&cfg](const crow::request& req) {
+            return puzzpool::adminGuard(cfg, req);
         };
 
         CROW_ROUTE(app, "/api/v1/admin/activate-puzzle").methods(crow::HTTPMethod::POST)
@@ -137,7 +157,17 @@ int main() {
 
         std::cout << "[puzzpool-cpp] server running on http://127.0.0.1:" << cfg.port << "\n";
         std::cout << "[puzzpool-cpp] database: " << cfg.dbPath << "\n";
-        if (!cfg.adminToken.empty()) std::cout << "[puzzpool-cpp] admin token auth: enabled\n";
+        std::cout << "[puzzpool-cpp] admin token auth: "
+                  << (cfg.adminToken.empty() ? "disabled" : "enabled") << "\n";
+        std::cout << "[puzzpool-cpp] admin GitHub allow-list: "
+                  << (cfg.adminGithubUsers.empty()
+                          ? std::string("empty")
+                          : std::to_string(cfg.adminGithubUsers.size()) + " login(s)")
+                  << "\n";
+        // Names variables, never values (AC10, AC13, AC22).
+        for (const auto& diagnostic : puzzpool::startupAuthDiagnostics(cfg)) {
+            std::cerr << "[puzzpool-cpp] " << diagnostic << "\n";
+        }
 
         app.port(static_cast<uint16_t>(cfg.port)).bindaddr("127.0.0.1").multithreaded().run();
         return 0;

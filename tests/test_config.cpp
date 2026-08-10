@@ -5,6 +5,8 @@
 
 #include <cstdio>
 #include <fstream>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <stdlib.h>
@@ -85,4 +87,75 @@ TEST_CASE("loadConfigFromEnv parses block explorer settings and puzzle status ta
     CHECK(cfg.puzzleStatusTargets.at("ALL BTC").value == "5");
 
     std::remove(".env");
+}
+
+namespace {
+
+const char* const kAuthEnvKeys[] = {
+    "ADMIN_GITHUB_USERS", "SESSION_SIGNING_SECRET",     "SESSION_TTL_MINUTES",
+    "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_OAUTH_CALLBACK_URL",
+};
+
+void clearAuthEnv() {
+    for (const char* key : kAuthEnvKeys) unsetEnvVar(key);
+}
+
+} // namespace
+
+TEST_CASE("loadConfigFromEnv reads the GitHub OAuth settings", "[config][auth]") {
+    clearAuthEnv();
+    setEnvVar("GITHUB_OAUTH_CLIENT_ID", " client-id ", true);
+    setEnvVar("GITHUB_OAUTH_CLIENT_SECRET", " client-secret ", true);
+    setEnvVar("GITHUB_OAUTH_CALLBACK_URL", "https://puzzle.example/api/v1/auth/github/callback", true);
+    setEnvVar("SESSION_SIGNING_SECRET", " signing-secret ", true);
+    setEnvVar("SESSION_TTL_MINUTES", "45", true);
+
+    Config cfg = loadConfigFromEnv();
+
+    // Surrounding whitespace is stripped so a stray space cannot silently
+    // produce an unusable credential.
+    CHECK(cfg.githubOauthClientId == "client-id");
+    CHECK(cfg.githubOauthClientSecret == "client-secret");
+    CHECK(cfg.githubOauthCallbackUrl == "https://puzzle.example/api/v1/auth/github/callback");
+    CHECK(cfg.sessionSigningSecret == "signing-secret");
+    CHECK(cfg.sessionTtlMinutes == 45);
+
+    clearAuthEnv();
+}
+
+TEST_CASE("loadConfigFromEnv parses ADMIN_GITHUB_USERS case-insensitively", "[config][auth]") {
+    clearAuthEnv();
+    setEnvVar("ADMIN_GITHUB_USERS", " Alice ,BOB, alice ,,Carol ", true);
+
+    Config cfg = loadConfigFromEnv();
+
+    CHECK(cfg.adminGithubUsers == std::vector<std::string>{"alice", "bob", "carol"});
+
+    clearAuthEnv();
+}
+
+TEST_CASE("auth settings default to a fail-closed configuration", "[config][auth]") {
+    clearAuthEnv();
+
+    Config cfg = loadConfigFromEnv();
+
+    CHECK(cfg.adminGithubUsers.empty());
+    CHECK(cfg.sessionSigningSecret.empty());
+    CHECK(cfg.githubOauthClientId.empty());
+    CHECK(cfg.githubOauthClientSecret.empty());
+    CHECK(cfg.sessionTtlMinutes == 720);
+}
+
+TEST_CASE("a blank ADMIN_GITHUB_USERS grants nobody access", "[config][auth]") {
+    clearAuthEnv();
+    setEnvVar("ADMIN_GITHUB_USERS", "  ,  ,", true);
+
+    Config cfg = loadConfigFromEnv();
+    CHECK(cfg.adminGithubUsers.empty());
+
+    // Sensitivity: a real entry in the same slot is picked up.
+    setEnvVar("ADMIN_GITHUB_USERS", "  , alice ,", true);
+    CHECK(loadConfigFromEnv().adminGithubUsers == std::vector<std::string>{"alice"});
+
+    clearAuthEnv();
 }
