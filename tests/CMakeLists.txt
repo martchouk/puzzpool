@@ -20,6 +20,7 @@ add_puzzpool_test(test_visualization)
 add_puzzpool_test(test_hash_utils)
 add_puzzpool_test(test_session)
 add_puzzpool_test(test_admin_auth)
+add_puzzpool_test(test_auth_service)
 
 # ── Admin route guard regression (end to end) ────────────────────────────────
 # This one is not a Catch2 target on purpose. The admin route wiring lives in

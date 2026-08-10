@@ -1,5 +1,6 @@
 #include <puzzpool/admin_auth.hpp>
 #include <puzzpool/admin_guard.hpp>
+#include <puzzpool/auth_service.hpp>
 #include <puzzpool/config.hpp>
 #include <puzzpool/service.hpp>
 
@@ -71,6 +72,22 @@ int main() {
         ([&service](const crow::request& req) {
             return service.handleSubmit(req);
         });
+
+        // /api/v1/auth/* is intentionally public (AC23): these routes are how an
+        // anonymous browser signs in, so they cannot sit behind the admin guard.
+        puzzpool::AuthService auth(cfg);
+
+        CROW_ROUTE(app, "/api/v1/auth/github/login").methods(crow::HTTPMethod::GET)
+        ([&auth](const crow::request& req) { return auth.handleGithubLogin(req); });
+
+        CROW_ROUTE(app, "/api/v1/auth/github/callback").methods(crow::HTTPMethod::GET)
+        ([&auth](const crow::request& req) { return auth.handleGithubCallback(req); });
+
+        CROW_ROUTE(app, "/api/v1/auth/logout").methods(crow::HTTPMethod::POST)
+        ([&auth](const crow::request& req) { return auth.handleLogout(req); });
+
+        CROW_ROUTE(app, "/api/v1/auth/me").methods(crow::HTTPMethod::GET)
+        ([&auth](const crow::request& req) { return auth.handleAuthMe(req); });
 
         // Every /api/v1/admin/* route goes through the one guard in puzzpool_core.
         // It is default-deny: with neither ADMIN_TOKEN nor a usable GitHub session

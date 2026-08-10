@@ -49,6 +49,8 @@ add_library(puzzpool_core STATIC
     src/session.cpp
     src/admin_auth.cpp
     src/admin_guard.cpp
+    src/github_client.cpp
+    src/auth_service.cpp
     src/permutation.cpp
     src/db.cpp
     src/allocator.cpp
@@ -138,6 +140,11 @@ target_link_libraries(puzzpool_core PUBLIC Boost::boost)
 
 find_package(nlohmann_json REQUIRED)
 target_link_libraries(puzzpool_core PUBLIC nlohmann_json::nlohmann_json)
+
+# libcurl backs the GitHub OAuth exchange. It is a library call rather than a shell
+# invocation so that OAuth secrets and codes cannot reach a command line.
+find_package(CURL REQUIRED)
+target_link_libraries(puzzpool_core PUBLIC CURL::libcurl)
 
 # ── Crow ─────────────────────────────────────────────────────────────────────
 
