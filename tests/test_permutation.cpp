@@ -6,6 +6,8 @@
 
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace puzzpool;
 
@@ -124,6 +126,27 @@ TEST_CASE("permuteIndexAffine: 10k sample is injective", "[permutation][affine]"
         REQUIRE(seen.insert(out).second);
     }
     REQUIRE(static_cast<int>(seen.size()) == N);
+}
+
+// ── ADR-4: the allocation order is frozen across versions ─────────────────────
+
+// AC4 / ADR-4: allocation order for every existing puzzle depends on these exact
+// outputs. Captured from the pre-change build before any source edit; a change here
+// is a data migration, not a test update.
+//
+// This is the assertion that speaks for ADR-4 across versions. The determinism case
+// above only compares two calls in the same binary and so cannot detect a changed
+// round function.
+TEST_CASE("permuteIndexFeistel matches its frozen golden vector", "[permutation][feistel][golden]") {
+    const cpp_int n("999983");
+    const std::string key = "golden_seed_v1";
+    const std::vector<std::pair<int, std::string>> golden{
+        {0, "529930"}, {1, "273222"}, {42, "516151"}, {4242, "40071"}, {999982, "62666"},
+    };
+    for (const auto& [index, expected] : golden) {
+        INFO("index " << index);
+        CHECK(permuteIndexFeistel(cpp_int(index), n, key).str() == expected);
+    }
 }
 
 // ── Benchmarks (informational only — do not gate CI on these) ─────────────────
