@@ -44,6 +44,10 @@ add_library(puzzpool_core STATIC
     src/puzzle_status.cpp
     src/hex_bigint.cpp
     src/hash_utils.cpp
+    src/base64.cpp
+    src/secure_random.cpp
+    src/session.cpp
+    src/admin_auth.cpp
     src/permutation.cpp
     src/db.cpp
     src/allocator.cpp
