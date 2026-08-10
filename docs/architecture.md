@@ -51,7 +51,7 @@ and visualises it on a live dashboard.
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.cpp` | Route wiring (Crow), admin guard, reclaimer thread |
+| `src/main.cpp` | Route wiring (Crow), reclaimer thread. Holds no authorization logic — it calls the shared guard. |
 | `src/service.cpp` | `PoolService` — holds mutex, delegates to sub-services |
 | `src/service_work.cpp` | HTTP adapter for `/work` and `/heartbeat` |
 | `src/service_submit.cpp` | HTTP adapter for `/submit` |
@@ -66,11 +66,33 @@ and visualises it on a live dashboard.
 | `src/config.cpp` | `loadConfigFromEnv()` — reads `.env` + process env |
 | `src/permutation.cpp` | Feistel and affine permutation for chunk ordering |
 | `src/hex_bigint.cpp` | Hex ↔ bigint conversion utilities |
-| `src/hash_utils.cpp` | SHA-256 / HMAC-SHA-256 (Apple CommonCrypto or OpenSSL) |
+| `src/hash_utils.cpp` | SHA-256, the frozen `keyedDigestHex` allocator digest, real HMAC-SHA-256, constant-time compare (Apple CommonCrypto or OpenSSL) |
 | `src/env.cpp` | dotenv loader, `getEnvOr` / `getEnvInt` helpers |
+| `src/admin_auth.cpp` | The admin authorization decision — allow-list, CSRF, default-deny. Crow-free, so every allow and deny path is unit-testable. |
+| `src/admin_guard.cpp` | Thin Crow adapter over `authorizeAdmin()`; owns no decisions |
+| `src/session.cpp` | Signed session/OAuth-state token format and `Cookie:` parsing |
+| `src/auth_service.cpp` | `AuthService` — the four `/api/v1/auth/*` handlers |
+| `src/github_client.cpp` | Injectable libcurl seam for the GitHub OAuth exchange |
+| `src/base64.cpp` | Base64url encode/decode without padding |
+| `src/secure_random.cpp` | CSPRNG bytes; throws rather than degrading to a weak PRNG |
 
 Headers live under `include/puzzpool/`. Dependency direction (no cycles):
-`main → service → {work_service, submission_service} → allocator → db → config → env`
+
+```
+main → {service, auth_service, admin_guard}
+     → {admin_auth, session, github_client}
+     → {hash_utils, base64, secure_random, config}
+     → env
+
+service → {work_service, submission_service} → allocator → db → config → env
+```
+
+`AuthService` is a deliberate sibling of `PoolService`, not a member: it touches no
+database and no service mutex, so folding it in would widen that class's lock scope and
+dependency set for no benefit. Both authentication units keep their decisions in
+Crow-free code (`admin_auth`, `session`) with thin adapters (`admin_guard`,
+`auth_service`) above them, so authorization is testable without an HTTP server and
+the OAuth flow is testable without a network.
 
 ## Frontend Modules
 

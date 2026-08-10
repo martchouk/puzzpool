@@ -19,6 +19,38 @@ links against the `puzzpool_core` static library (all sources except `main.cpp`)
 | `tests/test_permutation.cpp` | Feistel: determinism, bounds `[0,n)`, 100k-sample injectivity, edge keyspace sizes; Affine: bounded, deterministic, 10k injectivity |
 | `tests/test_submission.cpp` | `submitDone` (exact/overscan accepted, underscan rejected+reclaimed, wrong worker, missing fields, negative); `submitFound` (valid, deduplication, empty array, invalid hex); `clearTestChunkIfNeeded` |
 | `tests/test_allocator.cpp` | `upsertWorker` (new/fresh), `assignWork` (valid chunk, idempotent, two-worker non-overlap), `reclaimChunk`, `existingAssignedChunk` (found/nullopt), `reclaimTimedOutChunks` (backdated/fresh) |
+| `tests/test_hash_utils.cpp` | RFC 4231 HMAC-SHA-256 vectors, published NIST `sha256Hex` vectors, the frozen `keyedDigestHex` literal, digest length/alphabet invariants, `keyedDigestHex ≠ hmacSha256Hex`, `constantTimeEquals` truth table |
+| `tests/test_session.cpp` | Token round-trip, splice forgery, flipped signature, wrong secret, empty secret, absolute expiry, malformed shapes, delimiter injection, session/state domain separation both ways, purpose-inside-the-MAC, `cookieValue` exact-name matching, base64url round-trip, CSPRNG distinctness |
+| `tests/test_admin_auth.cpp` | The full authorization matrix: default-deny unconfigured, token accept/reject/prefix, allow-list case-insensitivity, allow-list removal, expired/tampered/state-blob cookies, unset signing secret, CSRF accept and reject cases, indistinguishable denials, no secret echoed, plus the `adminGuard` Crow adapter |
+| `tests/test_auth_service.cpp` | All four `/api/v1/auth/*` routes: 503-when-unconfigured (with a not-503-when-configured control), state binding and single-use clearing, cookie attributes, every state-validation and provider-failure path, logout including the unconfigured case, `/auth/me` for signed-in/signed-out/tampered/expired, and leak checks for the code, token and client secret |
+
+Because `tests/test_permutation.cpp` also carries the frozen `permuteIndexFeistel`
+golden vector, a change to the allocator's round function fails the suite rather than
+silently reordering every existing puzzle's allocation (ADR-4).
+
+### Admin route guard regression
+
+```bash
+ctest --test-dir build --output-on-failure -R test_admin_routes_guarded
+```
+
+`tests/test_admin_routes_guarded.sh` starts the real server twice and checks all six
+`/api/v1/admin/*` routes end to end: every route returns `401` when neither
+`ADMIN_TOKEN` nor `ADMIN_GITHUB_USERS` is configured, and every route is admitted past
+the guard with a valid `X-Admin-Token`.
+
+It is a script rather than a Catch2 case because `src/main.cpp` is outside
+`puzzpool_core`, so **no test binary can see the route wiring**. The six route bodies
+are near-identical copies, and a route that loses its `adminGuard(cfg, req)` line
+leaves the entire Catch2 suite green while being publicly reachable.
+`test_handler_validation` does not catch it either — it calls `PoolService` methods
+directly, below the guard. Run it whenever an admin route is added, removed, or
+rewired.
+
+The second phase asserts "not 401" rather than `200`, because most of these routes
+legitimately return `400` for an empty body: the guard, not the handler, is under test.
+It picks a free port and fails explicitly on a transport error or an empty status, so a
+server that never started cannot turn the checks green.
 
 ### In-memory isolation
 
@@ -95,6 +127,35 @@ curl -sf http://127.0.0.1:8888/api/v1/stats | python3 -m json.tool
 kill $SERVER_PID 2>/dev/null
 rm -f pool.db
 echo '[OK] smoke test passed'
+```
+
+### Authentication smoke test
+
+Run these whenever route wiring, configuration, or the auth paths change. Use a
+throwaway `ADMIN_TOKEN`; never a real credential. Delete `pool.db` afterwards.
+
+With **no auth configured**, startup prints a warning naming `ADMIN_TOKEN` and
+`ADMIN_GITHUB_USERS`, and:
+
+```bash
+# Admin routes deny, auth routes are unavailable rather than unsigned.
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8888/api/v1/admin/puzzles  # 401
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8888/api/v1/auth/me        # 503
+
+# A stale cookie can still be shed even with no signing secret.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+     -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:8888/api/v1/auth/logout       # 200
+```
+
+With the **full OAuth configuration** (`SESSION_SIGNING_SECRET`,
+`GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `PUBLIC_BASE_URL`):
+
+```bash
+# Signed out, but configured.
+curl -s http://127.0.0.1:8888/api/v1/auth/me            # {"authenticated":false}
+
+# 302 to github.com, with a pp_oauth_state cookie scoped to /api/v1/auth.
+curl -s -i http://127.0.0.1:8888/api/v1/auth/github/login | head -5
 ```
 
 ---

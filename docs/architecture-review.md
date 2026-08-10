@@ -101,6 +101,69 @@ Stats are computed on-demand from the `chunks` table. Virtual chunk counts are t
 
 ---
 
+### ADR-5: A real HMAC beside the frozen permutation digest
+
+**Context:** The permutation round function consumed a helper named `hmacSha256Hex`
+that was actually `sha256(key ‖ 0x1f ‖ msg)` — a secret-prefix construction, vulnerable
+to length extension and unfit to sign a session cookie. Its output cannot change
+without reordering allocation for every existing puzzle (ADR-4), so it could not simply
+be replaced.
+
+**Decision:** Freeze the bytes under the honest name `keyedDigestHex`, documented as
+**not** a MAC, and implement RFC 2104 HMAC-SHA-256 under the `hmacSha256Hex` name for
+session and OAuth-state signing. `sha256Hex` and its hex formatter are left byte-for-
+byte untouched; the HMAC uses its own private raw-digest and hex helpers rather than a
+shared formatter extracted from the allocation path. Duplicating a five-line hex loop
+is a much smaller price than a zero-padding slip that would silently reallocate every
+puzzle.
+
+**Consequences:** Locked by RFC 4231 vectors for the HMAC, published NIST FIPS 180-4
+vectors for `sha256Hex`, a `keyedDigestHex` literal and a `permuteIndexFeistel` golden
+vector both captured from the pre-change binary, and a test asserting the two
+primitives disagree. Authentication uses a signing key distinct from every other
+secret.
+
+---
+
+### ADR-6: Stateless signed sessions and a fail-closed central guard
+
+**Context:** Admin authorization lived in a lambda in `main.cpp` that returned
+"authorized" when `ADMIN_TOKEN` was empty — a fail-open default on routes that can
+redirect the pool, one of which Nginx publishes to the internet. Being in `main.cpp`,
+it was also outside every test target.
+
+**Decision:** Sessions are a signed, absolutely-expiring cookie rather than server-side
+state: the pool runs as a single process with one SQLite file, and per-request session
+rows would add a write path and a retention obligation for no gain. The trade-off is
+accepted deliberately — an individual session cannot be revoked before its absolute
+expiry.
+
+Revocation is by allow-list removal or by rotating `SESSION_SIGNING_SECRET`. Because
+the guard re-reads `ADMIN_GITHUB_USERS` from `Config` on every request and caches no
+authorization decision, either change applies to the very next request — no cookie
+reissue, no session store to purge. Both still require a service restart, because
+`main.cpp` loads configuration once per process; a live-reload path was considered and
+deliberately left out. `SESSION_TTL_MINUTES` is capped at 30 days so a misconfiguration
+cannot mint a credential that outlives any practical rotation cadence.
+
+The guard moved into `puzzpool_core` so the unconfigured case is directly testable, and
+now denies by default. Because the route *wiring* stays in `main.cpp` and is outside
+every Catch2 target, `tests/test_admin_routes_guarded.sh` asserts end to end that all
+six admin routes deny without configuration and are admitted with a token: the Catch2
+matrix proves the decision, the script proves the decision is actually on every route.
+
+Session and OAuth-state blobs share one signed format and one key, so the token's
+purpose (`session` / `state`) is part of the signed input. Without that label the two
+would be interchangeable; with it, presenting one where the other is expected fails as
+`WrongPurpose`.
+
+**Consequences:** A blank admin configuration now denies rather than admits — an
+operator-visible breaking change, covered by the README upgrade warning and a startup
+diagnostic. The signed-cookie surface is reachable by any GitHub account; authorization
+is the allow-list, not the sign-in.
+
+---
+
 ## 3. Dimension-by-Dimension Findings
 
 ### D1 — Virtual keyspace representation

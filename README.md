@@ -101,6 +101,38 @@ All tunables are read from environment variables. Copy `.env.example` to configu
 cp .env.example .env
 ```
 
+> **⚠️ Upgrade warning — admin routes now fail closed.**
+> Earlier releases treated an empty `ADMIN_TOKEN` as "authentication disabled", so admin
+> routes were reachable by anyone who could reach the port. They now return `401` unless
+> `ADMIN_TOKEN` or `ADMIN_GITHUB_USERS` is configured. **Before upgrading, set at least
+> one.** The server prints a warning naming both variables at startup when neither is set.
+>
+> This matters most for `/api/v1/admin/activate-puzzle`, which `deploy/nginx.conf`
+> deliberately exposes to the internet with only the server-side check behind it.
+>
+> GitHub sign-in additionally needs `SESSION_SIGNING_SECRET`, `GITHUB_OAUTH_CLIENT_ID`,
+> `GITHUB_OAUTH_CLIENT_SECRET`, and `PUBLIC_BASE_URL`. Because the session cookie is
+> `Secure`, sign-in works only over HTTPS — use `ADMIN_TOKEN` for local development.
+
+### GitHub sign-in setup
+
+Register **two** OAuth applications — one per deployment stage — at
+<https://github.com/settings/developers>. Each stage loads only its own credentials;
+there is no runtime branch that selects between them.
+
+| Setting | Value |
+|---------|-------|
+| Homepage URL | your `PUBLIC_BASE_URL` (for example `https://puzzle.b58.de`) |
+| Authorization callback URL | `<PUBLIC_BASE_URL>/api/v1/auth/github/callback` |
+| Scopes | none — the public profile is all this needs |
+
+Then set `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `PUBLIC_BASE_URL`,
+`SESSION_SIGNING_SECRET`, and the `ADMIN_GITHUB_USERS` allow-list for that stage.
+
+Signing in issues a session cookie to **any** GitHub account; only the logins in
+`ADMIN_GITHUB_USERS` are authorized to use admin routes. See
+[docs/security.md](docs/security.md).
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8888` | Bind port (localhost only) |
@@ -109,7 +141,13 @@ cp .env.example .env
 | `TIMEOUT_MINUTES` | `15` | Minutes before an inactive chunk is reclaimed |
 | `ACTIVE_MINUTES` | `1.167` | Minutes a worker stays green after its last heartbeat. Capped at half of `TIMEOUT_MINUTES`. |
 | `STAGE` | `PROD` | Deployment stage shown in the dashboard (`PROD` or `TEST`) |
-| `ADMIN_TOKEN` | *(unset)* | If set, admin routes require `X-Admin-Token` header |
+| `ADMIN_TOKEN` | *(unset)* | Shared admin token. When set, admin routes accept `X-Admin-Token`. Configure this or `ADMIN_GITHUB_USERS`, or all admin routes return `401`. |
+| `ADMIN_GITHUB_USERS` | *(unset)* | Comma-separated GitHub logins allowed to administer the pool. Case-insensitive; an empty list grants nobody access. |
+| `SESSION_SIGNING_SECRET` | *(unset)* | HMAC key for the session cookie. Required for GitHub sign-in; without it `/api/v1/auth/*` returns `503`. Generate with `openssl rand -hex 32`. Never reuse `ADMIN_TOKEN`. |
+| `GITHUB_OAUTH_CLIENT_ID` | *(unset)* | Client id of this stage's GitHub OAuth app |
+| `GITHUB_OAUTH_CLIENT_SECRET` | *(unset)* | Client secret of this stage's GitHub OAuth app. PROD and TEST use separate apps; never load both. |
+| `PUBLIC_BASE_URL` | *(unset)* | Absolute public URL of this deployment. Builds the OAuth callback URL and is the expected `Origin` for admin CSRF checks. |
+| `SESSION_TTL_MINUTES` | `720` | Absolute session lifetime; no sliding renewal. Clamped to `[1, 43200]` (30 days). |
 | `BLOCKEXPLORER_API` | `https://mempool.space/api/address/` | Backend API base used to refresh address-backed puzzle solved state |
 | `BLOCKEXPLORER_URL` | `https://mempool.space/address/` | Public explorer URL used for the puzzle badge link |
 | `BLOCKEXPLORER_POLL_SEC` | `600` | Seconds between backend puzzle-status refreshes |
@@ -124,7 +162,7 @@ cp .env.example .env
 
 ### Prerequisites
 
-- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `libasio-dev`, `nlohmann-json3-dev`, `libssl-dev`
+- Ubuntu/Debian server with GCC 12+, CMake 3.20+, `libboost-dev`, `libasio-dev`, `nlohmann-json3-dev`, `libssl-dev`, `libcurl4-openssl-dev`
 - Node.js 20+ (only needed at build time to compile the TypeScript dashboard)
 - Nginx, Certbot, systemd
 - DNS A record pointing your domain to the server
@@ -224,7 +262,7 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
 ## Security
 
 - Admin routes are **IP-restricted** at the Nginx level by default (see `deploy/nginx.conf`)
-- Set `ADMIN_TOKEN` for token-based admin authentication
+- Set `ADMIN_TOKEN` or `ADMIN_GITHUB_USERS` — admin routes deny every request until one is configured
 - Workers are identified by name only — no passwords (by design for an open public puzzle)
 - All SQL uses parameterised queries (no injection risk)
 - Dashboard renders all user-supplied data via `textContent` (no XSS risk)

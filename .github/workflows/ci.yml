@@ -18,7 +18,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev
+          sudo apt-get install -y cmake build-essential libboost-dev libasio-dev nlohmann-json3-dev libssl-dev libcurl4-openssl-dev
 
       - name: Configure
         run: |
@@ -29,6 +29,10 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
+      # Includes test_admin_routes_guarded, which drives the built server over HTTP to
+      # check that all six /api/v1/admin/* routes are actually behind the guard. The
+      # route wiring lives in src/main.cpp, which no Catch2 target links, so this is
+      # the only check that can see it.
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
 
