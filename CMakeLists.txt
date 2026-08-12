@@ -46,6 +46,7 @@ add_library(puzzpool_core STATIC
     src/hash_utils.cpp
     src/permutation.cpp
     src/http_client.cpp
+    src/log_redaction.cpp
     src/auth.cpp
     src/auth_service.cpp
     src/db.cpp

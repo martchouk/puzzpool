@@ -470,6 +470,11 @@ Completes the flow. Called by GitHub with `?code=…&state=…`.
 replayed. Error bodies never contain the client secret, the authorization code,
 the access token, or the cookie value.
 
+GitHub delivers `code` and `state` in the query string, which is the one place
+this API cannot choose. Both are therefore stripped before the request is
+logged — see *Request logging* in `docs/security.md`, and the `access_log`
+setting on `location /api/v1/auth/` in `deploy/nginx.conf`.
+
 Signing in is not the same as being an admin: the cookie is issued to any GitHub
 user who completes the flow, and authorization is decided per admin request from
 `ADMIN_GITHUB_USERS`.
@@ -504,10 +509,18 @@ allow-list at request time.
 
 Clears the session cookie.
 
-**Response 200**
-```json
-{ "ok": true }
-```
+| Status | Body | When |
+|--------|------|------|
+| `200` | `{"ok":true}` | Cookie cleared |
+| `403` | `{"error":"csrf_check_failed"}` | The request carried no same-origin proof |
+| `503` | `{"error":"auth_unavailable", …}` | Cookie signing not configured |
+
+**CSRF.** Logout acts without needing a cookie, so `SameSite=Lax` does not
+protect it — a cross-site top-level form `POST` would otherwise let any page sign
+an operator out. It therefore requires the same same-origin proof a
+cookie-authorized admin `POST` does: `Sec-Fetch-Site: same-origin`, or an
+`Origin` whose authority equals the request's `Host`. A rejected request does not
+clear the cookie.
 
 ---
 

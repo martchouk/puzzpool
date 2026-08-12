@@ -73,6 +73,12 @@ crow::request getRequest(const std::string& query = "", const std::string& cooki
     return req;
 }
 
+crow::request postRequest() {
+    crow::request req;
+    req.method = crow::HTTPMethod::POST;
+    return req;
+}
+
 std::vector<std::string> setCookieHeaders(const crow::response& response) {
     std::vector<std::string> out;
     const auto range = response.headers.equal_range("Set-Cookie");
@@ -130,9 +136,11 @@ TEST_CASE("every auth route returns 503 without SESSION_SIGNING_SECRET", "[auth]
     RecordingClient client;
     AuthService service(cfg, client.handler(), fixedClock());
 
+    // Logout is sent as the real route sends it — a POST with no same-origin
+    // proof — so this also pins that the fail-closed 503 outranks the CSRF check.
     for (const crow::response& response : {service.handleGithubLogin(getRequest()),
                                            service.handleGithubCallback(getRequest("code=a&state=b")),
-                                           service.handleLogout(getRequest()),
+                                           service.handleLogout(postRequest()),
                                            service.handleMe(getRequest())}) {
         CHECK(response.code == 503);
         const auto body = json::parse(response.body);
@@ -485,7 +493,10 @@ TEST_CASE("logout clears the session cookie", "[auth][routes]") {
     RecordingClient client;
     AuthService service(cfg, client.handler(), fixedClock());
 
-    const crow::response response = service.handleLogout(getRequest());
+    crow::request req = postRequest();
+    req.add_header("Sec-Fetch-Site", "same-origin");
+
+    const crow::response response = service.handleLogout(req);
     CHECK(response.code == 200);
     CHECK(json::parse(response.body)["ok"] == true);
 
@@ -494,6 +505,47 @@ TEST_CASE("logout clears the session cookie", "[auth][routes]") {
     CHECK(cookies[0].rfind(std::string(kSessionCookieName) + "=;", 0) == 0);
     CHECK(cookies[0].find("Max-Age=0") != std::string::npos);
     CHECK(cookies[0].find("HttpOnly") != std::string::npos);
+}
+
+TEST_CASE("logout rejects a cross-site request", "[auth][routes]") {
+    const Config cfg = authConfig();
+    RecordingClient client;
+    AuthService service(cfg, client.handler(), fixedClock());
+
+    // Logout needs no cookie to act, so SameSite=Lax does not stop a cross-site
+    // top-level form POST. Every shape without same-origin proof is rejected.
+    const std::vector<std::pair<std::string, std::string>> unproven = {
+        {"Sec-Fetch-Site", "cross-site"},
+        {"Sec-Fetch-Site", "same-site"},   // a subdomain attacker
+        {"Origin", "https://evil.example"} // Origin that is not the Host
+    };
+
+    for (const auto& [name, value] : unproven) {
+        crow::request req = postRequest();
+        req.add_header(name, value);
+        req.add_header("Host", "puzzle.example");
+
+        const crow::response response = service.handleLogout(req);
+        CHECK(response.code == 403);
+        CHECK(json::parse(response.body)["error"] == "csrf_check_failed");
+        // A rejected logout must not clear the cookie, or the CSRF would succeed.
+        CHECK(setCookieHeaders(response).empty());
+    }
+
+    // A request with neither header has no proof at all.
+    const crow::response bare = service.handleLogout(postRequest());
+    CHECK(bare.code == 403);
+    CHECK(setCookieHeaders(bare).empty());
+
+    // Sensitivity: a matching Origin/Host pair on the identical request is
+    // accepted and does clear the cookie, so the rejections above are the CSRF
+    // check acting and not a handler that always fails.
+    crow::request proven = postRequest();
+    proven.add_header("Origin", "https://puzzle.example");
+    proven.add_header("Host", "puzzle.example");
+    const crow::response allowed = service.handleLogout(proven);
+    CHECK(allowed.code == 200);
+    CHECK(setCookieHeaders(allowed).size() == 1);
 }
 
 // ── /api/v1/auth/me (AC26) ───────────────────────────────────────────────────
@@ -593,7 +645,9 @@ TEST_CASE("adminGuard returns 403 for a cookie POST without CSRF proof", "[auth]
     req.method = crow::HTTPMethod::POST;
     req.add_header("Cookie", cookie);
 
-    const auto response = adminGuard(cfg, req);
+    // kNow is the instant issuedSessionCookie() minted the cookie at. Passing it
+    // explicitly keeps the cookie unexpired however far the wall clock has moved.
+    const auto response = adminGuard(cfg, req, kNow);
     REQUIRE(response.has_value());
     CHECK(response->code == 403);
     CHECK(json::parse(response->body)["error"] == "csrf_check_failed");
@@ -603,7 +657,23 @@ TEST_CASE("adminGuard returns 403 for a cookie POST without CSRF proof", "[auth]
     proven.method = crow::HTTPMethod::POST;
     proven.add_header("Cookie", cookie);
     proven.add_header("Sec-Fetch-Site", "same-origin");
-    CHECK_FALSE(adminGuard(cfg, proven).has_value());
+    CHECK_FALSE(adminGuard(cfg, proven, kNow).has_value());
+}
+
+TEST_CASE("adminGuard judges session expiry against the supplied instant", "[auth][guard][routes]") {
+    const Config cfg = authConfig();
+    const std::string cookie = issuedSessionCookie(cfg, "operator-one");
+
+    crow::request req;
+    req.method = crow::HTTPMethod::POST;
+    req.add_header("Cookie", cookie);
+    req.add_header("Sec-Fetch-Site", "same-origin");
+
+    const std::int64_t expiresAt = kNow + static_cast<std::int64_t>(cfg.sessionTtlMinutes) * 60;
+    CHECK_FALSE(adminGuard(cfg, req, expiresAt - 1).has_value()); // still valid
+    const auto expired = adminGuard(cfg, req, expiresAt);         // exactly at expiry
+    REQUIRE(expired.has_value());
+    CHECK(expired->code == 401);
 }
 
 TEST_CASE("adminRequestView copies exactly the headers the guard inspects", "[auth][guard][routes]") {

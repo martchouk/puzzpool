@@ -22,7 +22,7 @@ struct WriteSink {
 std::size_t writeCallback(char* ptr, std::size_t size, std::size_t nmemb, void* userdata) {
     auto* sink = static_cast<WriteSink*>(userdata);
     const std::size_t incoming = size * nmemb;
-    if (sink->data.size() + incoming > sink->limit) {
+    if (responseBudgetExceeded(sink->data.size(), incoming, sink->limit)) {
         sink->overflow = true;
         return 0; // aborts the transfer with CURLE_WRITE_ERROR
     }
@@ -50,6 +50,12 @@ void ensureCurlGlobalInit() {
 }
 
 } // namespace
+
+bool responseBudgetExceeded(std::size_t currentSize, std::size_t incoming, std::size_t limit) {
+    // Subtraction rather than `currentSize + incoming > limit`, so a hostile or
+    // absurd chunk size cannot wrap the sum around and slip past the cap.
+    return currentSize > limit || incoming > limit - currentSize;
+}
 
 std::string urlEncode(const std::string& value) {
     std::ostringstream out;

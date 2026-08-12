@@ -1,6 +1,7 @@
 #include <puzzpool/auth.hpp>
 #include <puzzpool/auth_service.hpp>
 #include <puzzpool/config.hpp>
+#include <puzzpool/log_redaction.hpp>
 #include <puzzpool/service.hpp>
 
 #include <crow.h>
@@ -13,8 +14,28 @@
 #include <sstream>
 #include <thread>
 
+namespace {
+
+// Crow logs the raw request target for every response, which on the OAuth
+// callback contains the GitHub authorization code and the state nonce. Raising
+// CROW_LOG_LEVEL would silence request logging altogether; redacting keeps the
+// operational log an operator relies on and removes only the query string.
+class RedactingLogHandler : public crow::CerrLogHandler {
+public:
+    void log(const std::string& message, crow::LogLevel level) override {
+        crow::CerrLogHandler::log(puzzpool::redactQueryStrings(message), level);
+    }
+};
+
+} // namespace
+
 int main() {
     try {
+        // Installed before any route is registered, so no request can be logged
+        // through the default handler. The handler outlives the server.
+        static RedactingLogHandler logHandler;
+        crow::logger::setHandler(&logHandler);
+
         puzzpool::Config cfg = puzzpool::loadConfigFromEnv();
         puzzpool::PoolService service(cfg);
         puzzpool::AuthService authService(cfg);

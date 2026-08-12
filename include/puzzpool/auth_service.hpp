@@ -18,7 +18,14 @@ AdminRequestView adminRequestView(const crow::request& req);
 
 // std::nullopt means "allow"; otherwise the response the route must return.
 // This is the only authorization decision main.cpp makes for an admin route.
-std::optional<crow::response> adminGuard(const Config& cfg, const crow::request& req);
+//
+// `nowUnix` is the Unix time in seconds the session expiry is judged against.
+// std::nullopt reads the system clock, which is what production wants; tests
+// pass an explicit instant so a cookie's expiry cannot drift into the past as
+// wall-clock time advances.
+std::optional<crow::response> adminGuard(const Config& cfg,
+                                         const crow::request& req,
+                                         std::optional<std::int64_t> nowUnix = std::nullopt);
 
 // ── GitHub OAuth endpoints ────────────────────────────────────────────────────
 

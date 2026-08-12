@@ -69,10 +69,11 @@ and visualises it on a live dashboard.
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.cpp` | Route wiring (Crow), startup diagnostics, reclaimer thread |
+| `src/main.cpp` | Route wiring (Crow), the redacting log handler, startup diagnostics, reclaimer thread |
 | `src/auth.cpp` | Session/state signing, allow-list, and the central admin authorization decision — deliberately Crow-free so every allow and deny path is unit-testable |
 | `src/auth_service.cpp` | `AuthService` — Crow adapters for `/api/v1/auth/*` and for the admin guard |
 | `src/http_client.cpp` | libcurl-backed `HttpClient` seam used for GitHub provider calls |
+| `src/log_redaction.cpp` | `redactQueryStrings()` — strips query strings from log lines so the OAuth authorization code and state nonce never reach the process log |
 | `src/service.cpp` | `PoolService` — holds mutex, delegates to sub-services |
 | `src/service_work.cpp` | HTTP adapter for `/work` and `/heartbeat` |
 | `src/service_submit.cpp` | HTTP adapter for `/submit` |
@@ -95,7 +96,11 @@ Headers live under `include/puzzpool/`. Dependency direction (no cycles):
 ```
 main → service      → {work_service, submission_service} → allocator → db → config → env
      → auth_service → {auth, http_client}                                  → config → env
+     → log_redaction
 ```
+
+`log_redaction` is a leaf: it depends on nothing but the standard library, so the
+redaction rule is a pure function that `main.cpp` wraps in a `crow::ILogHandler`.
 
 `auth` depends on `config` and `hash_utils` only. It has no Crow, no database, and
 no I/O, so `authorizeAdminRequest()` is a pure function of configuration plus a

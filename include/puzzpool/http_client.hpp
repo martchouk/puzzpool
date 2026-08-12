@@ -40,4 +40,10 @@ HttpClient makeCurlHttpClient();
 // application/x-www-form-urlencoded percent-encoding.
 std::string urlEncode(const std::string& value);
 
+// True when appending `incoming` more bytes to a body already holding
+// `currentSize` would exceed `limit`. This is the whole of the response-size
+// cap's logic; it is named here because the libcurl write callback that uses it
+// can only be reached through a live TLS connection, which no test makes.
+bool responseBudgetExceeded(std::size_t currentSize, std::size_t incoming, std::size_t limit);
+
 } // namespace puzzpool

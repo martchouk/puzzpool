@@ -24,6 +24,13 @@ PASS=0
 FAIL=0
 SERVER_PID=""
 
+# Distinctive stand-ins for a real GitHub authorization code and OAuth state
+# nonce. They are not credentials — they exist so the log assertions below can
+# tell "this value never reached the log" from "the log happens not to contain
+# the letter a".
+SENTINEL_CODE="sentinel-authz-code-4f21a9c8"
+SENTINEL_STATE="sentinel-oauth-state-b7c3d50e"
+
 WORK_DIR="$(mktemp -d)"
 cleanup() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -158,9 +165,17 @@ _check_status "GET /api/v1/auth/me is 503 without a signing secret" 503 \
 _check_status "GET /api/v1/auth/github/login is 503 without a signing secret" 503 \
     "$(status_of GET /api/v1/auth/github/login)"
 _check_status "GET /api/v1/auth/github/callback is 503 without a signing secret" 503 \
-    "$(status_of GET '/api/v1/auth/github/callback?code=a&state=b')"
+    "$(status_of GET "/api/v1/auth/github/callback?code=${SENTINEL_CODE}&state=${SENTINEL_STATE}")"
 _check_status "POST /api/v1/auth/logout is 503 without a signing secret" 503 \
     "$(status_of POST /api/v1/auth/logout)"
+
+# The request target is logged for every response, so the query string must be
+# redacted before it is written — the 503 path reaches the logger just like the
+# configured one does.
+_check_absent "the authorization code never reaches the log (unconfigured)" \
+    "$SENTINEL_CODE" "$(cat "$WORK_DIR/server.log")"
+_check_absent "the OAuth state never reaches the log (unconfigured)" \
+    "$SENTINEL_STATE" "$(cat "$WORK_DIR/server.log")"
 
 # ── 2. ADMIN_TOKEN configured: the legacy mechanism still works (AC12) ────────
 echo "── ADMIN_TOKEN configured ──"
@@ -206,9 +221,12 @@ _check_absent "the client secret never reaches the redirect" \
     "smoke-client-secret" "$login_headers"
 
 _check_status "callback rejects a state with no cookie" 400 \
-    "$(status_of GET '/api/v1/auth/github/callback?code=a&state=b')"
+    "$(status_of GET "/api/v1/auth/github/callback?code=${SENTINEL_CODE}&state=${SENTINEL_STATE}")"
 
-_check_status "POST /api/v1/auth/logout succeeds" 200 "$(status_of POST /api/v1/auth/logout)"
+_check_status "POST /api/v1/auth/logout succeeds with same-origin proof" 200 \
+    "$(status_of POST /api/v1/auth/logout -H 'Sec-Fetch-Site: same-origin')"
+_check_status "POST /api/v1/auth/logout rejects a cross-site request" 403 \
+    "$(status_of POST /api/v1/auth/logout -H 'Sec-Fetch-Site: cross-site')"
 
 # An allow-list alone still denies an unauthenticated admin request.
 _check_status "admin route denies without a session" 401 "$(status_of GET /api/v1/admin/puzzles)"
@@ -217,6 +235,20 @@ _check_absent "no secret value reaches the server log" \
     "smoke-signing-secret" "$(cat "$WORK_DIR/server.log")"
 _check_absent "no OAuth client secret reaches the server log" \
     "smoke-client-secret" "$(cat "$WORK_DIR/server.log")"
+
+# The authorization code is a live credential for as long as it is unredeemed,
+# and the state nonce is what binds the flow to one browser. Neither may be
+# written to the process log, which systemd routes to journald.
+_check_absent "the authorization code never reaches the server log" \
+    "$SENTINEL_CODE" "$(cat "$WORK_DIR/server.log")"
+_check_absent "the OAuth state never reaches the server log" \
+    "$SENTINEL_STATE" "$(cat "$WORK_DIR/server.log")"
+
+# Sensitivity control: the same log the two assertions above search really does
+# carry a line for that callback request, so their "absent" verdict is evidence
+# of redaction and not of an empty or unwritten log.
+_check_contains "the callback request is logged (redaction, not silence)" \
+    "/api/v1/auth/github/callback" "$(cat "$WORK_DIR/server.log")"
 
 stop_server
 

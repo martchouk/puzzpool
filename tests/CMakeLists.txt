@@ -18,6 +18,8 @@ add_puzzpool_test(test_config)
 add_puzzpool_test(test_puzzle_status)
 add_puzzpool_test(test_visualization)
 add_puzzpool_test(test_hash_utils)
+add_puzzpool_test(test_http_client)
+add_puzzpool_test(test_log_redaction)
 add_puzzpool_test(test_auth)
 add_puzzpool_test(test_auth_routes)
 

@@ -48,12 +48,16 @@ AdminRequestView adminRequestView(const crow::request& req) {
     return view;
 }
 
-std::optional<crow::response> adminGuard(const Config& cfg, const crow::request& req) {
-    const auto nowUnix = std::chrono::duration_cast<std::chrono::seconds>(
-                             std::chrono::system_clock::now().time_since_epoch())
-                             .count();
+std::optional<crow::response> adminGuard(const Config& cfg,
+                                         const crow::request& req,
+                                         std::optional<std::int64_t> nowUnix) {
+    const std::int64_t at =
+        nowUnix ? *nowUnix
+                : std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count();
 
-    const AdminAuthResult decision = authorizeAdminRequest(cfg, adminRequestView(req), nowUnix);
+    const AdminAuthResult decision = authorizeAdminRequest(cfg, adminRequestView(req), at);
     if (decision.authorized) return std::nullopt;
 
     // The body never names which credential failed or echoes any submitted value.
@@ -223,8 +227,15 @@ crow::response AuthService::handleGithubCallback(const crow::request& req) {
 }
 
 crow::response AuthService::handleLogout(const crow::request& req) {
-    (void)req;
     if (!sessionSigningEnabled(cfg_)) return serviceUnavailable("session_signing_secret_missing");
+
+    // Logout acts without needing a cookie, so SameSite=Lax does not protect it:
+    // a cross-site top-level form POST would otherwise let any page sign an
+    // operator out at will. It carries the same same-origin proof every
+    // cookie-authorized admin POST does.
+    if (!hasSameSiteProof(adminRequestView(req))) {
+        return jsonResponse(403, json{{"error", "csrf_check_failed"}});
+    }
 
     crow::response response = jsonResponse(200, json{{"ok", true}});
     response.add_header("Set-Cookie", clearCookieHeader(kSessionCookieName));

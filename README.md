@@ -88,7 +88,7 @@ See [docs/api.md](docs/api.md) for full request/response schemas.
 | `GET`  | `/api/v1/auth/github/login` | Start GitHub OAuth sign-in |
 | `GET`  | `/api/v1/auth/github/callback` | Complete sign-in and issue the session cookie |
 | `GET`  | `/api/v1/auth/me` | Current signed-in identity, or a signed-out result |
-| `POST` | `/api/v1/auth/logout` | Clear the session cookie |
+| `POST` | `/api/v1/auth/logout` | Clear the session cookie (requires same-origin proof) |
 | `POST` | `/api/v1/admin/set-puzzle` | Create / activate a puzzle |
 | `POST` | `/api/v1/admin/activate-puzzle` | Switch the active puzzle by ID |
 | `POST` | `/api/v1/admin/set-test-chunk` | Set verification chunk for new workers |
@@ -257,6 +257,11 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
 >
 > The server prints a warning naming the missing variables at startup if it
 > comes up with no usable admin authentication.
+>
+> **Also re-copy `deploy/nginx.conf`.** It now sets `access_log off;` on
+> `location /api/v1/auth/`, without which the OAuth callback's authorization
+> code is written to the Nginx access log. Existing access-log files may already
+> contain codes from earlier sign-ins; rotate them if that matters to you.
 
 - Admin routes are protected by **one central, default-deny guard**. A configured
   `ADMIN_TOKEN` (via the `X-Admin-Token` header) and a signed GitHub session
@@ -265,7 +270,11 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
   (see `deploy/nginx.conf`)
 - GitHub sign-in uses a no-scope OAuth flow with an unguessable, browser-bound,
   single-use `state`, and an `HttpOnly; Secure; SameSite=Lax` signed session
-  cookie. Cookie-authorized admin `POST`s additionally require same-origin proof.
+  cookie. Cookie-authorized admin `POST`s and `POST /api/v1/auth/logout`
+  additionally require same-origin proof.
+- The OAuth callback's `code` and `state` arrive in a query string, so query
+  strings are **stripped from every log line** before it is written, and the
+  Nginx access log is off for `/api/v1/auth/`
 - Workers are identified by name only — no passwords (by design for an open public puzzle)
 - All SQL uses parameterised queries (no injection risk)
 - Dashboard renders all user-supplied data via `textContent` (no XSS risk)

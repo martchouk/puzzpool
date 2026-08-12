@@ -32,9 +32,11 @@ that one is taken.
 | `tests/test_allocator.cpp` | `upsertWorker` (new/fresh), `assignWork` (valid chunk, idempotent, two-worker non-overlap), `reclaimChunk`, `existingAssignedChunk` (found/nullopt), `reclaimTimedOutChunks` (backdated/fresh) |
 | `tests/test_hash_utils.cpp` | `keyedDigestHex` golden vectors and the frozen Feistel allocation order (ADR-4/ADR-5); `hmacSha256Hex` against the RFC 4231 vectors; proof that the two helpers are not aliased |
 | `tests/test_auth.cpp` | base64url round-trip and rejection; constant-time comparison; fail-closed signing with no secret; session encode/decode, expiry, tampering, wrong key, purpose confusion; allow-list parsing and matching; cookie parsing; CSRF proof; the full admin-guard allow/deny matrix; startup diagnostics |
-| `tests/test_auth_routes.cpp` | `/api/v1/auth/*` through `AuthService` with a stubbed `HttpClient`: 503 when unconfigured, redirect and state cookie shape, state mismatch/tampering/expiry/replay, provider transport and payload failures, session cookie attributes, `/auth/me` signed-in and signed-out bodies, logout, and the Crow guard adapter |
+| `tests/test_auth_routes.cpp` | `/api/v1/auth/*` through `AuthService` with a stubbed `HttpClient`: 503 when unconfigured, redirect and state cookie shape, state mismatch/tampering/expiry/replay, provider transport and payload failures, session cookie attributes, `/auth/me` signed-in and signed-out bodies, logout including its cross-site rejection, and the Crow guard adapter with an explicit evaluation instant |
+| `tests/test_http_client.cpp` | `urlEncode` against the RFC 3986 unreserved set, the delimiters that could split a parameter, multi-byte UTF-8, and an injected `&client_secret=`; the response-size cap at and past its boundary, including a chunk large enough to wrap a naive sum; the curl client's protocol restriction and its transport-error path, with no request body echoed into the error |
+| `tests/test_log_redaction.cpp` | `redactQueryStrings` — the OAuth callback line, lines with no query string, several per line, one at end-of-line, tab and newline delimiters, and preservation of path and status |
 | `tests/test_check_node_version_age.sh` | `scripts/check-node-version-age.sh` — threshold enforcement, disable switch, network and lookup failures (mocked `node` and `curl`) |
-| `tests/test_admin_routes_smoke.sh` | Route wiring against a real running server: all six admin routes denied when nothing is configured and accepted with a valid `X-Admin-Token`, `/api/v1/auth/*` reachable and 503 without a signing secret, cookie attributes on the redirect, and no secret in the redirect or the server log |
+| `tests/test_admin_routes_smoke.sh` | Route wiring against a real running server: all six admin routes denied when nothing is configured and accepted with a valid `X-Admin-Token`, `/api/v1/auth/*` reachable and 503 without a signing secret, cookie attributes on the redirect, logout's same-origin requirement, and no secret, authorization code, or state nonce in the redirect or the server log — with a positive control asserting the callback *is* logged, so the absence checks prove redaction |
 
 ### In-memory isolation
 
@@ -241,9 +243,20 @@ curl -s -X POST --cookie "pp_session=$COOKIE" \
   -H "Sec-Fetch-Site: same-origin" $BASE_URL/api/v1/admin/reclaim
 # → 200
 
-# Sign out
-curl -s -X POST --cookie "pp_session=$COOKIE" $BASE_URL/api/v1/auth/logout
+# Sign out — logout needs same-origin proof too, because it acts without a cookie
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE_URL/api/v1/auth/logout
+# → 403   {"error":"csrf_check_failed"}, and the cookie is NOT cleared
+
+curl -s -X POST --cookie "pp_session=$COOKIE" \
+  -H "Sec-Fetch-Site: same-origin" $BASE_URL/api/v1/auth/logout
 # → {"ok":true}   with Set-Cookie: pp_session=; … Max-Age=0
+
+# Log redaction: the authorization code and state must not reach the log.
+# Run the server with its stderr captured, then:
+curl -s -o /dev/null "$BASE_URL/api/v1/auth/github/callback?code=SENTINEL&state=SENTINEL2"
+grep -c SENTINEL server.log        # → 0
+grep -c 'auth/github/callback' server.log   # → ≥1, so the 0 above is redaction,
+                                            #   not an empty or unwritten log
 ```
 
 Never paste a real `SESSION_SIGNING_SECRET`, OAuth client secret, access token, or

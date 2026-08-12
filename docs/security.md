@@ -134,6 +134,48 @@ cookie-authorized admin `POST` must additionally present same-origin evidence:
 `Host`. A request carrying neither is rejected with `403`
 `{"error":"csrf_check_failed"}`.
 
+`POST /api/v1/auth/logout` carries the same requirement. It is the one
+state-changing route that acts *without* needing a cookie, so `SameSite=Lax`
+withholds nothing from it and a cross-site top-level form `POST` would reach it.
+The impact would be availability only — a forced sign-out — but the guard already
+had the primitive, so logout uses it. A rejected logout does not clear the cookie.
+
+### Request logging
+
+GitHub returns the authorization code and the OAuth state nonce in the callback's
+**query string**. That is the provider's contract, not a choice this API makes, so
+both values have to be removed on the way to the log rather than kept out of the
+URL in the first place.
+
+An unredeemed authorization code is a live credential: within its validity window
+anyone holding it and the client secret can redeem it, and it is most exposed
+precisely on the paths where the exchange failed and it was never consumed. The
+state nonce is what binds a flow to one browser, so disclosing it removes that
+binding while the `pp_oauth_state` cookie is still live.
+
+Two logs would otherwise record them:
+
+| Log | Why it would record them | Mitigation |
+|-----|--------------------------|------------|
+| The process log (`stderr` → journald under systemd) | Crow logs the raw request target for every response at its default `Info` level | `main.cpp` installs a `crow::ILogHandler` that runs every line through `redactQueryStrings()` (`src/log_redaction.cpp`) |
+| The Nginx access log | The default `combined` format's `$request` contains the query string | `access_log off;` on `location /api/v1/auth/` in `deploy/nginx.conf` |
+
+Redaction is preferred over raising `CROW_LOG_LEVEL`, which would silence request
+logging altogether. Everything an operator reads a request log for — method, path,
+status, timing — survives; only the run of characters from `?` to the next
+whitespace is replaced with `?<redacted>`. The rule is deliberately blunt so that
+a parameter name nobody anticipated cannot slip through.
+
+`tests/test_log_redaction.cpp` pins the transform, and
+`tests/test_admin_routes_smoke.sh` drives a real callback with sentinel `code` and
+`state` values and asserts neither reaches `server.log` — alongside a positive
+control asserting the request line *is* still logged, so the check proves
+redaction rather than an empty log.
+
+If you need these requests in the Nginx log, define a `log_format` that uses
+`$uri` (path only) instead of `$request`; `deploy/nginx.conf` carries a worked
+example in the comment above the `access_log` line.
+
 ### Secret handling
 
 OAuth client secrets, authorization codes, access tokens, and session cookie values
