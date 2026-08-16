@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace puzzpool {
 
@@ -33,11 +34,29 @@ struct Config {
     std::string blockExplorerUrl = "https://mempool.space/address/";
     int         blockExplorerPollSec = 600;
 
+    // ── GitHub OAuth admin sign-in ────────────────────────────────────────────
+    // Each deployment stage runs its own GitHub OAuth application and supplies
+    // only its own credentials. Nothing here is selected by `stage`.
+    std::string githubOauthClientId;
+    std::string githubOauthClientSecret;
+    // Optional. When empty, GitHub uses the callback URL registered on the app.
+    std::string githubOauthCallbackUrl;
+    // Empty disables the OAuth/cookie path entirely (fail closed).
+    std::string sessionSigningSecret;
+    // Lowercased, de-duplicated GitHub logins. Empty grants nobody access.
+    std::vector<std::string> adminGithubUsers;
+    int         sessionTtlMinutes = 720;
+
     cpp_int gpuBatchKeys = cpp_int("4278190080");
     std::map<std::string, std::pair<std::string, std::string>> keyspaces;
     std::map<std::string, PuzzleStatusTargetConfig> puzzleStatusTargets;
 };
 
 Config loadConfigFromEnv();
+
+// Comma-separated, whitespace-tolerant, case-insensitive. Returns lowercase
+// entries with duplicates removed; an empty or blank list yields no entries,
+// which denies everybody (AC6).
+std::vector<std::string> parseAdminGithubUsers(const std::string& raw);
 
 } // namespace puzzpool

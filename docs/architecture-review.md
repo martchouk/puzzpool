@@ -101,6 +101,36 @@ Stats are computed on-demand from the `chunks` table. Virtual chunk counts are t
 
 ---
 
+### ADR-5: A real HMAC alongside the frozen allocator digest
+
+**Context:** `hash_utils` exposed a helper named `hmacSha256Hex` that was in fact `sha256(key ‖ 0x1f ‖ msg)` — a secret-prefix construction, and therefore length-extension forgeable rather than a message-authentication code. Authenticating a session cookie with it would have been exploitable. It could not simply be corrected in place: `src/permutation.cpp` uses it as the Feistel round function, so changing one output byte would reorder allocation for every puzzle that has already issued work, breaking ADR-4's determinism guarantee.
+
+**Decision:** Keep the legacy construction byte-for-byte identical but rename it to `keyedDigestHex` and document at the declaration that it is deliberately not a MAC. Add a separate, correctly implemented RFC 2104 `hmacSha256Hex`/`hmacSha256Raw` and use it for every signed value. Authentication uses `SESSION_SIGNING_SECRET`, a key distinct from any allocator seed.
+
+**Consequences:** Existing allocation order is preserved — `tests/test_hash_utils.cpp` pins both the digest bytes and the resulting permutation order with golden vectors captured from the pre-rename tree, so a future "cleanup" of the odd-looking helper fails the build instead of silently reordering live puzzles. The new HMAC is verified against the RFC 4231 vectors. The cost is two similar-looking helpers in one header; the naming and the comments carry the distinction.
+
+---
+
+### ADR-6: Stateless signed sessions behind a single default-deny guard
+
+**Context:** Admin access was a shared `ADMIN_TOKEN` checked by a lambda inside `main()`. That guard returned "allowed" whenever the token was unset — a fail-open default — and it was untestable, because `main.cpp` is not part of `puzzpool_core`, the only target the test suite links. The pool also needed per-operator, revocable access.
+
+**Decision:** Extract authorization into `authorizeAdminRequest()` in `puzzpool_core`, taking the configuration and a small `AdminRequestView` and returning a decision. It is default-deny: with neither `ADMIN_TOKEN` nor a usable `ADMIN_GITHUB_USERS` configured, every admin route returns 401. Two mechanisms may each authorize a request, and `main.cpp` only wires the decision to the six routes. Sessions are stateless HMAC-signed cookies rather than rows in SQLite, and revocation runs through the allow-list, which is re-read on every request.
+
+**Consequences:** Every allow and deny path is directly unit-testable, including the unconfigured case that motivated the change. No session table, migration, or expiry sweep is needed, and a rotated `SESSION_SIGNING_SECRET` invalidates all outstanding sessions at once. The trade-offs: an individual cookie cannot be revoked before it expires (removing the login from the allow-list is the revocation path, and it takes effect on the next request), and the fail-closed switch is a breaking change for deployments that relied on a blank `ADMIN_TOKEN` — documented as an upgrade warning in `README.md` and `docs/security.md`.
+
+---
+
+### ADR-7: Redact the query string in the log handler, rather than silence request logging
+
+**Context:** GitHub returns the authorization code and the OAuth state nonce in the callback's query string; that is the provider's contract and not something this API can change. Crow logs the raw request target for every response (`http_connection.h:229`, `req_.raw_url`) at its default `Info` level, so both values were written to `stderr` — which systemd routes to journald — and, separately, to the Nginx access log, whose default `combined` format includes the query string in `$request`. An unredeemed authorization code is a live credential, so this contradicted the project rule that authorization codes must never appear in logs.
+
+**Decision:** Keep request logging and remove the query string from it. `redactQueryStrings()` in `puzzpool_core` replaces every run from a `?` to the next whitespace with `?<redacted>`, and `main.cpp` installs a `crow::ILogHandler` that pipes every line through it before delegating to Crow's `CerrLogHandler`. At the proxy, `location /api/v1/auth/` sets `access_log off;`. The two rejected alternatives were building with `-DCROW_LOG_LEVEL=2`, which suppresses all request logging and takes an operational tool away to fix a data problem, and an allow-list of parameter names to redact, which fails silently the first time a parameter nobody anticipated appears.
+
+**Consequences:** Method, path, status and timing — everything a request log is read for — survive, and `tests/test_admin_routes_smoke.sh` asserts both that sentinel `code` and `state` values are absent from `server.log` and that the callback's request line is still present, so the check cannot pass by the log being empty. The rule is blunt by design: a log message that legitimately contains a `?` loses the text up to the next space. That is a cosmetic cost in exchange for a redactor that cannot be walked past, and Crow's own messages do not rely on it. The redaction is a leaf pure function with no Crow dependency, so it is unit-tested directly in `tests/test_log_redaction.cpp`; the handler that wraps it lives in `main.cpp` and is covered only by the smoke test, which is the same split every other `main.cpp` concern already has.
+
+---
+
 ## 3. Dimension-by-Dimension Findings
 
 ### D1 — Virtual keyspace representation

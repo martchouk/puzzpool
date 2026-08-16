@@ -45,6 +45,10 @@ add_library(puzzpool_core STATIC
     src/hex_bigint.cpp
     src/hash_utils.cpp
     src/permutation.cpp
+    src/http_client.cpp
+    src/log_redaction.cpp
+    src/auth.cpp
+    src/auth_service.cpp
     src/db.cpp
     src/allocator.cpp
     src/service.cpp
@@ -133,6 +137,11 @@ target_link_libraries(puzzpool_core PUBLIC Boost::boost)
 
 find_package(nlohmann_json REQUIRED)
 target_link_libraries(puzzpool_core PUBLIC nlohmann_json::nlohmann_json)
+
+# libcurl backs the GitHub OAuth HTTP seam. It is a hard dependency: the OAuth
+# code exchange must never be performed by shelling out with a client secret.
+find_package(CURL REQUIRED)
+target_link_libraries(puzzpool_core PUBLIC CURL::libcurl)
 
 # ── Crow ─────────────────────────────────────────────────────────────────────
 
