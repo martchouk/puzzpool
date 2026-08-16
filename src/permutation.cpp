@@ -24,7 +24,9 @@ unsigned nextEven(unsigned n) {
 }
 
 cpp_int feistelRoundValue(const cpp_int& right, const std::string& roundKey, const cpp_int& mask) {
-    return hexToInt(hmacSha256Hex(roundKey, bigToDec(right))) & mask;
+    // keyedDigestHex is the legacy non-MAC digest; its bytes are frozen because
+    // they define the allocation order of every existing puzzle (ADR-4).
+    return hexToInt(keyedDigestHex(roundKey, bigToDec(right))) & mask;
 }
 
 cpp_int permutePow2Feistel(const cpp_int& x, unsigned bits, const std::string& key) {

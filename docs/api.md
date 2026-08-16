@@ -419,10 +419,142 @@ Status code mapping:
 
 ---
 
+## Auth API
+
+Public routes (no admin credential required), used to sign an operator in with
+GitHub. They are unaffected by the Nginx admin IP restriction.
+
+**Fail-closed behaviour.** When `SESSION_SIGNING_SECRET` is unset or empty, every
+`/api/v1/auth/*` route returns `503` and no session cookie is issued or accepted:
+
+```json
+{ "error": "auth_unavailable", "reason": "session_signing_secret_missing" }
+```
+
+`/api/v1/auth/github/login` and `/api/v1/auth/github/callback` additionally
+return `503` with `"reason": "github_oauth_not_configured"` when
+`GITHUB_OAUTH_CLIENT_ID` or `GITHUB_OAUTH_CLIENT_SECRET` is missing.
+
+The session cookie is `pp_session`, set with `Path=/; HttpOnly; Secure;
+SameSite=Lax; Max-Age=<SESSION_TTL_MINUTES × 60>`. Its value is
+`v1.<base64url(payload)>.<base64url(HMAC-SHA-256)>`, where the payload carries the
+GitHub login, the numeric GitHub id, and an absolute expiry. It is opaque to the
+client and unreadable from JavaScript.
+
+### GET /api/v1/auth/github/login
+
+Starts the no-scope GitHub OAuth flow.
+
+**Response 302** — `Location: https://github.com/login/oauth/authorize?client_id=…&state=…`
+
+Also sets a short-lived signed `pp_oauth_state` cookie. The `state` in the URL is
+256 bits of CSPRNG output; it is accepted at the callback only when it matches
+the value bound in that cookie, and the cookie is consumed on first use.
+
+### GET /api/v1/auth/github/callback
+
+Completes the flow. Called by GitHub with `?code=…&state=…`.
+
+**Response 302** — `Location: /`, sets `pp_session` and clears `pp_oauth_state`.
+
+| Status | Body | When |
+|--------|------|------|
+| `302` | — | Sign-in succeeded |
+| `400` | `{"error":"invalid_request"}` | `code` or `state` missing |
+| `400` | `{"error":"invalid_state"}` | State missing, expired, tampered with, or not matching the browser's cookie |
+| `502` | `{"error":"github_exchange_failed"}` | The code-for-token exchange failed or was rejected |
+| `502` | `{"error":"github_identity_failed"}` | GitHub did not return a usable identity |
+| `503` | `{"error":"auth_unavailable", …}` | OAuth or cookie signing not configured |
+
+`pp_oauth_state` is cleared on **every** outcome, so a `state` value can never be
+replayed. Error bodies never contain the client secret, the authorization code,
+the access token, or the cookie value.
+
+GitHub delivers `code` and `state` in the query string, which is the one place
+this API cannot choose. Both are therefore stripped before the request is
+logged — see *Request logging* in `docs/security.md`, and the `access_log`
+setting on `location /api/v1/auth/` in `deploy/nginx.conf`.
+
+Signing in is not the same as being an admin: the cookie is issued to any GitHub
+user who completes the flow, and authorization is decided per admin request from
+`ADMIN_GITHUB_USERS`.
+
+### GET /api/v1/auth/me
+
+Returns the identity for the current session cookie.
+
+**Response 200 — signed in**
+```json
+{
+  "authenticated": true,
+  "login": "alice",
+  "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
+  "is_admin": true
+}
+```
+
+**Response 200 — signed out**
+```json
+{ "authenticated": false, "is_admin": false }
+```
+
+A missing, malformed, badly-signed, or expired cookie all produce the identical
+signed-out body. Nothing about the presented cookie is echoed back.
+
+`avatar_url` is derived from the immutable numeric GitHub id, so it stays correct
+across account renames. `is_admin` reflects the current `ADMIN_GITHUB_USERS`
+allow-list at request time.
+
+### POST /api/v1/auth/logout
+
+Clears the session cookie.
+
+| Status | Body | When |
+|--------|------|------|
+| `200` | `{"ok":true}` | Cookie cleared |
+| `403` | `{"error":"csrf_check_failed"}` | The request carried no same-origin proof |
+| `503` | `{"error":"auth_unavailable", …}` | Cookie signing not configured |
+
+**CSRF.** Logout acts without needing a cookie, so `SameSite=Lax` does not
+protect it — a cross-site top-level form `POST` would otherwise let any page sign
+an operator out. It therefore requires the same same-origin proof a
+cookie-authorized admin `POST` does: `Sec-Fetch-Site: same-origin`, or an
+`Origin` whose authority equals the request's `Host`. A rejected request does not
+clear the cookie.
+
+---
+
 ## Admin API
 
-> Admin routes are IP-restricted at the Nginx level (see `deploy/nginx.conf`).
-> If `ADMIN_TOKEN` is set, they additionally require the header `X-Admin-Token: <token>`.
+> **Admin routes fail closed.** If neither `ADMIN_TOKEN` nor `ADMIN_GITHUB_USERS`
+> is configured, every `/api/v1/admin/*` route returns `401`. A blank value does
+> not disable authentication.
+
+A request is authorized by **either** mechanism:
+
+| Mechanism | How | Requires |
+|-----------|-----|----------|
+| Admin token | `X-Admin-Token: <token>` header | `ADMIN_TOKEN` set |
+| GitHub session | `pp_session` cookie | `SESSION_SIGNING_SECRET` set **and** a non-empty `ADMIN_GITHUB_USERS` containing the signed-in login |
+
+Both comparisons are constant-time. The allow-list is re-read on every request,
+so removing a login revokes access immediately without invalidating cookies.
+
+**CSRF.** A cookie-authorized `POST` must additionally prove it originated
+same-origin, either through `Sec-Fetch-Site: same-origin` or through an `Origin`
+whose authority equals the request's `Host`. A request with neither is rejected:
+
+```json
+{ "error": "csrf_check_failed" }
+```
+with status `403`. Requests authorized by the `X-Admin-Token` header are exempt,
+because a header credential is not sent ambiently by a browser.
+
+Rejected requests return `401` with `{"error":"unauthorized"}` and never reveal
+which mechanism was configured or which check failed.
+
+> Admin routes remain IP-restricted at the Nginx level as defence in depth
+> (see `deploy/nginx.conf`).
 
 ### POST /api/v1/admin/set-puzzle
 
