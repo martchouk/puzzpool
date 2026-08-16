@@ -23,6 +23,15 @@ add_puzzpool_test(test_log_redaction)
 add_puzzpool_test(test_auth)
 add_puzzpool_test(test_auth_routes)
 
+# ── Project-instruction contract test ────────────────────────────────────────
+# agent-instructions/PROJECT_INSTRUCTIONS.md is the canonical agent contract.
+# The test reads the file from the source tree, so it needs its absolute path.
+
+add_puzzpool_test(test_project_instructions)
+target_compile_definitions(test_project_instructions PRIVATE
+    PUZZPOOL_PROJECT_INSTRUCTIONS_PATH="${CMAKE_SOURCE_DIR}/agent-instructions/PROJECT_INSTRUCTIONS.md"
+)
+
 # ── Shell-based supply-chain guard test ──────────────────────────────────────
 # tests/test_check_node_version_age.sh exercises scripts/check-node-version-age.sh
 # with mocked `node --version` and `curl`, so it makes no network calls. It is

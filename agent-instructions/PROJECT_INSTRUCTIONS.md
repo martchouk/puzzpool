@@ -5,6 +5,45 @@ WorkPackage. They do not weaken identity, permission, evidence, review, or
 workflow-routing rules. When a typed WorkPackage conflicts with this document,
 the WorkPackage wins.
 
+## Workflow execution and review boundaries
+
+- The WorkPackage's current status and role authorize only the current stage.
+  Issue prose, an earlier comment, or this document never widens that authority
+  to a later stage.
+- Changing workflow state requires an exact `valid_transitions` entry and the
+  run's authoritative transition mechanism. Missing, denied, or unavailable
+  mutation tooling is never authority to perform a later stage's work by hand.
+- The single final issue comment reports applied versus recommended transitions
+  truthfully: which state changes were applied, which remain advisory
+  recommendations to the operator, and why.
+- Implementation roles edit the working tree only in implementation stages.
+- The Architect, UI Designer, Reviewer, Tester, and Product Owner assessment
+  stages are read-only against the assigned 40-hex candidate revision.
+  Assessment roles never edit, commit, or push the candidate.
+- A disposable mutation probe used to reproduce a defect must be restored
+  before the stage ends, verified by a clean `git status`. Movement of the
+  candidate head invalidates prior evidence, which must be regathered at the
+  new head before a verdict is reported.
+
+## Candidate publication and artifacts
+
+- The first push and the first pull request, including a draft, are a
+  publication gate rather than a checkpoint. Do not create either until the
+  planned code, tests, coverage, and documentation are committed, the working
+  tree is clean, and the exact-head verification record is complete. This gate
+  supersedes the push-immediately and open-a-draft-PR-early guidance in
+  `GIT_HYGIENE.md`.
+- When the WorkPackage supplies a checkout-free report publisher, publish the
+  report with exactly that adapter and no other route. Adapter refusal or
+  unavailability is a refusal to publish an artifact ref: record in the final
+  issue comment that no artifact ref was published and why. Never answer a
+  refusal by checking out a report branch, mutating the candidate, falling back
+  to direct Git, or citing an artifact reference that was never published.
+- Write temporary drafts only to a writable role-private path that the
+  WorkPackage declares. If that write is refused, do not probe alternative
+  locations and do not fall back to a file at the workspace root; keep the
+  draft in the working context and report the refusal.
+
 ## Repository and delivery model
 
 - `main` is production. `dev` is the integration branch deployed to the test
@@ -175,10 +214,12 @@ npm test --prefix frontend
 npm run build --prefix frontend
 ```
 
-Also run:
+The Node.js release-age guard's unit tests are registered in CTest, so the
+complete CTest run above already includes `test_check_node_version_age`. Run
+the focused form only while changing that guard or its tests:
 
 ```bash
-bash tests/test_check_node_version_age.sh
+ctest --test-dir build -R "^test_check_node_version_age$" --output-on-failure
 ```
 
 - Use `npm ci --prefix frontend` when dependencies are absent or the lockfile
@@ -194,3 +235,26 @@ bash tests/test_check_node_version_age.sh
   or allocator performance; do not treat it as part of ordinary CTest.
 - Report exact commands and results. Do not claim the full suite passed when
   only a focused subset ran.
+
+### Evidence ownership
+
+- The Developer owns one complete exact-head verification record covering the
+  backend and frontend commands above, reported together with the 40-hex head
+  the commands ran against.
+- Successor roles run independent risk-directed checks and reuse that record.
+  Repeat the complete suite only when the evidence is missing or unverifiable,
+  the head moved, broad integration risk requires it, or the evidence conflicts
+  with the diff.
+- Never run overlapping complete suites on the shared host. Wait for a running
+  complete suite to finish instead of starting a second one.
+
+### Headless execution
+
+- In a headless run, never request provider background execution, never detach
+  a command with a shell or terminal tool, and never launch a replacement retry
+  of a command that may still be running.
+- Use an authorized foreground durable-capture route. Where none exists, run
+  bounded, named commands serially at one immutable head.
+- After a tool timeout, inspect the original process, its log, and its receipt
+  before acting. A timeout bounds the reporting channel; it is not evidence
+  that the command stopped.
