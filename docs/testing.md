@@ -99,7 +99,17 @@ pass before a frontend change is merged.
 |------|-----------------|
 | `frontend/src/format.test.ts` | Number/hex/duration formatting helpers |
 | `frontend/src/performance.test.ts` | Performance-sensitive rendering helpers |
+| `frontend/src/auth.test.ts` | `/api/v1/auth/me` body normalization, avatar-URL validation, activation-hint text |
 | `frontend/src/accessibility.test.ts` | Accessibility regressions in the built dashboard markup |
+
+### Authentication state tests
+
+`auth.ts` is pure, so `auth.test.ts` exercises the real decision logic rather than
+a stand-in: the signed-in and signed-out bodies, an `authenticated: true` body
+that cannot name the account, truthy-but-not-`true` flags, a non-object body, the
+`503` returned when `SESSION_SIGNING_SECRET` is unset, a `javascript:`/`data:`/
+`http:` avatar URL, and a maximum-length GitHub login. The DOM wiring on top of it
+is pinned by the source-level assertions in `accessibility.test.ts`.
 
 ### Accessibility regression tests
 
@@ -112,9 +122,30 @@ markup. Covered guarantees include:
   Diagnostics generation filter (`#alloc-generation-filter`), and the Hilbert Curve
   Mapping layer filter (`#hil-layer-filter`) each carry `role="group"` and a unique
   `aria-label` naming the visualization and filter dimension.
+- The auth controls: `#auth-signin-btn` has a visible accessible name;
+  `#auth-identity` is a `role="group"` with an `aria-label`, holding the decorative
+  avatar, the login text, and a labelled `#auth-signout-btn`; the two controls are
+  mutually exclusive; **neither carries `aria-pressed`**, which stays reserved for
+  the `.alloc-filter-btn` toggle groups.
+- The header wraps and the auth cluster stacks at the existing `768px` breakpoint,
+  where `#stage-label` rejoins the flow so it cannot overlap `h1` or the stacked
+  controls, and a long GitHub login ellipsizes instead of clipping the header.
+- The removals: no admin-token field in the activation modal, no
+  `sessionStorage`/`localStorage` admin-token path, and no `X-Admin-Token` header
+  sent from the browser.
 
-When adding or renaming a filter group in `frontend/index.html`, update these
-assertions so the accessible-name contract stays enforced.
+Every assertion that something is **absent** is paired with a sensitivity check in
+the same test: the identical probe is run over a copy of the real source with the
+prohibited attribute, field, or storage call put back, and must report it. An
+absence assertion whose probe cannot detect the behaviour proves nothing.
+
+These are source-level checks. They pin markup conventions and do **not** prove
+runtime keyboard focus, focus restoration, or focus visibility — that needs a
+DOM-capable harness or a browser test, tracked separately.
+
+When adding or renaming a filter group, an auth control, or a header breakpoint
+rule in `frontend/index.html`, update these assertions so the accessible-name
+contract stays enforced.
 
 ---
 

@@ -114,10 +114,17 @@ The dashboard is compiled from `frontend/src/` by Vite into generated `public/in
 | Module | Responsibility |
 |--------|---------------|
 | `types.ts` | Typed API interfaces; numeric representation policy |
-| `api.ts` | `fetchStats()`, `activatePuzzle()` — typed fetch wrappers |
+| `api.ts` | `fetchStats()`, `fetchAuthMe()`, `logout()`, `activatePuzzle()` — typed fetch wrappers |
+| `auth.ts` | Pure auth-state derivation: `/auth/me` body normalization, avatar URL validation, activation-hint text |
 | `format.ts` | Pure formatting helpers (BigInt, hashrate, ETA, progress, allocator) |
 | `canvas.ts` | Canvas rendering (1D bar, heatmap, Hilbert, allocator diagnostics) |
 | `dashboard.ts` | Entry point: state, DOM wiring, event handlers, 5-second poll loop |
+
+`auth.ts` holds no DOM or `fetch` dependency for the same reason `src/auth.cpp`
+holds no Crow dependency: every accept and reject path — signed out, unnamed
+identity, non-allow-listed account, unsafe avatar URL, `503`, unparsable body —
+is then directly unit-testable without a browser. `api.ts` owns the transport and
+`dashboard.ts` owns the DOM.
 
 The build step (`npm run build --prefix frontend`) compiles TypeScript, bundles all modules,
 and inlines everything into `public/index.html`. `frontend/` is the single source of truth;

@@ -10,6 +10,16 @@ const repoRoot = path.resolve(thisDir, '..');
 const html = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
 const dashboardTs = fs.readFileSync(path.join(repoRoot, 'src', 'dashboard.ts'), 'utf8');
 const canvasTs = fs.readFileSync(path.join(repoRoot, 'src', 'canvas.ts'), 'utf8');
+const apiTs = fs.readFileSync(path.join(repoRoot, 'src', 'api.ts'), 'utf8');
+const authTs = fs.readFileSync(path.join(repoRoot, 'src', 'auth.ts'), 'utf8');
+
+// Returns the opening tag of the element carrying `id`, so an attribute
+// assertion cannot be satisfied by a coincidental match elsewhere in the file.
+function openingTag(source: string, id: string): string {
+  const match = source.match(new RegExp(`<[a-z]+[^>]*\\sid="${id}"[^>]*>`));
+  if (!match) throw new Error(`no element with id="${id}"`);
+  return match[0];
+}
 
 describe('frontend accessibility regressions', () => {
   it('defines a prefers-reduced-motion override', () => {
@@ -197,5 +207,195 @@ describe('frontend accessibility regressions', () => {
   it('renders emphasized heatmap statuses in a second paint pass above completed and blocked dots', () => {
     expect(canvasTs).toMatch(/const statusPasses:\s*ChunkStatus\[\]\[\]\s*=\s*\[\s*\['completed', 'blocked'\],\s*\['reclaimed', 'assigned', 'FOUND'\],\s*\];/);
     expect(canvasTs).toMatch(/for \(const statuses of statusPasses\)[\s\S]*for \(const cell of cells\)/);
+  });
+});
+
+// ── GitHub sign-in, identity and sign-out (story #149 AC15-AC19, AC27) ────────
+//
+// Every assertion that an attribute, field or storage path is *absent* is paired
+// with a sensitivity check: the same probe is run over a copy of the real source
+// that reintroduces the prohibited thing, and must report it. An absence
+// assertion whose probe cannot detect the behaviour proves nothing.
+
+describe('dashboard authentication controls', () => {
+  const carriesAriaPressed = (tag: string): boolean => /\saria-pressed=/.test(tag);
+  const readsAdminTokenStorage = (source: string): boolean =>
+    /sessionStorage|localStorage|adminToken/.test(source);
+  const sendsAdminTokenHeader = (source: string): boolean => /X-Admin-Token/.test(source);
+  const declaresTokenField = (source: string): boolean =>
+    /modal-token-input|class="modal-field"|<input/.test(source);
+  const injectsIdentityAsMarkup = (source: string): boolean => /innerHTML[^\n]*authState/.test(source);
+
+  const headerHtml = html.match(/<div class="header">[\s\S]*?\n        <\/div>/)?.[0] ?? '';
+  const identityGroupHtml = html.match(/<div id="auth-identity"[\s\S]*?<\/div>/)?.[0] ?? '';
+  const activateModalHtml =
+    html.match(/<div class="modal-overlay" id="activate-modal"[\s\S]*?\n    <\/div>/)?.[0] ?? '';
+  const narrowViewportCss = html.match(/@media \(max-width: 768px\) \{([\s\S]*?)\n        \}/)?.[1] ?? '';
+
+  it('groups the auth controls with the backend status inside the header', () => {
+    expect(headerHtml).toContain('class="header-actions"');
+    expect(headerHtml).toContain('id="backend-status"');
+    expect(headerHtml).toContain('id="auth-signin-btn"');
+    expect(headerHtml).toContain('id="auth-identity"');
+  });
+
+  it('gives the sign-in control a visible accessible name', () => {
+    expect(html).toMatch(
+      /<button id="auth-signin-btn"[^>]*type="button"[^>]*>Sign in with GitHub<\/button>/,
+    );
+  });
+
+  it('exposes the signed-in identity as a named group holding the avatar, login and sign-out control', () => {
+    const group = openingTag(html, 'auth-identity');
+    expect(group).toContain('role="group"');
+    expect(group).toMatch(/aria-label="[^"]+"/);
+
+    expect(identityGroupHtml).toContain('id="auth-avatar"');
+    expect(identityGroupHtml).toContain('id="auth-login"');
+    expect(identityGroupHtml).toContain('id="auth-signout-btn"');
+    expect(html).toMatch(
+      /<button id="auth-signout-btn"[^>]*aria-label="Sign out of admin session"[^>]*>Sign out<\/button>/,
+    );
+  });
+
+  it('paints signed out by default, with the identity group hidden', () => {
+    expect(openingTag(html, 'auth-identity')).toMatch(/\shidden\b/);
+    expect(openingTag(html, 'auth-signin-btn')).not.toMatch(/\shidden\b/);
+    expect(dashboardTs).toMatch(/let authState: AuthState = SIGNED_OUT;/);
+  });
+
+  it('keeps the sign-in and sign-out controls mutually exclusive', () => {
+    expect(dashboardTs).toMatch(/authSigninBtn\.hidden = authState\.signedIn;/);
+    expect(dashboardTs).toMatch(/authIdentityEl\.hidden = !authState\.signedIn;/);
+    // `hidden` has to beat the inline-flex display these elements carry.
+    expect(html).toMatch(/#auth-signin-btn\[hidden\],[\s\S]*?#auth-identity\[hidden\],[\s\S]*?\{\s*display: none;/);
+  });
+
+  it('never marks the sign-in or sign-out control as a toggle button (D15/AC19)', () => {
+    for (const id of ['auth-signin-btn', 'auth-signout-btn']) {
+      expect(carriesAriaPressed(openingTag(html, id))).toBe(false);
+    }
+
+    for (const id of ['auth-signin-btn', 'auth-signout-btn']) {
+      const mutated = html.replace(`<button id="${id}"`, `<button aria-pressed="false" id="${id}"`);
+      expect(carriesAriaPressed(openingTag(mutated, id))).toBe(true);
+    }
+  });
+
+  it('keeps aria-pressed reserved for the visualization filter toggle groups', () => {
+    const tags = html.match(/<[a-z]+[^>]*\saria-pressed="[^"]*"[^>]*>/g) ?? [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const tag of tags) expect(tag).toContain('class="alloc-filter-btn');
+  });
+
+  it('removes the shared-token field from the activation modal but keeps the confirmation', () => {
+    expect(declaresTokenField(activateModalHtml)).toBe(false);
+    expect(html).not.toMatch(/\.modal-field\s*\{/);
+    expect(activateModalHtml).toContain('id="modal-puzzle-name"');
+    expect(activateModalHtml).toContain('id="modal-error"');
+    expect(activateModalHtml).toContain('id="modal-cancel"');
+    expect(activateModalHtml).toContain('id="modal-confirm"');
+
+    const restored = activateModalHtml.replace(
+      '<div class="modal-error"',
+      '<div class="modal-field"><input type="password" id="modal-token-input"></div><div class="modal-error"',
+    );
+    expect(declaresTokenField(restored)).toBe(true);
+  });
+
+  it('removes every browser-storage admin-token path', () => {
+    for (const source of [html, dashboardTs, apiTs, authTs]) {
+      expect(readsAdminTokenStorage(source)).toBe(false);
+    }
+    expect(readsAdminTokenStorage(`${dashboardTs}\nsessionStorage.setItem('adminToken', token);\n`)).toBe(true);
+  });
+
+  it('stops sending an admin token header from the browser', () => {
+    expect(sendsAdminTokenHeader(apiTs)).toBe(false);
+    expect(sendsAdminTokenHeader(`${apiTs}\nheaders['X-Admin-Token'] = token;\n`)).toBe(true);
+  });
+
+  it('sends same-origin credentials on the auth and cookie-authorized admin calls', () => {
+    const calls = [
+      apiTs.match(/fetch\('\/api\/v1\/auth\/me'[\s\S]*?\);/)?.[0] ?? '',
+      apiTs.match(/fetch\('\/api\/v1\/auth\/logout'[\s\S]*?\}\);/)?.[0] ?? '',
+      apiTs.match(/fetch\('\/api\/v1\/admin\/activate-puzzle'[\s\S]*?\}\);/)?.[0] ?? '',
+    ];
+    for (const call of calls) {
+      expect(call).not.toBe('');
+      expect(call).toContain("credentials: 'same-origin'");
+    }
+    expect(apiTs).toMatch(/fetch\('\/api\/v1\/auth\/logout', \{\s*method: 'POST',/);
+  });
+
+  it('navigates sign-in through the backend OAuth entry point', () => {
+    expect(dashboardTs).toMatch(/window\.location\.assign\('\/api\/v1\/auth\/github\/login'\);/);
+  });
+
+  it('renders the GitHub login as text, never as markup', () => {
+    expect(dashboardTs).toMatch(/authLoginEl\.textContent = authState\.signedIn \? authState\.login : '';/);
+    expect(injectsIdentityAsMarkup(dashboardTs)).toBe(false);
+    expect(injectsIdentityAsMarkup(`${dashboardTs}\nauthLoginEl.innerHTML = authState.login;\n`)).toBe(true);
+  });
+
+  it('accepts only an https avatar and keeps the readable login when it fails to load', () => {
+    expect(authTs).toMatch(/parsed\.protocol === 'https:'/);
+    expect(dashboardTs).toMatch(
+      /authAvatarEl\.addEventListener\('error', \(\) => \{ authAvatarEl\.hidden = true; \}\);/,
+    );
+    // Decorative: the accessible identity is the login text beside the image.
+    const avatar = openingTag(html, 'auth-avatar');
+    expect(avatar).toContain('alt=""');
+    expect(avatar).toContain('aria-hidden="true"');
+  });
+
+  it('answers an unauthorized activation attempt with a non-blocking inline hint', () => {
+    const hint = openingTag(html, 'ks-auth-hint');
+    expect(hint).toContain('role="status"');
+    expect(hint).toMatch(/\shidden\b/);
+    // The hint replaces the modal instead of disabling the control.
+    expect(dashboardTs).toMatch(
+      /function requestActivate[\s\S]*?showAuthHint\(hint\);[\s\S]*?return;[\s\S]*?openActivateModal\(id, name\);/,
+    );
+    expect(dashboardTs).toMatch(/cell\.addEventListener\('click', \(\) => requestActivate\(/);
+    expect(html).not.toMatch(/ks-toggle-cell[^>]*\sdisabled/);
+  });
+
+  it('closes the overlay and discards authenticated state on an admin 401', () => {
+    expect(apiTs).toMatch(/unauthorized: res\.status === 401/);
+    expect(dashboardTs).toMatch(
+      /function discardAuthenticatedState\(\): void \{\s*closeActivateModal\(\);\s*authState = SIGNED_OUT;\s*renderAuthState\(\);\s*\}/,
+    );
+    expect(dashboardTs).toMatch(/if \(result\.unauthorized\) \{[\s\S]*?discardAuthenticatedState\(\);/);
+  });
+
+  it('signs out through a same-origin POST and re-reads the resulting state', () => {
+    expect(dashboardTs).toMatch(
+      /async function signOut\(\): Promise<void> \{[\s\S]*?discardAuthenticatedState\(\);[\s\S]*?await logout\(\);[\s\S]*?await refreshAuthState\(\);/,
+    );
+  });
+
+  it('wraps the header and stacks the auth controls at the 768px breakpoint (D17/AC27)', () => {
+    const headerBlock = html.match(/\.header\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(headerBlock).toContain('flex-wrap: wrap');
+
+    expect(narrowViewportCss).toMatch(/\.header-actions\s*\{[^}]*flex-basis:\s*100%/);
+    expect(narrowViewportCss).toMatch(/\.auth-login\s*\{[^}]*max-width/);
+
+    // The stage label is centered with `position: absolute` at desktop width and
+    // would otherwise sit on top of h1 once the header stacks, so it rejoins the
+    // flow at this breakpoint. Its styles must live in the stylesheet for that
+    // override to be possible at all — an inline style attribute would win.
+    expect(html).toMatch(/#stage-label\s*\{[^}]*position:\s*absolute/);
+    expect(openingTag(html, 'stage-label')).not.toMatch(/position:\s*absolute/);
+    expect(narrowViewportCss).toMatch(/#stage-label\s*\{[^}]*position:\s*static/);
+  });
+
+  it('bounds the identity strip so a long GitHub login cannot clip the header', () => {
+    const loginBlock = html.match(/\.auth-login\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(loginBlock).toContain('overflow: hidden');
+    expect(loginBlock).toContain('text-overflow: ellipsis');
+    expect(loginBlock).toMatch(/max-width:/);
+    expect(html).toMatch(/\.header-actions\s*\{[^}]*flex-wrap:\s*wrap/);
   });
 });

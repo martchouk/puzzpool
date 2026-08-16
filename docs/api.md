@@ -522,6 +522,28 @@ cookie-authorized admin `POST` does: `Sec-Fetch-Site: same-origin`, or an
 `Origin` whose authority equals the request's `Host`. A rejected request does not
 clear the cookie.
 
+### How the dashboard uses these routes
+
+The dashboard is the reference client for this API:
+
+| Step | Call |
+|------|------|
+| Initial paint | Renders the signed-out header first, then `GET /api/v1/auth/me` with `credentials: 'same-origin'` and switches to the identity view only for `"authenticated": true` |
+| Sign in | Full-page navigation to `/api/v1/auth/github/login` |
+| Sign out | `POST /api/v1/auth/logout` with `credentials: 'same-origin'`, then re-reads `/api/v1/auth/me` |
+| Admin action | `POST /api/v1/admin/activate-puzzle` with `credentials: 'same-origin'` |
+
+A `503`, an unparsable body, and a dropped connection are all rendered as the
+ordinary signed-out state, so an unconfigured or unreachable auth backend never
+blocks the public dashboard. The identity is polled once per page load rather
+than on the 5-second stats interval; an expired session surfaces as a `401` on
+the next admin action, which returns the dashboard to the signed-out state.
+
+The browser never holds an admin credential: the session lives only in the
+`HttpOnly` `pp_session` cookie, and the dashboard sends no `X-Admin-Token`
+header. The `X-Admin-Token` mechanism remains fully supported for scripts and
+`curl`, which is what the examples below use.
+
 ---
 
 ## Admin API

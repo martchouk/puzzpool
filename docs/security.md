@@ -71,6 +71,20 @@ Signing in is not the same as being an admin. Any GitHub user can complete the
 OAuth flow and receive a session cookie; the cookie grants nothing until the login
 appears on the allow-list.
 
+**The dashboard uses this mechanism exclusively.** It has no admin-token field
+and writes nothing to `sessionStorage` or `localStorage`, so a cross-site script
+or a shared browser profile has no admin credential to steal — the session lives
+only in the `HttpOnly` `pp_session` cookie, which JavaScript cannot read. Admin
+and auth calls from the dashboard set `credentials: 'same-origin'`; the browser
+supplies the `Sec-Fetch-Site`/`Origin` proof the CSRF check requires.
+
+A consequence worth planning for: on a deployment configured with `ADMIN_TOKEN`
+alone, the dashboard can no longer activate a puzzle from the browser, because it
+has nowhere to put the token. Configure `SESSION_SIGNING_SECRET`,
+`ADMIN_GITHUB_USERS`, and this stage's OAuth credentials to keep browser-driven
+activation, or drive `/api/v1/admin/activate-puzzle` with `curl` and the
+`X-Admin-Token` header.
+
 ### Mechanism C — Nginx IP restriction (defence in depth)
 
 The provided `deploy/nginx.conf` restricts admin routes to `127.0.0.1` and any
