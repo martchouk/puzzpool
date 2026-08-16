@@ -49,6 +49,8 @@ const std::vector<Clause>& requiredClauses()
         // Stage authority.
         {"stage-authority-source", "The WorkPackage's current status and role"},
         {"stage-authority", "authorize only the current stage"},
+        {"stage-authority-non-authoritative-sources",
+         "Issue prose, an earlier comment, or this document"},
         {"prose-never-widens-authority", "never widens that authority to a later stage"},
         {"transition-requires-valid-entry", "an exact `valid_transitions` entry"},
         {"transition-requires-authoritative-mechanism",
@@ -57,6 +59,7 @@ const std::vector<Clause>& requiredClauses()
          "mutation tooling is never authority to perform a later stage's work by hand"},
         {"single-final-issue-comment", "The single final issue comment"},
         {"transition-report-truthful", "applied versus recommended transitions"},
+        {"transition-report-truthfully", "truthfully"},
 
         // Read-only assessment stages.
         {"implementation-edit-window", "edit the working tree only in implementation stages"},
@@ -79,7 +82,12 @@ const std::vector<Clause>& requiredClauses()
         {"publication-gate-clean-tree", "the working tree is clean"},
         {"publication-gate-exact-head-evidence",
          "the exact-head verification record is complete"},
+        {"publication-gate-supersedes-git-hygiene",
+         "supersedes the push-immediately and open-a-draft-PR-early guidance in "
+         "`GIT_HYGIENE.md`"},
         {"checkout-free-publisher", "publish the report with exactly that adapter and no other route"},
+        {"publisher-unavailability-is-refusal",
+         "unavailability is a refusal to publish an artifact ref"},
         {"publisher-refusal-reported", "no artifact ref was published and why"},
         // Each forbidden answer to a refusal is pinned separately.
         {"publisher-refusal-no-checkout", "checking out a report branch"},
@@ -157,12 +165,18 @@ const std::vector<Mutation>& hardeningMutations()
         {"stage-authority-without-status-or-role",
          "current status and role ",
          {"stage-authority-source"}},
+        {"stage-authority-without-non-authoritative-sources",
+         "Issue prose, an earlier comment, or this document ",
+         {"stage-authority-non-authoritative-sources"}},
 
         {"issue-comment-without-single", "single ", {"single-final-issue-comment"}, false},
         {"issue-comment-without-final", "final ", {"single-final-issue-comment"}, false},
         {"issue-comment-without-single-or-final",
          "single final ",
          {"single-final-issue-comment"}},
+        {"transition-report-without-truthfully",
+         "truthfully: ",
+         {"transition-report-truthfully"}},
 
         {"assessment-without-architect", "Architect, ", {"assessment-role-list"}, false},
         {"assessment-without-ui-designer", "UI Designer, ", {"assessment-role-list"}, false},
@@ -191,6 +205,14 @@ const std::vector<Mutation>& hardeningMutations()
          {"publication-gate-work-committed",
           "publication-gate-clean-tree",
           "publication-gate-exact-head-evidence"}},
+        {"publication-gate-without-git-hygiene-supersession",
+         "This gate supersedes the push-immediately and open-a-draft-PR-early guidance in "
+         "`GIT_HYGIENE.md`.",
+         {"publication-gate-supersedes-git-hygiene"}},
+
+        {"publisher-refusal-without-unavailability",
+         " or unavailability",
+         {"publisher-unavailability-is-refusal"}},
 
         {"draft-refusal-probes-alternative-locations",
          "do not probe alternative locations",
