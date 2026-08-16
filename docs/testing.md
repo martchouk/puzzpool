@@ -1,5 +1,16 @@
 # Testing
 
+## CI Branch Coverage Contract
+
+```bash
+bash tests/test_ci_branch_coverage.sh
+```
+
+The dependency-free checker verifies that `.github/workflows/ci.yml` runs for
+pushes to `main` and `dev` and for pull requests targeting either branch. The
+test mutates each event independently to prove it fails when `dev` coverage is
+removed.
+
 ## C++ Unit Tests (Catch2 + CTest)
 
 ```bash

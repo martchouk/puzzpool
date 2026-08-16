@@ -2,11 +2,19 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
+  workflow-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify CI branch coverage contract
+        run: bash tests/test_ci_branch_coverage.sh
+
   build:
     runs-on: ubuntu-latest
 
