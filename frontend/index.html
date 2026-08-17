@@ -55,6 +55,8 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
             margin-bottom: 2.5rem;
             padding-bottom: 1.5rem;
             border-bottom: 1px solid var(--border-default);
@@ -68,6 +70,26 @@
             color: var(--accent-cyan);
             text-shadow: 0 0 20px var(--accent-cyan-glow);
             letter-spacing: 0.05em;
+        }
+
+        #stage-label {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--accent-red);
+            letter-spacing: 0.05em;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 1rem;
+            min-width: 0;
         }
 
         .status-badge {
@@ -136,6 +158,93 @@
 
         .status-badge.is-offline .status-icon-slash {
             stroke-width: 2.3;
+        }
+
+        .auth-btn {
+            appearance: none;
+            border: 1px solid var(--border-default);
+            background: rgba(255,255,255,0.02);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            padding: 0.28rem 0.65rem;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: var(--transition);
+        }
+
+        .auth-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.04);
+            border-color: var(--border-hover);
+        }
+
+        .auth-btn:disabled {
+            cursor: wait;
+            opacity: 0.65;
+        }
+
+        .auth-identity {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-default);
+            border-radius: 9px;
+            padding: 0.2rem 0.3rem 0.2rem 0.45rem;
+            max-width: 100%;
+            min-width: 0;
+        }
+
+        .auth-avatar {
+            width: 1.25rem;
+            height: 1.25rem;
+            flex: 0 0 1.25rem;
+            border-radius: 999px;
+            object-fit: cover;
+            background: var(--bg-elevated);
+        }
+
+        .auth-login {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--text-primary);
+            max-width: 14rem;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* An always-rendered live region, like #backend-status: a role="status"
+           element has to be in the accessibility tree *before* its text changes
+           for the change to be announced, so this one is never toggled with
+           `hidden` and never gains a `display` rule — only its text is swapped.
+           `:empty` drops the spacing so the cleared region occupies no room. */
+        .ks-auth-hint {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--accent-amber);
+            text-align: center;
+            padding-top: 0.35rem;
+        }
+
+        .ks-auth-hint:empty {
+            padding-top: 0;
+        }
+
+        /* `hidden` must win over the inline-flex display these elements carry. */
+        #auth-signin-btn[hidden],
+        #auth-identity[hidden],
+        #auth-avatar[hidden] {
+            display: none;
         }
 
         .stat-grid {
@@ -883,32 +992,6 @@
 
         .modal-body strong { color: var(--text-primary); }
 
-        .modal-field { margin-bottom: 1.25rem; }
-
-        .modal-field label {
-            display: block;
-            font-size: 0.65rem;
-            font-weight: 600;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            margin-bottom: 0.4rem;
-        }
-
-        .modal-field input {
-            width: 100%;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius);
-            padding: 0.5rem 0.75rem;
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            color: var(--text-primary);
-            outline: none;
-        }
-
-        .modal-field input:focus { border-color: var(--accent-cyan); }
-
         .modal-error {
             font-size: 0.78rem;
             color: var(--accent-red);
@@ -1069,6 +1152,27 @@
 
         @media (max-width: 768px) {
             body { padding: 1rem; }
+
+            /* The header carries a second interactive cluster from this
+               breakpoint down, so it stacks instead of competing for one row.
+               #stage-label rejoins the flow here: absolutely centered, it would
+               otherwise sit on top of h1 on a narrow viewport. */
+            .header {
+                align-items: flex-start;
+                gap: 0.75rem;
+            }
+            #stage-label {
+                position: static;
+                left: auto;
+                transform: none;
+            }
+            .header-actions {
+                flex-basis: 100%;
+                justify-content: flex-start;
+                gap: 0.75rem;
+            }
+            .auth-login { max-width: 9rem; }
+
             .stat-grid { flex-direction: column; }
             .stat-card { min-width: 100%; }
             .api-desc { display: none; }
@@ -1090,16 +1194,25 @@
     <div class="container">
         <div class="header">
             <h1>PUZZLE POOL</h1>
-            <span id="stage-label" style="display:none;position:absolute;left:50%;transform:translateX(-50%);font-family:var(--font-mono);font-size:0.8rem;font-weight:700;color:var(--accent-red);letter-spacing:0.05em;">/TEST SYSTEM/</span>
-            <div id="backend-status" class="status-badge is-offline" role="status" aria-live="polite">
-                <span id="backend-status-icon" aria-hidden="true"></span>
-                <span id="backend-status-label">OFFLINE</span>
+            <span id="stage-label" style="display:none">/TEST SYSTEM/</span>
+            <div class="header-actions">
+                <div id="backend-status" class="status-badge is-offline" role="status" aria-live="polite">
+                    <span id="backend-status-icon" aria-hidden="true"></span>
+                    <span id="backend-status-label">OFFLINE</span>
+                </div>
+                <button id="auth-signin-btn" class="auth-btn" type="button">Sign in with GitHub</button>
+                <div id="auth-identity" class="auth-identity" role="group" aria-label="Signed-in GitHub account" hidden>
+                    <img id="auth-avatar" class="auth-avatar" alt="" aria-hidden="true" width="20" height="20" hidden>
+                    <span id="auth-login" class="auth-login"></span>
+                    <button id="auth-signout-btn" class="auth-btn" type="button" aria-label="Sign out of admin session">Sign out</button>
+                </div>
             </div>
         </div>
 
         <div id="ks-nav" style="display:none">
             <div id="ks-tab-strip"></div>
             <div id="ks-toggle-strip"></div>
+            <p id="ks-auth-hint" class="ks-auth-hint" role="status" aria-live="polite"></p>
         </div>
 
         <div class="stat-grid">
@@ -1825,10 +1938,6 @@ curl -sS "$POOL_SERVER/api/v1/visualization/allocator?puzzle_id=1"</pre>
                 Activate <strong id="modal-puzzle-name"></strong>?<br>
                 Workers will receive chunks from this keyspace on their next request.
                 Active workers can still submit their current chunks.
-            </div>
-            <div class="modal-field">
-                <label>Admin token (leave empty if not configured)</label>
-                <input type="password" id="modal-token-input" placeholder="X-Admin-Token value">
             </div>
             <div class="modal-error" id="modal-error"></div>
             <div class="modal-buttons">

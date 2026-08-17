@@ -114,10 +114,27 @@ The dashboard is compiled from `frontend/src/` by Vite into generated `public/in
 | Module | Responsibility |
 |--------|---------------|
 | `types.ts` | Typed API interfaces; numeric representation policy |
-| `api.ts` | `fetchStats()`, `activatePuzzle()` — typed fetch wrappers |
+| `api.ts` | `fetchStats()`, `fetchAuthMe()`, `logout()`, `activatePuzzle()` — typed fetch wrappers |
+| `auth.ts` | Pure auth-state derivation: `/auth/me` body normalization, avatar URL validation, activation-hint text |
 | `format.ts` | Pure formatting helpers (BigInt, hashrate, ETA, progress, allocator) |
 | `canvas.ts` | Canvas rendering (1D bar, heatmap, Hilbert, allocator diagnostics) |
 | `dashboard.ts` | Entry point: state, DOM wiring, event handlers, 5-second poll loop |
+
+`auth.ts` holds no DOM or `fetch` dependency for the same reason `src/auth.cpp`
+holds no Crow dependency: every accept and reject path — signed out, unnamed
+identity, non-allow-listed account, unsafe avatar URL, `503`, unparsable body —
+is then directly unit-testable without a browser. `api.ts` owns the transport and
+`dashboard.ts` owns the DOM.
+
+The auth and admin transports in `api.ts` — `fetchAuthMe()`, `logout()` and
+`activatePuzzle()` — never reject. A `503`, an unparsable body and a dropped
+connection are all reported as a value the caller can render: a signed-out state, a
+failed sign-out, or a failed activation. That keeps the DOM layer free of transport
+error handling, and it is what stops a network failure mid-activation from becoming
+an unhandled rejection that strands the confirmation overlay with no message. A
+dropped connection is deliberately **not** reported as `unauthorized`, because the
+session is not known to be gone and a live admin session must not be signed out of
+the UI over a network blip.
 
 The build step (`npm run build --prefix frontend`) compiles TypeScript, bundles all modules,
 and inlines everything into `public/index.html`. `frontend/` is the single source of truth;

@@ -99,7 +99,42 @@ pass before a frontend change is merged.
 |------|-----------------|
 | `frontend/src/format.test.ts` | Number/hex/duration formatting helpers |
 | `frontend/src/performance.test.ts` | Performance-sensitive rendering helpers |
+| `frontend/src/auth.test.ts` | `/api/v1/auth/me` body normalization, avatar-URL validation, activation-hint and refused-activation-hint text |
+| `frontend/src/api.test.ts` | Auth and admin transports against a stubbed network: request shape, status mapping, network errors |
 | `frontend/src/accessibility.test.ts` | Accessibility regressions in the built dashboard markup |
+
+### Authentication state tests
+
+`auth.ts` is pure, so `auth.test.ts` exercises the real decision logic rather than
+a stand-in: the signed-in and signed-out bodies, an `authenticated: true` body
+that cannot name the account, truthy-but-not-`true` flags, a non-object body, the
+`503` returned when `SESSION_SIGNING_SECRET` is unset, a `javascript:`/`data:`/
+`http:` avatar URL, and a maximum-length GitHub login. The DOM wiring on top of it
+is pinned by the source-level assertions in `accessibility.test.ts`.
+
+`refusedActivationHint()` is covered against every state `/api/v1/auth/me` can
+report *after* an activation `401`, because a `401` does not imply the session
+ended: the allow-list is consulted per request, so an admin removed mid-session
+is refused while still authenticated. Each case gets its own wording — sign in
+again, name the account that is not allow-listed, or explain the refusal when the
+refreshed state looks authorized again. That last branch is why the function is
+total: `activationHint()` returns `null` there, which would close the overlay and
+say nothing at all.
+
+### Transport tests
+
+`api.ts` depends on the global `fetch` and on no DOM, so `api.test.ts` runs the real
+transport code against a stubbed network rather than a wrapper: the request URL,
+method, `credentials: 'same-origin'`, and JSON body; the `401` → `unauthorized`
+mapping and the `403` that must **not** be treated as an expired session; an
+unparsable error body falling back to the status code; and a dropped connection on
+each of `/auth/me`, `/auth/logout` and `/admin/activate-puzzle`.
+
+All three transports are required never to reject. That is what keeps a network
+failure mid-activation from becoming an unhandled rejection that strands the
+confirmation overlay with no message (AC4). Each test awaits the returned promise,
+so the guarantee is self-sensitive: removing a `try`/`catch` from `api.ts` makes the
+corresponding case fail with the rejection itself rather than pass quietly.
 
 ### Accessibility regression tests
 
@@ -112,9 +147,41 @@ markup. Covered guarantees include:
   Diagnostics generation filter (`#alloc-generation-filter`), and the Hilbert Curve
   Mapping layer filter (`#hil-layer-filter`) each carry `role="group"` and a unique
   `aria-label` naming the visualization and filter dimension.
+- The auth controls: `#auth-signin-btn` has a visible accessible name;
+  `#auth-identity` is a `role="group"` with an `aria-label`, holding the decorative
+  avatar, the login text, and a labelled `#auth-signout-btn`; the two controls are
+  mutually exclusive; **neither carries `aria-pressed`**, which stays reserved for
+  the `.alloc-filter-btn` toggle groups.
+- The activation hint `#ks-auth-hint` stays an **always-rendered** live region:
+  `role="status" aria-live="polite"`, no `hidden` attribute, no `display` rule that
+  removes it, and dashboard helpers that swap only its text. A `role="status"`
+  element has to be in the accessibility tree before its content changes for the
+  change to be announced, and this hint is the only feedback a signed-out visitor
+  gets when activation is refused (AC17), so populating it while hidden and
+  revealing it afterwards would leave a screen-reader user with silence.
+- The header wraps and the auth cluster stacks at the existing `768px` breakpoint,
+  where `#stage-label` rejoins the flow so it cannot overlap `h1` or the stacked
+  controls, and a long GitHub login ellipsizes instead of clipping the header.
+- The admin-`401` branch re-reads `/api/v1/auth/me` **before** wording the hint,
+  so the message can never contradict the identity the refresh restores to the
+  header. The ordering is only visible in the source, so it is pinned here; the
+  resulting text is unit-tested in `auth.test.ts`.
+- The removals: no admin-token field in the activation modal, no
+  `sessionStorage`/`localStorage` admin-token path, and no `X-Admin-Token` header
+  sent from the browser.
 
-When adding or renaming a filter group in `frontend/index.html`, update these
-assertions so the accessible-name contract stays enforced.
+Every assertion that something is **absent** is paired with a sensitivity check in
+the same test: the identical probe is run over a copy of the real source with the
+prohibited attribute, field, or storage call put back, and must report it. An
+absence assertion whose probe cannot detect the behaviour proves nothing.
+
+These are source-level checks. They pin markup conventions and do **not** prove
+runtime keyboard focus, focus restoration, or focus visibility — that needs a
+DOM-capable harness or a browser test, tracked separately.
+
+When adding or renaming a filter group, an auth control, or a header breakpoint
+rule in `frontend/index.html`, update these assertions so the accessible-name
+contract stays enforced.
 
 ---
 

@@ -163,6 +163,28 @@ export interface AllocatorVisualizationResponse {
   generations: Record<'all' | 'legacy' | 'affine' | 'feistel', AllocatorGenerationVisualization>;
 }
 
+// ── Authentication (/api/v1/auth/me) ──────────────────────────────────────────
+
+// The wire shape. `login` and `avatar_url` are present only when the session
+// cookie decoded; a missing, malformed, badly-signed or expired cookie produces
+// the identical signed-out body.
+export interface AuthMeResponse {
+  authenticated: boolean;
+  is_admin: boolean;
+  login?: string;
+  avatar_url?: string;
+}
+
+// The dashboard's normalized view of the wire shape. Every failure — signed out,
+// unparsable body, 503, network error — collapses to `signedIn: false`, so the
+// UI never has to render a half-known identity.
+export interface AuthState {
+  signedIn: boolean;
+  isAdmin: boolean;
+  login: string;
+  avatarUrl: string | null;
+}
+
 // ── Top-level stats response (/api/v1/stats) ──────────────────────────────────
 
 export interface StatsResponse {

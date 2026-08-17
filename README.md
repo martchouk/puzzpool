@@ -275,6 +275,12 @@ It uses port `8889` and `~/git/puzzpool.test/` as its working directory, so prod
 - The OAuth callback's `code` and `state` arrive in a query string, so query
   strings are **stripped from every log line** before it is written, and the
   Nginx access log is off for `/api/v1/auth/`
+- The dashboard signs in with GitHub and holds **no admin credential in the
+  browser** — no token field, and nothing in `sessionStorage` or `localStorage`.
+  Signed-out visitors keep full read-only access; only admin actions are gated.
+  On a deployment configured with `ADMIN_TOKEN` alone, activate a puzzle with
+  `curl` and the `X-Admin-Token` header, or configure GitHub sign-in to keep
+  doing it from the browser.
 - Workers are identified by name only — no passwords (by design for an open public puzzle)
 - All SQL uses parameterised queries (no injection risk)
 - Dashboard renders all user-supplied data via `textContent` (no XSS risk)

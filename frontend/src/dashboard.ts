@@ -1,5 +1,6 @@
 import type {
   AllocatorVisualizationResponse,
+  AuthState,
   HeatmapVisualizationResponse,
   HilbertVisualizationResponse,
   PuzzleListEntry,
@@ -8,10 +9,13 @@ import type {
 import {
   activatePuzzle,
   fetchAllocatorVisualization,
+  fetchAuthMe,
   fetchHeatmapVisualization,
   fetchHilbertVisualization,
   fetchStats,
+  logout,
 } from './api.ts';
+import { SIGNED_OUT, activationHint, refusedActivationHint } from './auth.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc, isRecentUtc,
   formatPrecisePercentage, trimHexRange, formatETA,
@@ -39,6 +43,7 @@ let heatmapVis: HeatmapVisualizationResponse | null = null;
 let hilbertVis: HilbertVisualizationResponse | null = null;
 let allocatorVis: AllocatorVisualizationResponse | null = null;
 let pendingActivateId: number | null = null;
+let authState: AuthState = SIGNED_OUT;
 let lastPuzzles: (PuzzleListEntry & { active: boolean | number })[] = [];
 let selectedId: number | null = null;
 let stageSet = false;
@@ -67,6 +72,12 @@ const backendStatusLabelEl = document.getElementById('backend-status-label')!;
 const heatmapRefreshBtn = document.getElementById('heatmap-refresh-btn') as HTMLButtonElement;
 const allocatorRefreshBtn = document.getElementById('allocator-refresh-btn') as HTMLButtonElement;
 const hilbertRefreshBtn = document.getElementById('hilbert-refresh-btn') as HTMLButtonElement;
+const authSigninBtn = document.getElementById('auth-signin-btn') as HTMLButtonElement;
+const authSignoutBtn = document.getElementById('auth-signout-btn') as HTMLButtonElement;
+const authIdentityEl = document.getElementById('auth-identity')!;
+const authAvatarEl = document.getElementById('auth-avatar') as HTMLImageElement;
+const authLoginEl = document.getElementById('auth-login')!;
+const authHintEl = document.getElementById('ks-auth-hint')!;
 
 function svgEl(tag: string): SVGElement {
   return document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -206,39 +217,137 @@ function applyStage(stage: string): void {
   if (label) label.style.display = 'inline';
 }
 
+// ── Authentication ────────────────────────────────────────────────────────────
+
+// The identity group and the sign-in button are mutually exclusive: exactly one
+// of the two is ever in the rendered state, which is why neither is a toggle
+// button and neither carries aria-pressed.
+function renderAuthState(): void {
+  authSigninBtn.hidden = authState.signedIn;
+  authIdentityEl.hidden = !authState.signedIn;
+
+  authLoginEl.textContent = authState.signedIn ? authState.login : '';
+
+  if (authState.avatarUrl) {
+    authAvatarEl.src = authState.avatarUrl;
+    authAvatarEl.hidden = false;
+  } else {
+    authAvatarEl.removeAttribute('src');
+    authAvatarEl.hidden = true;
+  }
+}
+
+// A provider avatar that fails to load hides only the image; the readable login
+// beside it stays, so the identity is never reduced to a broken icon.
+authAvatarEl.addEventListener('error', () => { authAvatarEl.hidden = true; });
+
+// #ks-auth-hint is an always-rendered live region, so only its text is ever
+// touched. Writing into a region that is still display:none and revealing it
+// afterwards presents assistive technology with an element that appears already
+// populated, which is the case it is least likely to announce — and this hint is
+// the only feedback a signed-out visitor gets when activation is refused.
+function showAuthHint(message: string): void {
+  authHintEl.textContent = message;
+}
+
+function clearAuthHint(): void {
+  authHintEl.textContent = '';
+}
+
+async function refreshAuthState(): Promise<void> {
+  authState = await fetchAuthMe();
+  renderAuthState();
+}
+
+// Everything an authenticated session unlocked is discarded together: the
+// blocking overlay closes, the identity disappears, and the visitor is left in
+// the ordinary signed-out dashboard.
+function discardAuthenticatedState(): void {
+  closeActivateModal();
+  authState = SIGNED_OUT;
+  renderAuthState();
+}
+
+authSigninBtn.addEventListener('click', () => {
+  window.location.assign('/api/v1/auth/github/login');
+});
+
+authSignoutBtn.addEventListener('click', () => { void signOut(); });
+
+async function signOut(): Promise<void> {
+  authSignoutBtn.disabled = true;
+  discardAuthenticatedState();
+  clearAuthHint();
+  try {
+    await logout();
+  } finally {
+    authSignoutBtn.disabled = false;
+  }
+  // Re-read the server's view rather than assuming: a rejected logout leaves the
+  // session alive, and showing it is more honest than pretending it ended.
+  await refreshAuthState();
+}
+
+// ── Activation ────────────────────────────────────────────────────────────────
+
+function closeActivateModal(): void {
+  document.getElementById('activate-modal')!.style.display = 'none';
+  pendingActivateId = null;
+}
+
 function openActivateModal(id: number, name: string): void {
   pendingActivateId = id;
   document.getElementById('modal-puzzle-name')!.textContent = name;
-  (document.getElementById('modal-token-input') as HTMLInputElement).value =
-    sessionStorage.getItem('adminToken') ?? '';
   document.getElementById('modal-error')!.style.display = 'none';
   document.getElementById('activate-modal')!.style.display = 'flex';
 }
 
+// Public puzzle viewing stays open to everyone; only the activation attempt is
+// answered with an inline hint instead of a modal that could only fail.
+function requestActivate(id: number, name: string): void {
+  const hint = activationHint(authState);
+  if (hint !== null) {
+    showAuthHint(hint);
+    return;
+  }
+  clearAuthHint();
+  openActivateModal(id, name);
+}
+
 document.getElementById('modal-cancel')!.addEventListener('click', () => {
-  document.getElementById('activate-modal')!.style.display = 'none';
-  pendingActivateId = null;
+  closeActivateModal();
 });
 
 document.getElementById('modal-confirm')!.addEventListener('click', async () => {
-  const token = (document.getElementById('modal-token-input') as HTMLInputElement).value.trim();
   const errEl = document.getElementById('modal-error')!;
   errEl.style.display = 'none';
   if (pendingActivateId === null) return;
 
-  const result = await activatePuzzle(pendingActivateId, token);
+  const activatedId = pendingActivateId;
+  const result = await activatePuzzle(activatedId);
   if (result.ok) {
-    if (token) sessionStorage.setItem('adminToken', token);
-    document.getElementById('activate-modal')!.style.display = 'none';
-    selectedId = pendingActivateId;
-    renderKeyspaceTabs(lastPuzzles.map(p => ({ ...p, active: p.id === pendingActivateId ? 1 : 0 })));
-    pendingActivateId = null;
+    closeActivateModal();
+    selectedId = activatedId;
+    renderKeyspaceTabs(lastPuzzles.map(p => ({ ...p, active: p.id === activatedId ? 1 : 0 })));
     void updateDashboard();
-  } else {
-    errEl.textContent = result.error ?? 'Error';
-    errEl.style.display = 'block';
-    if (result.unauthorized) sessionStorage.removeItem('adminToken');
+    return;
   }
+
+  if (result.unauthorized) {
+    // Authorization went away under us. Leave no blocking overlay and no stale
+    // privileged UI behind — just the signed-out dashboard and a hint.
+    discardAuthenticatedState();
+    // Awaited, not fire-and-forget: a 401 also answers an admin removed from the
+    // allow-list mid-session, whose cookie is still valid, so /auth/me restores
+    // the identity header. Wording the hint before that lands would tell a user
+    // the header names to sign in. Awaiting also fixes the render order.
+    await refreshAuthState();
+    showAuthHint(refusedActivationHint(authState));
+    return;
+  }
+
+  errEl.textContent = result.error ?? 'Error';
+  errEl.style.display = 'block';
 });
 
 function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | number })[]): void {
@@ -264,6 +373,9 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
     header.classList.remove('has-ks-tabs');
     tabStrip.innerHTML = '';
     togStrip.innerHTML = '';
+    // The hint lives inside this strip; clearing it stops a message about a
+    // toggle that no longer exists from reappearing when the strip returns.
+    clearAuthHint();
     return;
   }
 
@@ -299,7 +411,7 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
   });
 
   togStrip.querySelectorAll<HTMLElement>('.ks-toggle-inactive').forEach(cell => {
-    cell.addEventListener('click', () => openActivateModal(Number(cell.dataset.id), selName));
+    cell.addEventListener('click', () => requestActivate(Number(cell.dataset.id), selName));
   });
 }
 
@@ -663,6 +775,10 @@ hilbertRefreshBtn.addEventListener('click', () => { void loadHilbertVisualizatio
 
 requestAnimationFrame(() => {
   setBackendStatus('offline');
+  // Paint the signed-out state first, then correct it once /auth/me answers, so
+  // a slow or unavailable auth endpoint never delays the public dashboard.
+  renderAuthState();
+  void refreshAuthState();
   initAllocatorGenerationFilter();
   initHmLayerFilter();
   initHilLayerFilter();
