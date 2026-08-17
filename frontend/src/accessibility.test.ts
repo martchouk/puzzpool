@@ -21,6 +21,15 @@ function openingTag(source: string, id: string): string {
   return match[0];
 }
 
+// Returns just the `if (result.unauthorized)` block of the modal-confirm
+// handler. `refreshAuthState()` is also called at startup, so a negative
+// assertion about how it is called there must not read the whole file.
+function unauthorizedBranch(source: string): string {
+  const match = source.match(/if \(result\.unauthorized\) \{[\s\S]*?\n  \}/);
+  if (!match) throw new Error('no if (result.unauthorized) branch');
+  return match[0];
+}
+
 describe('frontend accessibility regressions', () => {
   it('defines a prefers-reduced-motion override', () => {
     expect(html).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
@@ -399,6 +408,30 @@ describe('dashboard authentication controls', () => {
       /function discardAuthenticatedState\(\): void \{\s*closeActivateModal\(\);\s*authState = SIGNED_OUT;\s*renderAuthState\(\);\s*\}/,
     );
     expect(dashboardTs).toMatch(/if \(result\.unauthorized\) \{[\s\S]*?discardAuthenticatedState\(\);/);
+  });
+
+  it('words the admin-401 hint from the refreshed state, not the state it just reset', () => {
+    // A 401 also answers an allow-list removal, whose session is still valid, so
+    // refreshAuthState() puts the identity back in the header. Computing the
+    // hint before that resolves renders "sign in" next to a signed-in account.
+    // refusedActivationHint() is unit-tested against every resulting state in
+    // auth.test.ts; this pins only the ordering, which is not visible there.
+    expect(unauthorizedBranch(dashboardTs)).toMatch(
+      /discardAuthenticatedState\(\);[\s\S]*?await refreshAuthState\(\);[\s\S]*?showAuthHint\(refusedActivationHint\(authState\)\)/,
+    );
+    // Fire-and-forget is the exact defect; it must not come back in any form.
+    expect(unauthorizedBranch(dashboardTs)).not.toMatch(/void refreshAuthState\(\)/);
+
+    // Sensitivity: both probes fire on a source with the old ordering restored.
+    const reordered = dashboardTs.replace(
+      /await refreshAuthState\(\);\s*showAuthHint\(refusedActivationHint\(authState\)\);/,
+      'showAuthHint(refusedActivationHint(authState));\n    void refreshAuthState();',
+    );
+    expect(reordered).not.toBe(dashboardTs);
+    expect(unauthorizedBranch(reordered)).not.toMatch(
+      /discardAuthenticatedState\(\);[\s\S]*?await refreshAuthState\(\);[\s\S]*?showAuthHint\(refusedActivationHint\(authState\)\)/,
+    );
+    expect(unauthorizedBranch(reordered)).toMatch(/void refreshAuthState\(\)/);
   });
 
   it('signs out through a same-origin POST and re-reads the resulting state', () => {

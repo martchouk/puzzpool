@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVATION_REFUSED_HINT,
   SIGNED_OUT,
   SIGNED_OUT_HINT,
   activationHint,
   authStateFromResponse,
   parseAuthMe,
+  refusedActivationHint,
   safeAvatarUrl,
 } from './auth.ts';
 
@@ -138,5 +140,40 @@ describe('activationHint', () => {
 
   it('permits the action for a signed-in allow-listed admin', () => {
     expect(activationHint({ signedIn: true, isAdmin: true, login: 'octocat', avatarUrl: null })).toBeNull();
+  });
+});
+
+describe('refusedActivationHint', () => {
+  // The states /api/v1/auth/me can report *after* an activation 401. The
+  // allow-list is consulted per request (src/auth.cpp authorizeAdminRequest), so
+  // a 401 does not imply the session ended.
+
+  it('tells an expired session to sign in again', () => {
+    expect(refusedActivationHint(SIGNED_OUT)).toBe(SIGNED_OUT_HINT);
+  });
+
+  it('names the account when a still-signed-in admin was removed from the allow-list', () => {
+    // The backend answers this case with 401 while /auth/me still returns
+    // authenticated: true, is_admin: false — so the identity stays in the
+    // header and a "sign in with GitHub" hint would contradict it.
+    const hint = refusedActivationHint({ signedIn: true, isAdmin: false, login: 'octocat', avatarUrl: null });
+    expect(hint).toContain('octocat');
+    expect(hint).toContain('not on the admin allow-list');
+    expect(hint).not.toBe(SIGNED_OUT_HINT);
+  });
+
+  it('still explains the refusal when the refreshed state looks authorized', () => {
+    // activationHint() returns null here, which would leave the visitor with a
+    // closed overlay and no message at all. The refusal is a fact they saw.
+    expect(refusedActivationHint({ signedIn: true, isAdmin: true, login: 'octocat', avatarUrl: null }))
+      .toBe(ACTIVATION_REFUSED_HINT);
+  });
+
+  it('never returns null for any state, so the hint is never silent', () => {
+    for (const signedIn of [true, false]) {
+      for (const isAdmin of [true, false]) {
+        expect(refusedActivationHint({ signedIn, isAdmin, login: 'octocat', avatarUrl: null })).not.toBe('');
+      }
+    }
   });
 });

@@ -539,6 +539,14 @@ blocks the public dashboard. The identity is polled once per page load rather
 than on the 5-second stats interval; an expired session surfaces as a `401` on
 the next admin action, which returns the dashboard to the signed-out state.
 
+A `401` from an admin route does not always mean the session ended. Because the
+allow-list is re-read on every request, an admin removed from `ADMIN_GITHUB_USERS`
+mid-session is refused with `401` while `/api/v1/auth/me` still reports
+`"authenticated": true, "is_admin": false`. The dashboard therefore discards the
+privileged state, re-reads `/api/v1/auth/me`, and only then words the inline hint
+— so a still-signed-in account is told it is not allow-listed rather than told to
+sign in.
+
 The browser never holds an admin credential: the session lives only in the
 `HttpOnly` `pp_session` cookie, and the dashboard sends no `X-Admin-Token`
 header. The `X-Admin-Token` mechanism remains fully supported for scripts and

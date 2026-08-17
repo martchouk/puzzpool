@@ -68,3 +68,15 @@ export function activationHint(state: AuthState): string | null {
   }
   return null;
 }
+
+export const ACTIVATION_REFUSED_HINT = 'Activation was refused. Your session may have changed — please try again.';
+
+// The hint after the server has already refused an activation with 401. It is
+// deliberately total where activationHint() is not: the refusal closed the
+// confirmation overlay, so `null` would leave the visitor with a vanished modal
+// and no explanation. The state must be re-read from /api/v1/auth/me first —
+// the allow-list is consulted per request, so a 401 here means "not authorized
+// now", not necessarily "signed out", and the two cases need different words.
+export function refusedActivationHint(state: AuthState): string {
+  return activationHint(state) ?? ACTIVATION_REFUSED_HINT;
+}

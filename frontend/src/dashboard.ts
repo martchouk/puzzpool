@@ -15,7 +15,7 @@ import {
   fetchStats,
   logout,
 } from './api.ts';
-import { SIGNED_OUT, activationHint } from './auth.ts';
+import { SIGNED_OUT, activationHint, refusedActivationHint } from './auth.ts';
 import {
   formatBigInt, formatIntegerDots, formatHashrate, fmtUtc, isRecentUtc,
   formatPrecisePercentage, trimHexRange, formatETA,
@@ -334,12 +334,15 @@ document.getElementById('modal-confirm')!.addEventListener('click', async () => 
   }
 
   if (result.unauthorized) {
-    // The session went away under us. Leave no blocking overlay and no stale
+    // Authorization went away under us. Leave no blocking overlay and no stale
     // privileged UI behind — just the signed-out dashboard and a hint.
     discardAuthenticatedState();
-    const hint = activationHint(authState);
-    if (hint !== null) showAuthHint(hint);
-    void refreshAuthState();
+    // Awaited, not fire-and-forget: a 401 also answers an admin removed from the
+    // allow-list mid-session, whose cookie is still valid, so /auth/me restores
+    // the identity header. Wording the hint before that lands would tell a user
+    // the header names to sign in. Awaiting also fixes the render order.
+    await refreshAuthState();
+    showAuthHint(refusedActivationHint(authState));
     return;
   }
 
