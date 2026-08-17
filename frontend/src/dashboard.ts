@@ -241,14 +241,17 @@ function renderAuthState(): void {
 // beside it stays, so the identity is never reduced to a broken icon.
 authAvatarEl.addEventListener('error', () => { authAvatarEl.hidden = true; });
 
+// #ks-auth-hint is an always-rendered live region, so only its text is ever
+// touched. Writing into a region that is still display:none and revealing it
+// afterwards presents assistive technology with an element that appears already
+// populated, which is the case it is least likely to announce — and this hint is
+// the only feedback a signed-out visitor gets when activation is refused.
 function showAuthHint(message: string): void {
   authHintEl.textContent = message;
-  authHintEl.hidden = false;
 }
 
 function clearAuthHint(): void {
   authHintEl.textContent = '';
-  authHintEl.hidden = true;
 }
 
 async function refreshAuthState(): Promise<void> {
@@ -367,6 +370,9 @@ function renderKeyspaceTabs(puzzles: (PuzzleListEntry & { active: boolean | numb
     header.classList.remove('has-ks-tabs');
     tabStrip.innerHTML = '';
     togStrip.innerHTML = '';
+    // The hint lives inside this strip; clearing it stops a message about a
+    // toggle that no longer exists from reappearing when the strip returns.
+    clearAuthHint();
     return;
   }
 

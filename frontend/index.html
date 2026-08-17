@@ -221,6 +221,11 @@
             white-space: nowrap;
         }
 
+        /* An always-rendered live region, like #backend-status: a role="status"
+           element has to be in the accessibility tree *before* its text changes
+           for the change to be announced, so this one is never toggled with
+           `hidden` and never gains a `display` rule — only its text is swapped.
+           `:empty` drops the spacing so the cleared region occupies no room. */
         .ks-auth-hint {
             font-family: var(--font-mono);
             font-size: 0.72rem;
@@ -231,11 +236,14 @@
             padding-top: 0.35rem;
         }
 
+        .ks-auth-hint:empty {
+            padding-top: 0;
+        }
+
         /* `hidden` must win over the inline-flex display these elements carry. */
         #auth-signin-btn[hidden],
         #auth-identity[hidden],
-        #auth-avatar[hidden],
-        #ks-auth-hint[hidden] {
+        #auth-avatar[hidden] {
             display: none;
         }
 
@@ -1204,7 +1212,7 @@
         <div id="ks-nav" style="display:none">
             <div id="ks-tab-strip"></div>
             <div id="ks-toggle-strip"></div>
-            <p id="ks-auth-hint" class="ks-auth-hint" role="status" hidden></p>
+            <p id="ks-auth-hint" class="ks-auth-hint" role="status" aria-live="polite"></p>
         </div>
 
         <div class="stat-grid">

@@ -225,6 +225,14 @@ describe('dashboard authentication controls', () => {
   const declaresTokenField = (source: string): boolean =>
     /modal-token-input|class="modal-field"|<input/.test(source);
   const injectsIdentityAsMarkup = (source: string): boolean => /innerHTML[^\n]*authState/.test(source);
+  // A live region that is populated while out of the accessibility tree and only
+  // then revealed is the case assistive technology is least likely to announce.
+  // These three probes cover every way the hint could be taken out of that tree.
+  const hintTagCarriesHidden = (source: string): boolean =>
+    /\shidden\b/.test(openingTag(source, 'ks-auth-hint'));
+  const hintCssRemovesTheHint = (source: string): boolean =>
+    /[#.]ks-auth-hint[^{}]*\{[^}]*display:\s*none/.test(source);
+  const togglesHintVisibility = (source: string): boolean => /authHintEl\.(hidden|style)\b/.test(source);
 
   const headerHtml = html.match(/<div class="header">[\s\S]*?\n        <\/div>/)?.[0] ?? '';
   const identityGroupHtml = html.match(/<div id="auth-identity"[\s\S]*?<\/div>/)?.[0] ?? '';
@@ -350,15 +358,39 @@ describe('dashboard authentication controls', () => {
   });
 
   it('answers an unauthorized activation attempt with a non-blocking inline hint', () => {
-    const hint = openingTag(html, 'ks-auth-hint');
-    expect(hint).toContain('role="status"');
-    expect(hint).toMatch(/\shidden\b/);
+    expect(openingTag(html, 'ks-auth-hint')).toContain('role="status"');
     // The hint replaces the modal instead of disabling the control.
     expect(dashboardTs).toMatch(
       /function requestActivate[\s\S]*?showAuthHint\(hint\);[\s\S]*?return;[\s\S]*?openActivateModal\(id, name\);/,
     );
     expect(dashboardTs).toMatch(/cell\.addEventListener\('click', \(\) => requestActivate\(/);
     expect(html).not.toMatch(/ks-toggle-cell[^>]*\sdisabled/);
+  });
+
+  it('keeps the activation hint an always-rendered live region so its text change is announced', () => {
+    // The same shape as #backend-status: in the accessibility tree from the
+    // start, with only the text swapped — never revealed already populated.
+    const hint = openingTag(html, 'ks-auth-hint');
+    expect(hint).toContain('role="status"');
+    expect(hint).toContain('aria-live="polite"');
+    expect(hintTagCarriesHidden(html)).toBe(false);
+    expect(hintCssRemovesTheHint(html)).toBe(false);
+    expect(togglesHintVisibility(dashboardTs)).toBe(false);
+    expect(dashboardTs).toMatch(
+      /function showAuthHint\(message: string\): void \{\s*authHintEl\.textContent = message;\s*\}/,
+    );
+    expect(dashboardTs).toMatch(/function clearAuthHint\(\): void \{\s*authHintEl\.textContent = '';\s*\}/);
+    // Always rendered must not mean always taking up room in the strip.
+    expect(html).toMatch(/\.ks-auth-hint:empty\s*\{\s*padding-top:\s*0;/);
+
+    // Sensitivity: every probe above must fire on a source that puts the
+    // populate-then-reveal pattern back.
+    const reHidden = html.replace('id="ks-auth-hint"', 'id="ks-auth-hint" hidden');
+    expect(hintTagCarriesHidden(reHidden)).toBe(true);
+    const reDisplayNone = html.replace('#auth-avatar[hidden] {', '#auth-avatar[hidden],\n        #ks-auth-hint[hidden] {');
+    expect(hintCssRemovesTheHint(reDisplayNone)).toBe(true);
+    expect(togglesHintVisibility(`${dashboardTs}\n  authHintEl.hidden = false;\n`)).toBe(true);
+    expect(togglesHintVisibility(`${dashboardTs}\n  authHintEl.style.display = 'none';\n`)).toBe(true);
   });
 
   it('closes the overlay and discards authenticated state on an admin 401', () => {
